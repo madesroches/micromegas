@@ -47,6 +47,9 @@ pub mod pg_stats;
 /// minimal FlightSQL protocol implementation
 pub mod flight_sql_service_impl;
 
+/// fair per-identity admission scheduler for queries
+pub mod query_admission;
+
 /// structured per-query audit record emitted by the FlightSQL service
 pub mod query_audit;
 

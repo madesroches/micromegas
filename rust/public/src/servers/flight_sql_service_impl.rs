@@ -1,4 +1,5 @@
 use super::http_utils::get_client_ip;
+use super::query_admission::{AdmissionPermit, AdmissionScheduler};
 use super::query_audit::{QueryAuditRecord, ScanMetrics, aggregate_scan_metrics};
 use super::sqlinfo::{
     SQL_INFO_DATE_TIME_FUNCTIONS, SQL_INFO_NUMERIC_FUNCTIONS, SQL_INFO_SQL_KEYWORDS,
@@ -45,6 +46,7 @@ use micromegas_analytics::lakehouse::query_deny_list::{
 };
 use micromegas_analytics::lakehouse::read_scope::{CallerContext, ReadScope};
 use micromegas_analytics::lakehouse::runtime::scoped_runtime;
+use micromegas_analytics::lakehouse::scan_cost::estimate_scan_cost;
 use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_definition::{
@@ -350,6 +352,38 @@ struct QueryAuditState {
     /// `emit()` can read its peak on every terminal path, including setup
     /// failures.
     pool: Arc<ScopedMemoryPool>,
+    estimated_scan_bytes: Option<u64>,
+    estimate_precision: Option<&'static str>,
+    partition_bytes: Option<u64>,
+    admission_cost: Option<u64>,
+    queue_wait_ms: Option<f64>,
+    /// Held until the audit state is dropped, which every terminal path does -- including the
+    /// early `fail` returns and a stream dropped mid-drain -- so the admission budget is
+    /// released on all of them without extra plumbing.
+    _admission_permit: Option<AdmissionPermit>,
+}
+
+/// Emits the "incomplete" audit record when `execute_query` is dropped while still queued for
+/// admission. Without it a cancelled waiter would vanish from the audit log, since the stream
+/// that normally emits it does not exist yet.
+struct QueueWaitGuard<'a> {
+    state: &'a mut QueryAuditState,
+    begin: Instant,
+}
+
+impl QueueWaitGuard<'_> {
+    fn finish(self) -> f64 {
+        let ms = self.begin.elapsed().as_secs_f64() * 1000.0;
+        std::mem::forget(self);
+        ms
+    }
+}
+
+impl Drop for QueueWaitGuard<'_> {
+    fn drop(&mut self) {
+        self.state.queue_wait_ms = Some(self.begin.elapsed().as_secs_f64() * 1000.0);
+        self.state.emit("incomplete", None, None);
+    }
 }
 
 impl QueryAuditState {
@@ -407,6 +441,11 @@ impl QueryAuditState {
             peak_memory_bytes,
             spilled_bytes: scan.spilled_bytes,
             spill_count: scan.spill_count,
+            estimated_scan_bytes: self.estimated_scan_bytes,
+            estimate_precision: self.estimate_precision,
+            partition_bytes: self.partition_bytes,
+            admission_cost: self.admission_cost,
+            queue_wait_ms: self.queue_wait_ms,
         };
         match serde_json::to_string(&record) {
             Ok(json) => info!(target: "flightsql_query_audit", "{json}"),
@@ -548,9 +587,14 @@ pub struct FlightSqlServiceImpl {
     session_configurator: Arc<dyn SessionConfigurator>,
     read_policy: Arc<dyn ReadPolicy>,
     settings: Arc<SettingsSource>,
+    /// Flat cost the scan estimator charges for a plan leaf it cannot see into.
+    opaque_leaf_cost: u64,
+    /// `None` disables admission: queries run at once and only the estimate is recorded.
+    admission: Option<Arc<AdmissionScheduler>>,
 }
 
 impl FlightSqlServiceImpl {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         lakehouse: Arc<LakehouseContext>,
         part_provider: Arc<dyn QueryPartitionProvider>,
@@ -558,6 +602,8 @@ impl FlightSqlServiceImpl {
         session_configurator: Arc<dyn SessionConfigurator>,
         read_policy: Arc<dyn ReadPolicy>,
         settings: Arc<SettingsSource>,
+        opaque_leaf_cost: u64,
+        admission: Option<Arc<AdmissionScheduler>>,
     ) -> Self {
         Self {
             lakehouse,
@@ -566,6 +612,8 @@ impl FlightSqlServiceImpl {
             session_configurator,
             read_policy,
             settings,
+            opaque_leaf_cost,
+            admission,
         }
     }
 
@@ -802,6 +850,12 @@ impl FlightSqlServiceImpl {
             request_start,
             plan: None,
             pool: scoped_pool.clone(),
+            estimated_scan_bytes: None,
+            estimate_precision: None,
+            partition_bytes: None,
+            admission_cost: None,
+            queue_wait_ms: None,
+            _admission_permit: None,
         };
 
         // The deny-list check, in front of everything expensive -- before the scoped
@@ -937,6 +991,43 @@ impl FlightSqlServiceImpl {
             ))
         })?;
         audit_state.plan = Some(plan.clone());
+
+        let estimate = estimate_scan_cost(
+            &plan,
+            self.lakehouse.metadata_cache(),
+            self.opaque_leaf_cost,
+        )
+        .await;
+        audit_state.estimated_scan_bytes = Some(estimate.bytes);
+        audit_state.estimate_precision = Some(estimate.precision.as_str());
+        audit_state.partition_bytes = Some(estimate.partition_bytes);
+
+        // The gate must precede `execute_stream`, not just the first poll: for a plan with
+        // several output partitions `execute_stream` wraps it in a `CoalescePartitionsExec`
+        // that spawns the scan tasks immediately.
+        let mut queue_wait_ticks = 0;
+        let mut queue_wait_ms = 0.0;
+        if let Some(scheduler) = &self.admission {
+            // A delegating key shares its service account's queue. The client-asserted `client`
+            // is not part of the key: it would let a caller multiply its share.
+            let identity: Arc<str> = Arc::from(
+                attr.service_account
+                    .as_deref()
+                    .unwrap_or(attr.user_id.as_str()),
+            );
+            audit_state.admission_cost = Some(scheduler.charged_cost(estimate.bytes));
+            let wait_begin = now();
+            let guard = QueueWaitGuard {
+                begin: Instant::now(),
+                state: &mut audit_state,
+            };
+            let permit = scheduler.admit(identity, estimate.bytes).await;
+            queue_wait_ms = guard.finish();
+            queue_wait_ticks = now() - wait_begin;
+            audit_state.queue_wait_ms = Some(queue_wait_ms);
+            audit_state._admission_permit = Some(permit);
+            imetric!("admission_queue_wait", "ticks", queue_wait_ticks as u64);
+        }
         // `plan`/`query_id` are cloned here because both are moved shortly:
         // `plan` into `execute_stream` below, `audit_state` (which owns
         // `query_id`'s sibling on the struct) into `CompletionTrackedStream::new`
@@ -963,12 +1054,15 @@ impl FlightSqlServiceImpl {
             FlightDataEncoderBuilder::new().with_schema(schema.clone())
         };
         let flight_data_stream = builder.build(stream);
-        let execution_duration = now() - execution_begin;
-        audit_state.execution_ms = execution_begin_instant.elapsed().as_secs_f64() * 1000.0;
+        // Queue wait is taken out of the setup/execution timings so latency dashboards keep
+        // their meaning; `total_ms` and `query_duration_total` still include it.
+        let execution_duration = now() - execution_begin - queue_wait_ticks;
+        audit_state.execution_ms =
+            execution_begin_instant.elapsed().as_secs_f64() * 1000.0 - queue_wait_ms;
 
         // Calculate total setup time and record detailed metrics
-        let total_setup_duration = now() - begin_request;
-        audit_state.setup_ms = request_start.elapsed().as_secs_f64() * 1000.0;
+        let total_setup_duration = now() - begin_request - queue_wait_ticks;
+        audit_state.setup_ms = request_start.elapsed().as_secs_f64() * 1000.0 - queue_wait_ms;
 
         // Record detailed timing metrics
         imetric!(

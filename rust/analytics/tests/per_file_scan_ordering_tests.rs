@@ -4,7 +4,6 @@
 //! - the recorded-`sort_order` certification gate: any non-empty partition that fails to certify
 //!   degrades the *entire* scan to the plain, single-file-group `Unordered` shape
 
-use chrono::{TimeDelta, Utc};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::physical_plan::displayable;
 use datafusion::prelude::SessionContext;
@@ -13,10 +12,17 @@ use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partitioned_execution_plan::{
     ScanOrdering, make_partitioned_execution_plan,
 };
-use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
-use micromegas_analytics::lakehouse::view::{ScanSortColumn, ViewMetadata};
-use micromegas_analytics::time::TimeRange;
+use micromegas_analytics::lakehouse::view::ScanSortColumn;
 use std::sync::Arc;
+
+mod common;
+use common::scan_fixtures::{make_empty_partition, make_reader_factory};
+
+const FILE_SIZE: i64 = 1024;
+
+fn make_partition(file_path: &str, index: i64, sort_order: Option<Vec<String>>) -> Partition {
+    common::scan_fixtures::make_partition(file_path, index, sort_order, FILE_SIZE)
+}
 
 fn spike_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -24,56 +30,6 @@ fn spike_schema() -> Arc<Schema> {
         Field::new("time_bin", DataType::Utf8, false),
         Field::new("unit", DataType::Utf8, false),
     ]))
-}
-
-fn make_reader_factory() -> Arc<ReaderFactory> {
-    Arc::new(ReaderFactory::new(
-        Arc::new(object_store::memory::InMemory::new()),
-        Arc::new(MetadataCache::new(1024 * 1024)),
-    ))
-}
-
-/// Every partition below overlaps arbitrarily on `name` -- the shape `PerFile` exists for -- so
-/// distinct, non-overlapping event-time ranges are used only to give each partition a valid
-/// `event_time_range`, not to declare any ordering over them.
-fn make_partition(file_path: &str, index: i64, sort_order: Option<Vec<String>>) -> Partition {
-    let t0 = Utc::now() + TimeDelta::seconds(index * 10);
-    Partition {
-        view_metadata: ViewMetadata {
-            view_set_name: Arc::new("metrics".to_owned()),
-            view_instance_id: Arc::new("global".to_owned()),
-            file_schema_hash: vec![0],
-        },
-        insert_time_range: TimeRange::new(t0, t0 + TimeDelta::seconds(10)),
-        event_time_range: Some(TimeRange::new(t0, t0 + TimeDelta::seconds(10))),
-        updated: t0,
-        file_path: Some(file_path.to_owned()),
-        file_size: 1024,
-        source_data_hash: vec![0],
-        num_rows: 10,
-        sort_order,
-        max_sort_key_time: None,
-    }
-}
-
-fn make_empty_partition(index: i64) -> Partition {
-    let t0 = Utc::now() + TimeDelta::seconds(index * 10);
-    Partition {
-        view_metadata: ViewMetadata {
-            view_set_name: Arc::new("metrics".to_owned()),
-            view_instance_id: Arc::new("global".to_owned()),
-            file_schema_hash: vec![0],
-        },
-        insert_time_range: TimeRange::new(t0, t0 + TimeDelta::seconds(10)),
-        event_time_range: None,
-        updated: t0,
-        file_path: None,
-        file_size: 0,
-        source_data_hash: vec![0],
-        num_rows: 0,
-        sort_order: None,
-        max_sort_key_time: None,
-    }
 }
 
 fn name_time_bin_ascending() -> Vec<ScanSortColumn> {
@@ -94,7 +50,7 @@ async fn build_plan_str(partitions: Vec<Partition>, columns: Vec<ScanSortColumn>
     let state = ctx.state();
     let plan = make_partitioned_execution_plan(
         spike_schema(),
-        make_reader_factory(),
+        make_reader_factory(Arc::new(MetadataCache::new(1024 * 1024))),
         &state,
         None,
         &[],

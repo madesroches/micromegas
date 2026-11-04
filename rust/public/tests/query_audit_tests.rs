@@ -228,6 +228,11 @@ fn full_record(sql: &str) -> QueryAuditRecord {
         peak_memory_bytes: 8192,
         spilled_bytes: 0,
         spill_count: 0,
+        estimated_scan_bytes: Some(2048),
+        estimate_precision: Some("footer"),
+        partition_bytes: Some(10_240),
+        admission_cost: Some(8_388_608),
+        queue_wait_ms: Some(12.5),
     }
 }
 
@@ -300,6 +305,11 @@ fn query_audit_record_omits_absent_optionals() {
         peak_memory_bytes: 0,
         spilled_bytes: 0,
         spill_count: 0,
+        estimated_scan_bytes: None,
+        estimate_precision: None,
+        partition_bytes: None,
+        admission_cost: None,
+        queue_wait_ms: None,
     };
 
     let json = serde_json::to_string(&record).expect("serialization should succeed");
@@ -316,6 +326,11 @@ fn query_audit_record_omits_absent_optionals() {
     assert!(!object.contains_key("session"));
     assert!(!object.contains_key("notebook"));
     assert!(!object.contains_key("cell"));
+    assert!(!object.contains_key("estimated_scan_bytes"));
+    assert!(!object.contains_key("estimate_precision"));
+    assert!(!object.contains_key("partition_bytes"));
+    assert!(!object.contains_key("admission_cost"));
+    assert!(!object.contains_key("queue_wait_ms"));
     assert_eq!(value["agent"], "unknown");
     assert_eq!(value["entrypoint"], "unknown");
     assert_eq!(value["service_account"], true);
@@ -395,4 +410,33 @@ fn query_audit_record_serializes_denied_error_class() {
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
     assert_eq!(value["error_class"], "denied");
     assert_eq!(value["status"], "error");
+}
+
+#[test]
+fn query_audit_record_appends_estimate_and_admission_fields_after_sql_hash() {
+    let json = serde_json::to_string(&full_record("SELECT 1")).expect("serialization");
+    let sql_hash = json.find("\"sql_hash\"").expect("sql_hash present");
+    let mut previous = sql_hash;
+    for field in [
+        "estimated_scan_bytes",
+        "estimate_precision",
+        "partition_bytes",
+        "admission_cost",
+        "queue_wait_ms",
+    ] {
+        let at = json
+            .find(&format!("\"{field}\""))
+            .unwrap_or_else(|| panic!("{field} present"));
+        assert!(
+            at > previous,
+            "{field} must be appended after the previous field"
+        );
+        previous = at;
+    }
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(value["estimated_scan_bytes"], 2048);
+    assert_eq!(value["estimate_precision"], "footer");
+    assert_eq!(value["partition_bytes"], 10_240);
+    assert_eq!(value["admission_cost"], 8_388_608);
+    assert_eq!(value["queue_wait_ms"], 12.5);
 }

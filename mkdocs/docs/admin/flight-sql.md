@@ -37,6 +37,10 @@ The gRPC listener binds to `0.0.0.0:50051` by default; change it with
 | `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` | No | [Query deny list](functions-reference.md#query-deny-list) snapshot refresh / `last_hit_at` flush interval; default `10`. Also the bound on cross-replica propagation of a newly created or removed rule — the inserting replica applies its own rule immediately, other replicas within one tick |
 | `MICROMEGAS_QUERY_DENY_MAX_RULES` | No | [Query deny list](functions-reference.md#query-deny-list) rule cap; default `100`. Bounds the per-query evaluation cost (~3.4 µs at one rule, ~45 µs at the cap) |
 | `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` | No | How often this replica reloads [DDL-defined materialized views](materialized-views.md) from Postgres; default `60`. A `CREATE`/`DROP MATERIALIZED VIEW` executed on this replica reloads immediately after commit — this interval only bounds how long a *different* replica lags the change |
+| `MICROMEGAS_ADMISSION_BUDGET_GB` | No | Per-replica budget of [query admission](#query-admission), in GB of estimated scan bytes; decimals allowed (e.g. `0.5`). Unset disables admission, and queries are only measured. A value that does not parse fails startup |
+| `MICROMEGAS_ADMISSION_MIN_COST_MB` | No | Floor charged per query so a query with no scan cost still occupies a slot; default `8`. Read only when the budget is set |
+| `MICROMEGAS_ADMISSION_MAX_PER_IDENTITY_GB` | No | The most scan cost one identity may hold in flight, in GB, decimals allowed; default 80% of the budget. Read only when the budget is set |
+| `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` | No | Flat cost charged for a plan leaf whose scan cannot be seen at plan time, such as a trace-generating table function; default `64`. Also used to fill `estimated_scan_bytes` when admission is disabled |
 
 `CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW` are ordinary SQL statements sent
 to this server, gated by the same admin check as the [admin SQL
@@ -134,6 +138,41 @@ ORDER BY minute;
 
 For the full-detail row (SQL text, fingerprint, complete attribution), see the [query audit
 log](../query-guide/query-audit-log.md) — filter on `error_class = "denied"`.
+
+## Query admission
+
+One identity can fill the query engine's memory pool on its own, for example a shared service
+account behind dashboards that auto-refresh. Query admission keeps that from starving everyone
+else, without ever rejecting a query: each identity gets its own first-in, first-out queue, a
+budget caps how much scan work runs at once, and when capacity frees up the next query comes from
+the identity with the least work in flight.
+
+- **Cost.** A query's cost is the number of compressed parquet bytes its physical plan will scan,
+  estimated from the columns it reads. Footers that are in the metadata cache give an exact
+  figure; otherwise the cost is the file size scaled by the share of columns read. Table
+  functions whose work is invisible at plan time are charged `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB`.
+  Materialization that happens while the query is planned is not queued.
+- **Identity.** The service account when the request delegates for a user, otherwise the user.
+  Everyone has the same weight. With `--disable-auth` the identity comes from the client-asserted
+  `x-user-id` header, and callers without it share one queue.
+- **Cap per identity.** One identity may hold at most `MICROMEGAS_ADMISSION_MAX_PER_IDENTITY_GB`
+  in flight, so the rest of the budget stays free and a query from anyone else starts at once. A
+  refresh storm from one identity waits in its own queue. Leave `budget - max` large enough for a
+  typical query from another caller. A query larger than the cap is charged the cap and still runs.
+- **Disabled by default.** Without `MICROMEGAS_ADMISSION_BUDGET_GB` nothing is queued, but the
+  estimate is still written to the [query audit log](../query-guide/query-audit-log.md).
+
+The budget and the fairness apply per replica, so size the budget against each replica's own
+`MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` pool. The budget is in scan bytes, not memory bytes: run
+the estimate-versus-actual query in the audit log guide for a few days, compare
+`estimated_scan_bytes` with `peak_memory_bytes`, and pick a budget whose queries together fit in
+the pool. Wait time shows up as `queue_wait_ms`, and the `admission_queue_wait`,
+`admission_queued`, `admission_in_flight_cost` and `admission_queued_queries` metrics are emitted
+without per-identity tags.
+
+A query that waits longer than the temporary-file expiry of about an hour may fail with an
+object-not-found error if its partitions were replaced while it waited; a wait that long means the
+service is badly overloaded.
 
 ## Health and readiness
 

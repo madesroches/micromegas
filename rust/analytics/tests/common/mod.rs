@@ -4,3 +4,4 @@
 //! to share code between them without tripping that per-file-is-a-binary rule.
 
 pub mod db_fixtures;
+pub mod scan_fixtures;
