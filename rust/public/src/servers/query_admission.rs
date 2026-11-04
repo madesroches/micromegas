@@ -274,7 +274,7 @@ impl AdmissionScheduler {
     /// Waits for this identity's turn and returns a permit holding `cost` until dropped.
     pub async fn admit(self: &Arc<Self>, identity: Arc<str>, cost: u64) -> AdmissionPermit {
         let charged = self.charged_cost(cost);
-        let (arrival, rx, sample) = {
+        let (arrival, rx, sample, still_queued) = {
             let mut state = self.lock();
             let id_state = state.per_identity.entry(identity.clone()).or_default();
             let identity_free = id_state.queue.is_empty()
@@ -309,9 +309,16 @@ impl AdmissionScheduler {
                 });
             state.queued_total += 1;
             state.dispatch(&self.config);
-            (arrival, rx, state.sample())
+            // dispatch may grant this waiter immediately; only count those that actually wait.
+            let still_queued = state
+                .per_identity
+                .get(&identity)
+                .is_some_and(|s| s.queue.iter().any(|w| w.arrival == arrival));
+            (arrival, rx, state.sample(), still_queued)
         };
-        imetric!("admission_queued", "count", 1_u64);
+        if still_queued {
+            imetric!("admission_queued", "count", 1_u64);
+        }
         Self::publish(sample);
         let mut guard = WaitGuard {
             scheduler: self.clone(),
