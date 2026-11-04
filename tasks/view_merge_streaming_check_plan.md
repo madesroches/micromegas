@@ -48,8 +48,7 @@ pub async fn plan_sorted_merge(ctx: &SessionContext, query: &str, columns: &[Sca
 
 It owns the four optimizer settings, `ctx.sql`, `df.sort`, `create_physical_plan`, both hard
 assertions and the `plan_str.contains("SortExec")` test. `execute_sorted_merge` becomes
-`plan_sorted_merge` + the existing warn + `execute_stream`. The check calls the same function, so
-a future change to the merge session settings cannot make the check lie.
+`plan_sorted_merge` + the existing warn + `execute_stream`.
 
 ### 2. Check function
 
@@ -104,9 +103,12 @@ To let the UDTF in `analytics` parse DDL, move `ViewDdl`, `parse_view_ddl`, `req
 `analytics/src/lakehouse/view_ddl.rs`, along with the `value_to_string` and `value_to_i32` helpers;
 `public` keeps `authorize_view_ddl` (it needs `tonic::Status`) and re-exports only `ViewDdl` and
 `parse_view_ddl` via `pub use` (the four helpers `require_eof`, `value_to_string`, `value_to_i32`,
-`view_definition_from_options` stay private in `analytics`) so `flight_sql_service_impl.rs` keeps compiling. `view_ddl_parse_tests.rs` is split: the
+`view_definition_from_options` stay private in `analytics`) so `flight_sql_service_impl.rs` keeps compiling. The parser module doc (`rust/public/src/servers/view_ddl.rs:1-9`) moves to the top of
+`analytics/src/lakehouse/view_ddl.rs`; the remaining `public` `view_ddl.rs` gets a short header
+covering `authorize_view_ddl` and the re-exports. `view_ddl_parse_tests.rs` is split: the
 parse tests move to `rust/analytics/tests/`; the `authorize_view_ddl` tests (and their caller
-helpers) stay in `rust/public/tests/`, keeping their `[[test]]` entry in `rust/public/Cargo.toml`.
+helpers) stay in `rust/public/tests/`, keeping their `[[test]]` entry in `rust/public/Cargo.toml`; its
+header narrows to the `authorize_view_ddl` tests.
 This is a Rust API move only (see CHANGELOG).
 
 The UDTF needs the session configurator; `make_session_context` already takes one, so it is threaded
@@ -133,8 +135,9 @@ In `views.py`:
 ## Implementation Steps
 
 1. `merge.rs`: extract `plan_sorted_merge`; refactor `execute_sorted_merge`.
-2. Move DDL parsing to `analytics/src/lakehouse/view_ddl.rs`; update `public` imports; split
-   `view_ddl_parse_tests.rs` (parse tests to `analytics/tests/`, `authorize_view_ddl` tests stay).
+2. Move DDL parsing (and its module doc) to `analytics/src/lakehouse/view_ddl.rs`; give the
+   remaining `public` `view_ddl.rs` a short header; update `public` imports; split
+   `view_ddl_parse_tests.rs` (parse tests to `analytics/tests/`, `authorize_view_ddl` tests stay, header narrowed).
 3. Add `view_merge_check.rs` and `CheckViewMergeTableFunction`; register in the admin block of
    `query.rs`, threading `configurator` through `register_functions` / `register_lakehouse_functions`
    and updating all callers; add module lines to `lakehouse/mod.rs`, including `pub mod view_ddl;`.
@@ -173,7 +176,10 @@ In `views.py`:
 
 - `views-as-code.md`: `plan` / `apply` warning output and `--strict`; update the `plan`/`apply`
   synopsis (add `[--strict]`), the "plan always exits 0 for pending changes" sentence, and the
-  exit-code list.
+  exit-code list; the "Validation happens at `apply`, not at `plan`" lead-in ("plan only compares
+  text" is stale: `plan` now also runs the advisory merge streaming check server-side, while
+  CREATE-time validation still only surfaces at `apply`); the "CI example" (show `plan --strict` and
+  its extra exit condition); the admin-gated function list (l.15-17), add `check_view_merge`.
 - `mkdocs/docs/admin/functions-reference.md`: `check_view_merge(ddl)` entry (admin, output columns).
 - `authorization.md`, `authentication.md`: admin-gated function count "nine" becomes "ten"; list
   `check_view_merge`.
