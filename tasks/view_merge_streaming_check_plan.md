@@ -124,13 +124,15 @@ In `views.py`:
 - `cmd_plan`: after printing the plan, for each view in `creates` + `updates` call the check and
   print a `warning:` line per view with `streams = false`, including `sort_exec_line` and the
   `merge_sort_order`. Unchanged views are not checked (they are already deployed).
-- `--strict` (on `plan` and `apply`): any warning makes the exit code non-zero.
+- `--strict` (on `plan` and `apply`): any streaming warning (`streams = false`) makes the exit code
+  non-zero. Skipped checks never fail it.
 - `cmd_apply`: run the same check right after printing the plan and before `confirm_apply`; warn,
   and under `--strict` exit non-zero before the prompt. Without `--strict`, apply proceeds after the
   warnings. The "No changes" early return and drop-only runs skip the check.
 - Any failure of the check query for a view (e.g. an extract query that does not plan yet because a
   dependency is created in the same apply) is reported as "check skipped: <reason>" for that view,
-  not as a streaming warning; under `--strict` it also fails.
+  not as a streaming warning. Skips are printed loudly but do not fail `--strict`, so chained new
+  views (whose dependency is not deployed yet) do not block CI or the first apply.
 
 ## Implementation Steps
 
@@ -172,6 +174,10 @@ In `views.py`:
 - **Sharing `plan_sorted_merge` vs. re-implementing the plan in the check**: re-implementing would
   drift from the daemon's session settings, which is exactly the failure being detected.
 
+## Decisions
+
+- AFK: `--strict` fails only on `streams = false`; skipped checks are printed as "check skipped: <reason>" but do not fail (chosen over failing on skips or checking per-view during apply).
+
 ## Documentation
 
 - `views-as-code.md`: `plan` / `apply` warning output and `--strict`; update the `plan`/`apply`
@@ -200,7 +206,7 @@ and never reads objects):
 - A definition without `merge_sort_order` yields no report.
 - UDTF output schema/rows via a canned DDL; non-admin rejection joins `lakehouse_admin_gate_test.rs`.
 - Existing `sql_batch_view_merge_ordering_tests.rs` must keep passing unchanged (guards the refactor).
-- Python (`test_views.py`): warning rendering, `--strict` exit codes for warn / skipped-check, and
+- Python (`test_views.py`): warning rendering, `--strict` exit codes (fails on warn, passes on skipped-check), and
   SQL literal escaping, with a stubbed client. `FakeClient` routes SQL containing `check_view_merge(`
   to a per-view `check_results` / `check_errors` mapping ahead of the generic SELECT branch (default:
   empty report-shaped frame); `make_args` defaults gain `"strict": False`. Existing tests need these
