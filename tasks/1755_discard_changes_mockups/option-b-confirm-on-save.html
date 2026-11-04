@@ -1,0 +1,26 @@
+<!doctype html><meta charset=utf-8><title>Option B</title><style>
+:root{--app-bg:#0a0a0f;--card-bg:#1a1a2e;--panel-bg:#12121a;--border:#2a2a3e;--tp:#e7e9ea;--ts:#9ca3af;--link:#1565c0;--warn:#ffb300;--err:#f87171}
+body{margin:0;background:var(--app-bg);color:var(--tp);font-family:Inter,system-ui,sans-serif;padding:24px}
+.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.icon{padding:8px;border-radius:6px;background:var(--card-bg);color:#4a90e2}
+h1{font-size:24px;font-weight:600;margin:0}
+.unsaved{color:var(--warn);font-size:14px}
+.btn{font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--tp);cursor:pointer}
+.ghost{border-color:transparent;color:var(--ts)}
+.primary{background:var(--link);border-color:var(--link)}
+.danger{color:var(--err)}
+.tri{background:none;border:none;color:var(--warn);font-size:18px;cursor:pointer;padding:2px 6px;position:relative}
+.pop{position:absolute;top:30px;right:0;width:300px;background:var(--panel-bg);border:1px solid var(--warn);border-radius:8px;padding:12px;font-size:13px;color:var(--ts);z-index:5;text-align:left}
+.pop a{color:#4a90e2;display:block;margin-top:6px}
+.wrap{position:relative;display:inline-block}
+.back{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center}
+.dlg{background:var(--panel-bg);border:1px solid var(--border);border-radius:10px;padding:20px;width:420px}
+.dlg h3{margin:0 0 8px}.dlg p{color:var(--ts);font-size:14px}
+.dlg .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.note{margin-top:60px;color:var(--ts);font-size:12px}
+</style>
+<div class=row><div class=icon>&#9638;</div><h1>prod_overview</h1><span class=unsaved>(unsaved changes)</span>
+<div class=row style="gap:8px"><button class="btn ghost">Diff</button><button class="btn ghost danger">Discard</button><button class=btn>Save As</button><button class="btn primary">Save</button></div></div>
+<div class=back><div class=dlg><h3>&#9888; Save to a source-controlled screen?</h3><p>This screen is managed by source control. Changes saved here may be overwritten on the next deployment.</p><a href="#" style="color:#4a90e2;font-size:13px">View source &#8599;</a>
+<div class=acts><button class=btn>Cancel</button><button class="btn primary">Save anyway</button></div></div></div>
+<p class=note>Option B: nothing shown in the title bar; a confirmation appears when Save is clicked (also on Ctrl+S). Clean header, but an extra click on every save.</p>
