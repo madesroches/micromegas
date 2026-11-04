@@ -583,7 +583,7 @@ An API-key caller normally carries no email, so it can never match a
 authenticated caller, API keys included, is admin until an operator adds a
 `user:` member and removes `*` (see [Groups](groups.md)'s upgrade path). See
 [Authorization → Admin-gated lakehouse
-functions](authorization.md#admin-gated-lakehouse-functions) for the nine
+functions](authorization.md#admin-gated-lakehouse-functions) for the ten
 gated SQL functions this governs, and [Admin SQL
 Functions](functions-reference.md) for their reference.
 

@@ -227,6 +227,44 @@ def compute_plan(server_state, local_scan, names=None):
     return creates, updates, unchanged, server_only
 
 
+def check_merge_streaming(client, ddl):
+    """Plans `ddl`'s merge server-side without executing it. -> the `check_view_merge()` report
+    row (view_set_name, merge_sort_order, streams, sort_exec_line, plan), or None when the
+    view declares no `merge_sort_order`. Raises when the server cannot plan the definition.
+    """
+    literal = ddl.replace("'", "''")
+    result = client.query(f"SELECT * FROM check_view_merge('{literal}')")
+    if len(result) == 0:
+        return None
+    return result.iloc[0]
+
+
+def run_streaming_checks(client, definitions, creates, updates):
+    """Check every view that `apply` would write; print a `warning:` per view whose merge
+    buffers and a `check skipped:` per view that could not be checked. -> True if any view
+    does not stream. A skipped check never counts: a view whose dependency is created in the
+    same apply cannot be planned yet.
+    """
+    names = sorted(set(creates) | {name for name, _local, _server in updates})
+    any_warning = False
+    for name in names:
+        try:
+            report = check_merge_streaming(client, definitions[name].text)
+        except (flight.FlightError, pyarrow.lib.ArrowException) as e:
+            print(f"check skipped: {name}: {e}", file=sys.stderr)
+            continue
+        if report is None or report["streams"]:
+            continue
+        any_warning = True
+        print(
+            f"warning: {name}: merge_partitions_query will not stream "
+            f"(merge_sort_order = '{report['merge_sort_order']}'); "
+            f"plan contains: {report['sort_exec_line']}",
+            file=sys.stderr,
+        )
+    return any_warning
+
+
 def format_plan(creates, updates, unchanged, server_only, drops, use_color=False):
     """-> str. `server_only` and `drops` are computed at the call site, not by
     `compute_plan`: `drops` renders as `- drop:` actions, and `server_only` minus `drops`
@@ -343,8 +381,8 @@ def _gather(args):
 def cmd_plan(args):
     """Preview what apply would change."""
     (
-        _client,
-        _definitions,
+        client,
+        definitions,
         protected_names,
         creates,
         updates,
@@ -357,7 +395,8 @@ def cmd_plan(args):
     colorize = use_color(args)
     print(format_plan(creates, updates, unchanged, server_only, drops, colorize))
 
-    if protected_names or unknown:
+    not_streaming = run_streaming_checks(client, definitions, creates, updates)
+    if protected_names or unknown or (args.strict and not_streaming):
         sys.exit(1)
 
 
@@ -384,6 +423,10 @@ def cmd_apply(args):
     colorize = use_color(args)
     print(format_plan(creates, updates, unchanged, server_only, drops, colorize))
     print()
+
+    not_streaming = run_streaming_checks(client, definitions, creates, updates)
+    if args.strict and not_streaming:
+        sys.exit(1)
 
     if not confirm_apply(args.auto_approve):
         sys.exit(1)
@@ -585,6 +628,11 @@ def main():
     p_plan.add_argument(
         "--prune", action="store_true", help="Propose dropping server-only view sets"
     )
+    p_plan.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero when a merge_partitions_query will not stream",
+    )
     add_color_arg(p_plan)
     p_plan.set_defaults(func=cmd_plan)
 
@@ -598,6 +646,11 @@ def main():
     )
     p_apply.add_argument(
         "--auto-approve", action="store_true", help="Skip confirmation prompt"
+    )
+    p_apply.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero when a merge_partitions_query will not stream",
     )
     add_color_arg(p_apply)
     p_apply.set_defaults(func=cmd_apply)

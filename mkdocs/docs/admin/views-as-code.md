@@ -12,7 +12,7 @@ diff/apply layer — there is no new server concept here.
 ## Requirements
 
 Every subcommand needs an admin identity, including the read-only `list`/`show`/`plan`:
-`list_view_set_definitions()` and the `CREATE`/`DROP MATERIALIZED VIEW` DDL path are both gated to
+`list_view_set_definitions()`, `check_view_merge()` and the `CREATE`/`DROP MATERIALIZED VIEW` DDL path are all gated to
 `lakehouse_admin` (see [Authorization](authorization.md#admin-gated-lakehouse-functions)). A
 non-admin doesn't get `list_view_set_definitions()` registered at all, so the very first round
 trip fails with a "function not found" planner error, not a permission-denied status; a
@@ -34,8 +34,8 @@ the file is rejected. Nothing else in the directory is read — no config file, 
 ## Commands
 
 ```
-micromegas-views plan  [names...] [--dir D] [--profile P] [--prune] [--color/--no-color]
-micromegas-views apply [names...] [--dir D] [--profile P] [--prune] [--auto-approve] [--color/--no-color]
+micromegas-views plan  [names...] [--dir D] [--profile P] [--prune] [--strict] [--color/--no-color]
+micromegas-views apply [names...] [--dir D] [--profile P] [--prune] [--strict] [--auto-approve] [--color/--no-color]
 micromegas-views pull  [names...] [--dir D] [--profile P]
 micromegas-views list         [--dir D] [--profile P] [--format table|json]
 micromegas-views show  <name> [--profile P]
@@ -53,10 +53,20 @@ server are listed separately, since they are never dropped without `--prune`. `p
 0 for pending changes — read its output (or `list --format json`'s `status` column) to gate CI on
 drift, not its exit code.
 
+For every view it would create or update, `plan` also asks the server
+([`check_view_merge()`](functions-reference.md#check_view_merge)) whether the view's merge keeps
+its streaming k-way shape, and prints a `warning:` line per view that does not, naming the
+`SortExec` plan line and the view's `merge_sort_order`. Views without `merge_sort_order` are not
+checked. A view that cannot be planned yet (for example one reading a view created in the same
+`apply`) prints `check skipped: <reason>` instead. Warnings are advisory unless `--strict` is
+passed, which makes any warning exit non-zero; a skipped check never does.
+
 ### `apply`
 
 Runs every pending create/update, then every pending drop, prompting for confirmation first unless
-`--auto-approve` is given. Each statement's outcome (`created`/`replaced`/`dropped`) is printed as
+`--auto-approve` is given. It runs the same merge check right after printing the plan, before
+the prompt: warnings are printed and `apply` proceeds, unless `--strict` is passed, in which case
+it exits non-zero before applying anything. Each statement's outcome (`created`/`replaced`/`dropped`) is printed as
 it runs; a failed statement is reported and counted, without aborting the rest — the workflow is
 idempotent, so re-running `apply` is the remedy once the underlying issue (a validation error, an
 order-sensitive dependency) is fixed.
@@ -68,7 +78,8 @@ order-sensitive dependency) is fixed.
 - a local `.sql` file is skipped — it failed to decode, its header didn't parse, or its declared
   name didn't match its filename stem,
 - a name passed as an argument isn't found either locally or on the server,
-- `--prune` is passed against a directory with zero readable `.sql` files, or
+- `--prune` is passed against a directory with zero readable `.sql` files,
+- `--strict` is passed and a view's merge will not stream, or
 - (`apply` only) any DDL statement fails.
 
 `list` and `pull` always exit 0 — they're inventory/sync commands, not CI gates.
@@ -131,8 +142,9 @@ means](materialized-views.md#what-a-redefinition-means)).
 
 ## Validation happens at `apply`, not at `plan`
 
-`plan` only compares text — it has no way to know whether a new or changed definition will pass
-the server's validation (schema, `update_group` ordering, no volatile functions, and the rest of
+`plan` compares text, and additionally runs the advisory merge streaming check described above. It
+has no way to know whether a new or changed definition will pass the server's validation (schema,
+`update_group` ordering, no volatile functions, and the rest of
 [What is checked at CREATE time](materialized-views.md#what-is-checked-at-create-time)). A syntax
 or validation error only surfaces when `apply` sends the statement, reported per-statement rather
 than failing the whole run.
@@ -145,11 +157,11 @@ after the blocking statement lands resolves one level of a dependency chain per 
 ## CI example
 
 ```bash
-micromegas-views plan --profile ci --prune
+micromegas-views plan --profile ci --prune --strict
 ```
 
 using a profile with `api_key_file` set to an **admin** key — a non-admin key fails on the first
 round trip, since even `plan` reads `list_view_set_definitions()`. `plan`'s exit code alone gates
 this job on the non-zero cases listed under "Exit codes" above (a skipped file, an unknown name,
-`--prune` against an empty directory) — not on pending drift, which still needs a check on its
-output.
+`--prune` against an empty directory) and, with `--strict`, on a merge that will not stream — not
+on pending drift, which still needs a check on its output.

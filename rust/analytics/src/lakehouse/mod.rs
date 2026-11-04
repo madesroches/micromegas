@@ -27,6 +27,8 @@ pub mod block_partition_spec;
 pub mod blocks_view;
 /// Catalog utilities for discovering and managing view schemas
 pub mod catalog;
+/// Admin UDTF that plans a view definition's merge and reports whether it streams
+pub mod check_view_merge_table_function;
 pub mod dataframe_time_bounds;
 /// Admin UDTF that validates and inserts a query-deny-list rule
 pub mod deny_queries_table_function;
@@ -154,6 +156,8 @@ pub mod temp;
 pub mod thread_spans_view;
 /// Basic interface for a set of rows queryable and materializable
 pub mod view;
+/// Parser for `CREATE`/`DROP MATERIALIZED VIEW` statements
+pub mod view_ddl;
 /// The normalized shape of a DDL-defined (or seeded) materialized view, and the validation shared
 /// by the DDL executor and the registry loader.
 pub mod view_definition;
@@ -163,6 +167,8 @@ pub mod view_definition_store;
 pub mod view_factory;
 /// Table function to query process-specific views
 pub mod view_instance_table_function;
+/// Plans a view definition's merge exactly as the maintenance daemon would, without executing it
+pub mod view_merge_check;
 /// Shared `Arc<ViewFactory>` rebuilt from Postgres-backed view definitions on a timer, giving
 /// `telemetry-maintenance-srv` and `flight-sql-srv` a common, reloadable view of DDL-defined view
 /// sets without a restart.
