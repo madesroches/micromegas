@@ -14,15 +14,11 @@ use super::spans_table::otel_spans_table_schema;
 use crate::lakehouse::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::{BlockProcessor, BlockProcessorMap},
-    blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    jit_partitions::{
-        BlockOrder, JitPartitionConfig, find_up_to_date_partitions,
-        generate_process_jit_partitions, write_partition_from_blocks,
-    },
+    jit_partitions::update_insert_time_jit_view,
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
-    view::{PartitionSpec, View, ViewMetadata},
+    view::{PartitionSpec, View},
     view_factory::ViewMaker,
 };
 use crate::{
@@ -67,7 +63,7 @@ impl ViewMaker for OtelSpansViewMaker {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct OtelSpansView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
@@ -133,23 +129,6 @@ impl View for OtelSpansView {
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
 
-        let blocks_view = BlocksView::new(lakehouse.default_audience())?;
-        let all_partitions = generate_process_jit_partitions(
-            &JitPartitionConfig::default(),
-            lakehouse.clone(),
-            &blocks_view,
-            &query_range,
-            process.clone(),
-            "trace",
-        )
-        .await
-        .with_context(|| "generate_process_jit_partitions")?;
-        let view_meta = ViewMetadata {
-            view_set_name: self.get_view_set_name(),
-            view_instance_id: self.get_view_instance_id(),
-            file_schema_hash: self.get_file_schema_hash(),
-        };
-
         let mut block_processors: BlockProcessorMap = HashMap::new();
         block_processors.insert(
             FORMAT_OTLP_TRACES,
@@ -157,28 +136,15 @@ impl View for OtelSpansView {
         );
         let block_processors = Arc::new(block_processors);
 
-        let up_to_date = find_up_to_date_partitions(
-            &lakehouse.lake().db_pool,
-            view_meta.clone(),
-            BlockOrder::InsertTime,
-            &all_partitions,
+        update_insert_time_jit_view(
+            lakehouse,
+            Arc::new(self.clone()),
+            process,
+            query_range,
+            "trace",
+            block_processors,
         )
         .await
-        .with_context(|| "find_up_to_date_partitions")?;
-        for (part, up_to_date) in all_partitions.into_iter().zip(up_to_date) {
-            if !up_to_date {
-                write_partition_from_blocks(
-                    lakehouse.lake().clone(),
-                    view_meta.clone(),
-                    self.get_file_schema(),
-                    part,
-                    block_processors.clone(),
-                )
-                .await
-                .with_context(|| "write_partition_from_blocks")?;
-            }
-        }
-        Ok(())
     }
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {

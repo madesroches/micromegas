@@ -2,8 +2,9 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        BlockOrder, JitPartitionConfig, blocks_insert_time_range, generate_process_jit_partitions,
-        group_contiguous_block_chains, is_jit_partition_up_to_date,
+        BlockOrder, BucketSizing, JitPartitionConfig, blocks_insert_time_range,
+        generate_process_jit_partitions, group_contiguous_block_chains,
+        is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -21,7 +22,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use datafusion::{arrow::datatypes::Schema, logical_expr::expr_fn::col};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -268,14 +269,7 @@ async fn update_partition(
 ) -> Result<()> {
     let insert_range =
         blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
-    if is_jit_partition_up_to_date(
-        &lake.db_pool,
-        view_meta.clone(),
-        spec,
-        BlockOrder::EventTime,
-    )
-    .await?
-    {
+    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), spec).await? {
         same_run_ranges.push(insert_range);
         return Ok(());
     }
@@ -358,6 +352,7 @@ impl View for NetSpansView {
         // tasks/completed/thread_spans_segment_boundary_overlap_plan.md.)
         let config = JitPartitionConfig {
             block_order: BlockOrder::EventTime,
+            bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
             ..Default::default()
         };
         let all_partitions = generate_process_jit_partitions(
@@ -369,7 +364,10 @@ impl View for NetSpansView {
             NET_STREAM_TAG,
         )
         .await
-        .with_context(|| "generate_process_jit_partitions")?;
+        .with_context(|| "generate_process_jit_partitions")?
+        .into_iter()
+        .flat_map(|bucket| bucket.specs)
+        .collect::<Vec<_>>();
 
         let process_id_str = Arc::new(self.process_id.to_string());
         // Accumulates this run's own already-handled insert ranges across the loop, so a later

@@ -42,6 +42,8 @@ pub mod image_block_processor;
 pub mod images_view;
 /// Management of process-specific partitions built on demand
 pub mod jit_partitions;
+/// On-demand promotion of fine JIT partitions into coarser ones
+pub mod jit_promotion;
 /// Bundles runtime resources for lakehouse query execution
 pub mod lakehouse_context;
 /// Caller-scoped UDTF listing rows of the `audience_grants` table
@@ -89,6 +91,8 @@ pub mod parse_block_table_function;
 pub mod partition;
 /// In-memory copy of a subnet of the list of the partitions in the db
 pub mod partition_cache;
+/// Aligned bucket ladder and planner sizing JIT partitions from the query range
+pub mod partition_ladder;
 /// Reads and parses partition Parquet footers directly from object storage
 pub mod partition_metadata;
 /// Describes the event blocks backing a partition

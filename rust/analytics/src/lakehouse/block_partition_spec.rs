@@ -44,6 +44,10 @@ pub struct BlockPartitionSpec {
     pub insert_range: TimeRange,
     pub source_data: Arc<dyn PartitionBlocksSource>,
     pub block_processors: Arc<BlockProcessorMap>,
+    /// Which existing partitions the write replaces; see `RetireMatch`.
+    pub retire_match: RetireMatch,
+    /// Insert ranges a `RetireMatch::Overlap` write must leave alone; empty for `Containment`.
+    pub same_run_ranges: Vec<TimeRange>,
 }
 
 #[async_trait]
@@ -90,8 +94,8 @@ impl PartitionSpec for BlockPartitionSpec {
             self.insert_range,
             self.source_data.get_source_data_hash(),
             None,
-            RetireMatch::Containment,
-            Vec::new(),
+            self.retire_match,
+            self.same_run_ranges.clone(),
             rx,
             logger.clone(),
         ));

@@ -145,9 +145,45 @@ impl PartitionCache {
         view_instance_id: Arc<String>,
         insert_range: TimeRange,
     ) -> Result<Self> {
-        let rows = instrument_named!(
-            sqlx::query(
-                "SELECT begin_insert_time,
+        Self::fetch_for_view(
+            pool,
+            view_set_name,
+            view_instance_id,
+            insert_range,
+            "begin_insert_time < $1 AND end_insert_time > $2",
+        )
+        .await
+    }
+
+    /// Like `fetch_overlapping_insert_range_for_view`, but with inclusive bounds
+    /// (`begin_insert_time <= end AND end_insert_time >= begin`), matching how a JIT partition's
+    /// `[min, max]` insert range, `filter_inside_range` and the merge retire treat their edges.
+    #[span_fn]
+    pub async fn fetch_inclusive_insert_range_for_view(
+        pool: &sqlx::PgPool,
+        view_set_name: Arc<String>,
+        view_instance_id: Arc<String>,
+        insert_range: TimeRange,
+    ) -> Result<Self> {
+        Self::fetch_for_view(
+            pool,
+            view_set_name,
+            view_instance_id,
+            insert_range,
+            "begin_insert_time <= $1 AND end_insert_time >= $2",
+        )
+        .await
+    }
+
+    async fn fetch_for_view(
+        pool: &sqlx::PgPool,
+        view_set_name: Arc<String>,
+        view_instance_id: Arc<String>,
+        insert_range: TimeRange,
+        bounds_predicate: &str,
+    ) -> Result<Self> {
+        let sql = format!(
+            "SELECT begin_insert_time,
                     end_insert_time,
                     min_event_time,
                     max_event_time,
@@ -160,18 +196,19 @@ impl PartitionCache {
                     sort_order,
                     max_sort_key_time
              FROM lakehouse_partitions
-             WHERE begin_insert_time < $1
-             AND end_insert_time > $2
+             WHERE {bounds_predicate}
              AND view_set_name = $3
              AND view_instance_id = $4
              ORDER BY begin_insert_time, file_path
-             ;",
-            )
-            .bind(insert_range.end)
-            .bind(insert_range.begin)
-            .bind(&*view_set_name)
-            .bind(&*view_instance_id)
-            .fetch_all(pool),
+             ;"
+        );
+        let rows = instrument_named!(
+            sqlx::query(&sql)
+                .bind(insert_range.end)
+                .bind(insert_range.begin)
+                .bind(&*view_set_name)
+                .bind(&*view_instance_id)
+                .fetch_all(pool),
             "sql_select_overlapping_partitions_for_view"
         )
         .await

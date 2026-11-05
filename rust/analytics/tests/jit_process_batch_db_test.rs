@@ -23,8 +23,8 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use micromegas_analytics::lakehouse::batch_update::regenerate_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::jit_partitions::{
-    BlockOrder, JitPartitionConfig, fetch_process_blocks, generate_process_jit_partitions,
-    group_blocks_into_partitions,
+    BlockOrder, BucketSizing, JitPartitionConfig, fetch_process_blocks,
+    generate_process_jit_partitions, group_blocks_into_partitions,
 };
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
@@ -136,7 +136,7 @@ fn expected_specs(
         let bucket = block
             .block
             .insert_time
-            .duration_trunc(config.max_insert_time_slice)?;
+            .duration_trunc(TimeDelta::hours(1))?;
         buckets.entry(bucket).or_default().push(block);
     }
     let mut out = vec![];
@@ -315,7 +315,7 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
     for block_order in [BlockOrder::InsertTime, BlockOrder::EventTime] {
         let config = JitPartitionConfig {
             max_nb_objects: 1000,
-            max_insert_time_slice: TimeDelta::hours(1),
+            bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
             block_order,
             target_rows_per_query: 2,
         };
@@ -329,7 +329,10 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
             "log",
         )
         .await
-        .with_context(|| format!("generate_process_jit_partitions {block_order:?}"))?;
+        .with_context(|| format!("generate_process_jit_partitions {block_order:?}"))?
+        .into_iter()
+        .flat_map(|bucket| bucket.specs)
+        .collect::<Vec<_>>();
 
         let expected = expected_specs(&config, all_blocks.clone())?;
         assert_specs_match(&batched_specs, &expected, &format!("{block_order:?}"));

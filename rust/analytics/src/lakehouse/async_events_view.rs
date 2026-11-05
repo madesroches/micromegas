@@ -1,19 +1,15 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::{BlockProcessor, BlockProcessorMap},
-    blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
+    jit_partitions::update_insert_time_jit_view,
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
-    view::{PartitionSpec, View, ViewMetadata},
+    view::{PartitionSpec, View},
     view_factory::{ViewFactory, ViewMaker},
 };
 use crate::{
     async_events_table::async_events_table_schema,
-    lakehouse::jit_partitions::{
-        BlockOrder, find_up_to_date_partitions, generate_process_jit_partitions,
-    },
     metadata::find_process_with_latest_timing,
     time::{TimeRange, datetime_to_scalar, make_time_converter_from_latest_timing},
 };
@@ -68,7 +64,7 @@ impl ViewMaker for AsyncEventsViewMaker {
 }
 
 /// A view of async span events.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AsyncEventsView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
@@ -152,24 +148,6 @@ impl View for AsyncEventsView {
             .with_context(|| "make_time_converter_from_latest_timing")?,
         );
 
-        // Use process-based partition generation to get all streams for this process
-        let blocks_view = BlocksView::new(lakehouse.default_audience())?;
-        let all_partitions = generate_process_jit_partitions(
-            &JitPartitionConfig::default(),
-            lakehouse.clone(),
-            &blocks_view,
-            &query_range,
-            process.clone(),
-            "cpu",
-        )
-        .await
-        .with_context(|| "generate_process_jit_partitions")?;
-        let view_meta = ViewMetadata {
-            view_set_name: self.get_view_set_name(),
-            view_instance_id: self.get_view_instance_id(),
-            file_schema_hash: self.get_file_schema_hash(),
-        };
-
         // async_events only sources native transit streams (tagged "cpu");
         // OTel spans go to the dedicated otel_spans view.
         let mut block_processors: BlockProcessorMap = HashMap::new();
@@ -178,30 +156,15 @@ impl View for AsyncEventsView {
             Arc::new(AsyncEventsBlockProcessor::new(convert_ticks.clone()))
                 as Arc<dyn BlockProcessor>,
         );
-        let block_processors = Arc::new(block_processors);
-
-        let up_to_date = find_up_to_date_partitions(
-            &lakehouse.lake().db_pool,
-            view_meta.clone(),
-            BlockOrder::InsertTime,
-            &all_partitions,
+        update_insert_time_jit_view(
+            lakehouse,
+            Arc::new(self.clone()),
+            process,
+            query_range,
+            "cpu",
+            Arc::new(block_processors),
         )
         .await
-        .with_context(|| "find_up_to_date_partitions")?;
-        for (part, up_to_date) in all_partitions.into_iter().zip(up_to_date) {
-            if !up_to_date {
-                write_partition_from_blocks(
-                    lakehouse.lake().clone(),
-                    view_meta.clone(),
-                    self.get_file_schema(),
-                    part,
-                    block_processors.clone(),
-                )
-                .await
-                .with_context(|| "write_partition_from_blocks")?;
-            }
-        }
-        Ok(())
     }
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {

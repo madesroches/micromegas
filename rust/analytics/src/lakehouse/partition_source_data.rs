@@ -57,7 +57,7 @@ pub trait PartitionBlocksSource: Sync + Send + Debug {
 }
 
 /// A `PartitionBlocksSource` implementation that stores blocks in memory.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SourceDataBlocksInMemory {
     pub blocks: Vec<Arc<PartitionSourceBlock>>,
     pub block_ids_hash: Vec<u8>,
