@@ -9,8 +9,8 @@ JIT views currently cut partitions into a fixed one-hour insert-time bucket
 from the query range instead, using one aligned ladder (minute, 5 min, hour, 6 h, day). It also
 promotes fine partitions into coarse ones on the read path, as an optional step that is skipped on
 contention. Two things improve. A live "last minute" poll stops re-decoding the whole current hour
-on every refresh, because only the open minute is rewritten. And a long-range query reads about
-24 to 60 partitions whatever its span, because closed history is promoted to the rung that range
+on every refresh, because only the open minute is rewritten. And a long-range query reads roughly
+24 to 288 partitions (worst case just under 24 h) whatever its span, because closed history is promoted to the rung that range
 calls for. The first cut targets the five `BlockOrder::InsertTime` JIT views (`log_entries`,
 `measures`, `async_events`, `images`, otel `spans`). The ladder, rung selection, bucket planner,
 coverage resolver and promotion helper are written so that the cached range functions of #1495
@@ -87,9 +87,10 @@ pub fn plan_buckets(insert_range: TimeRange, rung: TimeDelta, now: DateTime<Utc>
 
 The planner walks the `rung`-aligned buckets of `insert_range` and handles each bucket `B`:
 
-- `B` is **closed** when `B.end <= now - grace`. `grace` (default 1 minute, a new
+- `B` is **closed** when `B.end <= now - grace`. `grace` (default 90 s, a new
   `JitPartitionConfig` field) absorbs commit lag between `Utc::now()` at ingestion and the row
-  becoming visible.
+  becoming visible. It matches the maintenance daemon, whose minute task runs 30 s after a minute
+  closes over the minute before it.
 - If `B` is closed and its object count is at most `max_nb_objects`, emit it at `rung`.
 - Otherwise, if a finer rung exists, recurse into `B`'s sub-buckets.
 - Otherwise (`B` is at the minute rung), emit it as is. `group_blocks_into_partitions` keeps its
@@ -98,18 +99,17 @@ The planner walks the `rung`-aligned buckets of `insert_range` and handles each 
 
 As a result, the open edge is only ever materialized at the minute rung, and every partition
 coarser than a minute was written while its bucket was closed. The coverage rule in §4 relies on
-this invariant. It is also what keeps a live dashboard from regressing when someone else runs a
-long query: the day query writes closed history at coarse rungs and leaves the open minute at the
-minute rung.
+this invariant.
 
 The cap uses objects, the unit `max_nb_objects` already uses, so a coarse rung never forces a size
 cut inside a non-minute bucket. Such a cut could fall mid-hour and break nesting.
 
 `minute_counts` comes from `fetch_bucket_counts`, extended to return `SUM(nb_objects)` next to
-`COUNT(*)`. It always runs at minute resolution over the whole insert range, and the planner sums
-those counts up to coarser rungs in memory. The query returns one row per non-empty minute (at
-most about 43k rows for a busy 30-day process). The existing shortcut that skips the query is kept
-for an insert range that is a single minute bucket.
+`COUNT(*)`. It runs over the whole insert range at the finest rung the planner can emit (the fixed
+slice for `Fixed`, the minute for `RangeDriven`), and the planner sums those counts up to coarser
+rungs in memory. The query returns one row per non-empty minute (at most about 43k rows for a busy
+30-day process). The existing shortcut that skips the query is kept for an insert range that is a
+single bucket at that resolution, so `Fixed(1 h)` skips it exactly where today's code does.
 
 `batch_windows` and `split_into_buckets` take `&[PlannedBucket]` (or their ranges) instead of a
 fixed `slice`. Batch edges stay on bucket edges, so the batching remains invisible to the specs
@@ -127,7 +127,9 @@ pub enum BucketSizing { Fixed(TimeDelta), RangeDriven { grace: TimeDelta } }
 cap descent, every bucket treated as closed). The two EventTime views (`thread_spans`,
 `net_spans`) and their tests stay on `Fixed(1 h)`. Their cut points move between runs, and they
 build cross-block trees that finer buckets would cut more often. They are out of scope.
-Removing the field instead of adding a sibling makes the compiler list every construction site.
+The compiler does not catch every construction site: `net_spans_view.rs:359-362` and
+`thread_spans_view.rs:386-389` use `..Default::default()` and would silently pick up the new
+`RangeDriven` default, which is why Phase 1 step 3 pins them explicitly.
 
 `generate_process_jit_partitions` and `generate_stream_jit_partitions` return
 `Vec<JitBucket { planned: PlannedBucket, specs: Vec<SourceDataBlocksInMemory> }>`. EventTime
@@ -149,7 +151,11 @@ bucket `B` against the candidate rows `C` that intersect `B`'s half-open range:
     hash is current, and its count is `>=` the specs'. This is the coarser-rung case. It is sound
     because of the closed-when-written invariant in §2.
 - **Stale** otherwise. The bucket's specs are written with `RetireMatch::Containment` when `outer`
-  is empty and with `RetireMatch::Overlap` when it is not. The `Overlap` case covers a straddling
+  is empty and with `RetireMatch::Overlap` when it is not. `outer` is always taken from the raw
+  (not doom-filtered) candidate set, including for buckets that become stale only through the
+  cascade below, so any bucket with an outer row in the raw set uses `Overlap`. Otherwise a bucket
+  beside a legacy straddling row would get `Containment`, hit 23P01 against the still-present row,
+  and end up empty for the triggering query. The `Overlap` case covers a straddling
   or stale coarse row: legacy hour partitions written open before this change, or the loser of a
   race. `Overlap` passes `same_run_ranges` as it does for the EventTime views.
 
@@ -170,8 +176,10 @@ emptied. `spec_is_up_to_date` stays as it is for the EventTime path.
 inside it. Whichever commits second trips 23P01. This race already exists rarely today on the open
 hour, and mixed rungs make it more frequent. On a 23P01 from a mandatory write, the shared helper
 re-fetches the candidates for that bucket and re-runs the coverage rule once. If the bucket is now
-covered, the write is dropped; otherwise the error propagates. The retry decision is a pure
-function over the re-fetched rows.
+covered, the write is dropped. If it is still uncovered, the write is re-attempted once with the
+retire mode re-derived from the re-fetched rows (a concurrent writer that committed after the first
+retire SELECT is then seen and retired), and the error propagates only if that second attempt
+fails. The retry decision is a pure function over the re-fetched rows.
 
 ### 5. Shared InsertTime `jit_update` helper
 
@@ -211,31 +219,31 @@ immediately. The work is optional and must never add latency or failures to the 
 
 1. Take a permit from a process-wide `tokio::sync::Semaphore` held on `LakehouseContext`
    (`compaction_permits`, 2 permits) with `try_acquire`. If none is free, skip the step and record
-   `imetric!("jit_promotion_skipped", "busy")`.
+   `imetric!("jit_promotion_skipped", "count", reason = "busy", 1_u64)`.
 2. Spawn the work with `spawn_with_context`. It handles each target in turn:
    - Open a transaction and call `pg_try_advisory_xact_lock(key)`, where the key hashes
      `("promote", view, instance, bucket.begin, bucket.end)`. If the lock is not granted, skip the
-     target (`skipped_locked`): another query is already promoting it.
-   - Under the lock, re-fetch the rows in the bucket
-     (`PartitionCache::fetch_overlapping_insert_range_for_view`) and re-check the selection
-     predicate. Another query may have promoted the bucket between the snapshot and the lock.
-   - Call `create_merged_partition` with `insert_range` set to the inputs' hull. A JIT partition's
-     range is block-derived, not bucket-aligned, and the hull keeps it that way. The merge writes
-     the sum of the inputs' `source_data_hash` and retires the inputs with `Containment`, so they
-     go away atomically.
-3. On failure, log `warn!` and record `jit_promotion_failed`. On a read-only violation
-   (`is_read_only_violation`), log at `debug!` and record `jit_promotion_skipped` with
-   `read_only`.
+     target: log `info!` "skipped_locked" and record `jit_promotion_skipped` with
+     `reason = "locked"`. Another query is already promoting it.
+   - Under the lock, re-fetch the rows in the bucket with inclusive bounds, like
+     `fetch_freshness_candidates` (`fetch_overlapping_insert_range_for_view` has strict bounds,
+     while the snapshot, the merge retire and `filter_inside_range` are inclusive). Map each
+     `Partition` to a `PartitionFreshnessRow` (begin/end insert time, `file_schema_hash`,
+     `source_data_hash`), re-check the selection predicate, and compute the hull from the
+     re-fetched set. Merge only if that hull equals the re-checked inputs' hull. Another query may
+     have promoted the bucket between the snapshot and the lock.
+   - Call `create_merged_partition` with `insert_range` set to that hull, the re-fetched cache
+     passed as both `partitions_to_merge` and `partitions_all_views`, and
+     `Arc::new(ResponseWriter::new(None))` as the logger. A JIT partition's range is block-derived,
+     not bucket-aligned, and the hull keeps it that way. The merge writes the sum of the inputs'
+     `source_data_hash` and retires the inputs with `Containment`, so they go away atomically.
+   - On success, log `info!` "promoted" and record `jit_promotion` with `reason = "promoted"`.
+3. On failure, log `warn!` and record `imetric!("jit_promotion_failed", "count", 1_u64)`. On a
+   read-only violation (`is_read_only_violation`), log at `debug!` and record
+   `jit_promotion_skipped` with `reason = "read_only"`.
 
 Retired files go through `temporary_files` with a one-hour expiry (`write_partition.rs:30`), so a
 concurrent reader still holding the old partition list keeps reading them, as with daemon merges.
-
-### Who pays
-
-The triggering query answers from the fragmented set it would have read anyway. The merge re-reads
-those files in the background, so each promoted bucket costs one extra read plus one write, once.
-Serving the query from the merge stream (a tee in `QueryMerger::execute_merge_query`) would remove
-the re-read, but it couples query latency to the write. That is left as a follow-up.
 
 ## Implementation Steps
 
@@ -245,8 +253,9 @@ the re-read, but it couples query latency to the write. That is left as a follow
    Register it in `lakehouse/mod.rs`.
 2. In `jit_partitions.rs`:
    - Replace `max_insert_time_slice` with `BucketSizing`, add `grace` to `RangeDriven`, and update
-     `Default` to `RangeDriven { grace: 1 min }`.
-   - Extend `fetch_bucket_counts` with `SUM(nb_objects)` and run it at minute resolution.
+     `Default` to `RangeDriven { grace: 90 s }`.
+   - Extend `fetch_bucket_counts` with `SUM(nb_objects)` and run it at the finest resolution the
+     planner can emit (§2).
    - Generalize `batch_windows` and `split_into_buckets` to planned buckets.
    - Make both generators return `Vec<JitBucket>`.
 3. Pin `thread_spans_view.rs`, `net_spans_view.rs` and their tests to `BucketSizing::Fixed(1 h)`
@@ -256,17 +265,21 @@ the re-read, but it couples query latency to the write. That is left as a follow
 4. In `jit_partitions.rs`, add `Coverage` and `resolve_bucket_coverage` (§4), plus the pure
    23P01-retry decision. Remove `resolve_up_to_date_fixpoint` and the InsertTime arms of
    `spec_is_up_to_date` once nothing calls them.
-5. Add `update_insert_time_jit_view` (§5) and switch `log_view.rs`, `metrics_view.rs`,
+5. Add `retire_match` and `same_run_ranges` parameters to `write_partition_from_blocks` and the
+   matching fields to `BlockPartitionSpec` (`block_partition_spec.rs`), which today hard-codes
+   `RetireMatch::Containment` and no `same_run_ranges`.
+6. Add `update_insert_time_jit_view` (§5), accumulating `same_run_ranges` the way
+   `net_spans_view.rs:256-293` does, and switch `log_view.rs`, `metrics_view.rs`,
    `async_events_view.rs`, `images_view.rs` and `otel/spans_view.rs` to it.
 
 ### Phase 3: Promotion
-6. Create `rust/analytics/src/lakehouse/jit_promotion.rs` with `PromotionTarget`,
+7. Create `rust/analytics/src/lakehouse/jit_promotion.rs` with `PromotionTarget`,
    `promotion_candidates` and `schedule_promotion` (§6).
-7. Add `compaction_permits: Arc<Semaphore>` to `LakehouseContext`, with an accessor.
-8. Call `schedule_promotion` at the end of `update_insert_time_jit_view`.
+8. Add `compaction_permits: Arc<Semaphore>` to `LakehouseContext`, with an accessor.
+9. Call `schedule_promotion` at the end of `update_insert_time_jit_view`.
 
 ### Phase 4: Docs and changelog
-9. Update `mkdocs/docs/architecture/index.md` and `CHANGELOG.md` (see Documentation).
+10. Update `mkdocs/docs/architecture/index.md` and `CHANGELOG.md` (see Documentation).
 
 ## Files to Modify
 
@@ -274,6 +287,7 @@ the re-read, but it couples query latency to the write. That is left as a follow
 - `rust/analytics/src/lakehouse/jit_promotion.rs` (new)
 - `rust/analytics/src/lakehouse/mod.rs`
 - `rust/analytics/src/lakehouse/jit_partitions.rs`
+- `rust/analytics/src/lakehouse/block_partition_spec.rs`
 - `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/src/lakehouse/{log_view,metrics_view,async_events_view,images_view}.rs`
 - `rust/analytics/src/lakehouse/otel/spans_view.rs`
@@ -300,11 +314,9 @@ the re-read, but it couples query latency to the write. That is left as a follow
   right retire semantics.
 - **Background promotion rather than synchronous promotion.** A synchronous merge puts tail latency
   on the query that triggered it, and on the hottest instances that is exactly the latency cliff
-  the issue warns about. The tee approach is better than both but needs `QueryMerger` changes, so
-  it is a follow-up.
-- **Promotion on the read path rather than a daemon sweep.** As the issue argues, promotion only
-  happens for callers who benefit, caches nobody reads are never compacted, and no access stamp or
-  definition registry is needed.
+  the issue warns about. Each promoted bucket costs one extra read plus one write, once. Serving
+  the query from the merge stream (a tee in `QueryMerger::execute_merge_query`) would remove the
+  re-read but needs `QueryMerger` changes, so it is a follow-up.
 - **Leaving the EventTime views on a fixed hour.** Their cut points are not stable across runs,
   which breaks the nesting the ladder relies on. They could be revisited separately.
 - **Objects as the cap unit rather than rows or bytes.** `max_nb_objects` is the unit JIT
@@ -357,12 +369,13 @@ No-DB unit tests under `rust/analytics/tests/`:
   - a schema-hash mismatch → stale;
   - the doomed-row cascade, where an `Overlap` retire makes earlier buckets stale in the same run
     so no bucket is left without coverage;
-  - the 23P01 retry decision, with the bucket now covered and still uncovered.
+  - a bucket beside a legacy straddling row gets `Overlap` (raw candidate set), not `Containment`;
+  - the 23P01 retry decision, with the bucket now covered and still uncovered (second attempt
+    with the retire mode re-derived from the re-fetched rows).
 - `jit_promotion_tests.rs`:
   - `promotion_candidates` rejects open buckets, descended buckets, single-row buckets, over-cap
     sums and mixed schema hashes;
-  - it accepts 60 minute rows inside a closed hour on an hour-rung query;
-  - the semaphore skips the step when no permit is free (a `Semaphore` with 0 permits).
+  - it accepts 60 minute rows inside a closed hour on an hour-rung query.
 - Existing `jit_partition_grouping_tests.rs` and `jit_freshness_tests.rs` (EventTime cases) keep
   passing after the config change.
 
@@ -381,11 +394,11 @@ emitting logs.
 2. Run the same count with `--begin 24h`, then list partitions again a few seconds later. Expected:
    closed hours have collapsed to one partition each, the open minute is still a minute partition,
    and both counts match a `--begin 24h` count taken before promotion.
-3. Fire two `--begin 24h` queries at once. Expected: both succeed, and `/tmp/analytics.log` shows
-   one promotion and one `skipped_locked`, with no 23P01 errors.
+3. Fire two `--begin 24h` queries at once. Expected: both succeed, there is at most one promotion
+   per bucket (the other query logs `skipped_locked` or finds no candidate), and
+   `/tmp/analytics.log` shows no 23P01 errors.
 
 ## Open Questions
 
-- Is 24 the right `TARGET_BUCKETS_PER_QUERY`? It gives 24–72 partitions per query; a lower target
-  coarsens short ranges.
-- Is a 1-minute `grace` too conservative or too tight for deployments with slow ingestion commits?
+- Is 24 the right `TARGET_BUCKETS_PER_QUERY`? It gives 24–288 partitions per query (worst case just
+  under 24 h); a lower target coarsens short ranges.
