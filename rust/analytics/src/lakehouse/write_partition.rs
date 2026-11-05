@@ -134,6 +134,28 @@ pub async fn retire_expired_partitions(
     Ok(())
 }
 
+/// A new partition overlaps an existing one that the write's retire step did not replace (SQLSTATE
+/// 23P01 on `lakehouse_partitions_no_overlap`). Typed so that a caller that can recompute its
+/// plan, such as the JIT views racing another writer, can tell it apart from other failures.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "new partition {view_set_name}/{view_instance_id} [{}, {}] overlaps an existing partition \
+     that this write's retire step ({retire_match:?}) did not replace, so this write cannot \
+     replace it (likely a concurrent materialization or merge). Retire the conflicting partition \
+     (e.g. retire_partition_by_metadata) or align the requested range/delta, then retry. \
+     Postgres detail: {detail}",
+    begin.to_rfc3339(),
+    end.to_rfc3339()
+)]
+pub struct PartitionOverlapConflict {
+    pub view_set_name: String,
+    pub view_instance_id: String,
+    pub begin: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub retire_match: RetireMatch,
+    pub detail: String,
+}
+
 /// Which SQL predicate `retire_partitions` uses to find partitions to replace.
 ///
 /// There is no JIT registry to infer "this view regroups blocks across runs" from
@@ -145,9 +167,10 @@ pub enum RetireMatch {
     /// <= $4`, with an exact-match special case when the new range is degenerate). Correct
     /// whenever a view's cut points are stable across materialization runs: a rewritten range
     /// either exactly reproduces an old partition's range (matched by the exact-match case) or
-    /// strictly extends it (matched by containment). This holds for every JIT view under
-    /// `BlockOrder::InsertTime` and for every non-JIT (batch/merge) partition write. Used by
-    /// everything except the two `BlockOrder::EventTime` JIT views.
+    /// strictly extends it (matched by containment). This holds for every non-JIT (batch/merge)
+    /// partition write and for an `InsertTime` JIT bucket that has no partition straddling its
+    /// edge. Used by everything except the two `BlockOrder::EventTime` JIT views and an
+    /// `InsertTime` JIT bucket with such a straddling partition.
     Containment,
     /// An *inclusive* insert-range intersection test -- `tstzrange(begin, end, '[]') &&
     /// tstzrange($3, $4, '[]')` -- with same-run siblings excluded by identity (see
@@ -158,6 +181,10 @@ pub enum RetireMatch {
     /// so degenerate `[t, t]` partitions (on either side) intersect anything containing `t` --
     /// with Postgres's default half-open ranges, `tstzrange(t, t)` is empty and `&&` is
     /// vacuously false.
+    ///
+    /// Also used by an `InsertTime` JIT bucket when a partition written at another rung (for
+    /// example a legacy hour partition written while the hour was still open) straddles the
+    /// bucket's edge: the straddler is replaced rather than tripping the exclusion constraint.
     ///
     /// Required by `thread_spans_view.rs` / `net_spans_view.rs`, whose `BlockOrder::EventTime`
     /// grouping can move an *earlier* cut point between `jit_update` runs (see
@@ -182,7 +209,8 @@ pub enum RetireMatch {
 /// degenerate new range), correct whenever a view's cut points are stable across runs.
 /// `Overlap` additionally matches (and retires) an existing partition that merely overlaps the new
 /// range without containing it, which `BlockOrder::EventTime` JIT views need because their cut
-/// points can move between runs.
+/// points can move between runs, and an `InsertTime` JIT bucket needs when a partition of another
+/// rung straddles it.
 ///
 /// `same_run_ranges` lists the exact `(begin_insert_time, end_insert_time)` pairs the calling
 /// `jit_update` run has already written (or found already up to date) earlier in its own loop; a
@@ -487,9 +515,9 @@ async fn insert_partition_transaction(
     // pg_advisory_xact_lock automatically releases when transaction ends.
     // The lock only serializes writers of this exact (view, instance, range) key, avoiding
     // duplicate work. Correctness against overlapping writers of *different* ranges depends on
-    // retire_match: under RetireMatch::Containment (every caller except thread_spans/net_spans),
-    // it is enforced by the lakehouse_partitions_no_overlap exclusion constraint at insert time --
-    // a losing writer's insert fails loudly. Under RetireMatch::Overlap (thread_spans/net_spans),
+    // retire_match: under RetireMatch::Containment (every caller except thread_spans/net_spans
+    // and InsertTime JIT buckets beside a straddling partition), it is enforced by the lakehouse_partitions_no_overlap exclusion constraint at insert time --
+    // a losing writer's insert fails loudly (PartitionOverlapConflict). Under RetireMatch::Overlap,
     // the Overlap retire step below routes around that constraint (it can delete a
     // differently-ranged, already-committed partition before this insert), so two concurrent
     // writers of different, overlapping ranges are instead reconciled by the next `jit_update`'s
@@ -522,8 +550,8 @@ async fn insert_partition_transaction(
 
     // Which partitions this call replaces depends on retire_match (see RetireMatch's docs):
     // Containment only replaces partitions fully covered by this write's range; Overlap (the two
-    // BlockOrder::EventTime JIT views) also replaces a stale partition that merely overlaps it,
-    // since their grouping can move an earlier cut point between runs.
+    // BlockOrder::EventTime JIT views, and InsertTime JIT buckets beside a straddling partition)
+    // also replaces a stale partition that merely overlaps it.
     retire_partitions(
         &mut transaction,
         &partition.view_metadata.view_set_name,
@@ -628,17 +656,15 @@ async fn insert_partition_transaction(
                     .then(|| db_err.to_string())
             });
             if let Some(detail) = overlap_detail {
-                anyhow::bail!(
-                    "new partition {}/{} [{}, {}] overlaps an existing partition that this \
-                     write's retire step ({retire_match:?}) did not replace, so this write \
-                     cannot replace it (likely a concurrent materialization or merge). Retire \
-                     the conflicting partition (e.g. retire_partition_by_metadata) or align the \
-                     requested range/delta, then retry. Postgres detail: {detail}",
-                    partition.view_metadata.view_set_name,
-                    partition.view_metadata.view_instance_id,
-                    partition.begin_insert_time().to_rfc3339(),
-                    partition.end_insert_time().to_rfc3339(),
-                );
+                return Err(PartitionOverlapConflict {
+                    view_set_name: partition.view_metadata.view_set_name.to_string(),
+                    view_instance_id: partition.view_metadata.view_instance_id.to_string(),
+                    begin: partition.begin_insert_time(),
+                    end: partition.end_insert_time(),
+                    retire_match,
+                    detail,
+                }
+                .into());
             }
             return Err(insert_result.unwrap_err().into());
         }
@@ -908,7 +934,8 @@ async fn finalize_partition_write(
 ///
 /// `retire_match` is forwarded to `retire_partitions` (see `RetireMatch`'s docs): pass
 /// `RetireMatch::Containment` unless this call is one of the two `BlockOrder::EventTime` JIT
-/// views (`thread_spans_view.rs` / `net_spans_view.rs`), which must pass `RetireMatch::Overlap`.
+/// views (`thread_spans_view.rs` / `net_spans_view.rs`) or an `InsertTime` JIT bucket beside a
+/// partition that straddles it, which must pass `RetireMatch::Overlap`.
 ///
 /// `same_run_ranges` is forwarded to `retire_partitions` as-is (see its docs and
 /// `RetireMatch::Overlap`'s); pass an empty `Vec` unless `retire_match` is `RetireMatch::Overlap`,

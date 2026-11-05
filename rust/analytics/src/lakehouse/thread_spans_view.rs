@@ -2,8 +2,8 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        BlockOrder, JitPartitionConfig, blocks_insert_time_range, generate_stream_jit_partitions,
-        group_contiguous_block_chains, is_jit_partition_up_to_date,
+        BlockOrder, BucketSizing, JitPartitionConfig, blocks_insert_time_range,
+        generate_stream_jit_partitions, group_contiguous_block_chains, is_jit_partition_up_to_date,
     },
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
@@ -23,7 +23,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::arrow::array::TimestampNanosecondArray;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
@@ -292,14 +292,7 @@ pub async fn update_partition(
 ) -> Result<()> {
     let insert_range =
         blocks_insert_time_range(&spec.blocks).with_context(|| "blocks_insert_time_range")?;
-    if is_jit_partition_up_to_date(
-        &lake.db_pool,
-        view_meta.clone(),
-        spec,
-        BlockOrder::EventTime,
-    )
-    .await?
-    {
+    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), spec).await? {
         same_run_ranges.push(insert_range);
         return Ok(());
     }
@@ -385,6 +378,7 @@ impl View for ThreadSpansView {
         // event-time ordered, not insert-time ordered -- see BlockOrder::EventTime's docs.
         let config = JitPartitionConfig {
             block_order: BlockOrder::EventTime,
+            bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
             ..Default::default()
         };
         let partitions = generate_stream_jit_partitions(

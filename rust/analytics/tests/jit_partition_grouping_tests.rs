@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_analytics::lakehouse::jit_partitions::{
-    BlockOrder, JitPartitionConfig, group_blocks_into_partitions,
+    BlockOrder, BucketSizing, JitPartitionConfig, group_blocks_into_partitions,
 };
 use micromegas_analytics::lakehouse::partition_source_data::{
     PartitionSourceBlock, hash_to_object_count,
@@ -72,7 +72,7 @@ fn make_block(
 fn config(max_nb_objects: i64, block_order: BlockOrder) -> JitPartitionConfig {
     JitPartitionConfig {
         max_nb_objects,
-        max_insert_time_slice: TimeDelta::hours(1),
+        bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
         block_order,
         target_rows_per_query: 250_000,
     }

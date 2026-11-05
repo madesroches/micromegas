@@ -29,10 +29,15 @@
 use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessorMap},
     blocks_view::BlocksView,
+    jit_promotion::{promote_closed_buckets, promotion_candidates},
     lakehouse_context::LakehouseContext,
     partition_cache::{LivePartitionProvider, QueryPartitionProvider},
+    partition_ladder::{
+        BucketCount, LADDER, PlannedBucket, align_outward, plan_buckets, select_rung,
+    },
     partition_source_data::{PartitionSourceBlock, SourceDataBlocksInMemory},
     view::{View, ViewMetadata},
+    write_partition::{PartitionOverlapConflict, RetireMatch},
 };
 use crate::{
     dfext::{
@@ -50,7 +55,6 @@ use crate::{
     time::TimeRange,
 };
 use anyhow::{Context, Result};
-use chrono::DurationRound;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::arrow::array::{Int64Array, TimestampNanosecondArray};
 use datafusion::arrow::datatypes::{Schema, TimestampNanosecondType};
@@ -59,7 +63,6 @@ use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_tracing::prelude::*;
 use sqlx::Row;
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -85,14 +88,24 @@ pub enum BlockOrder {
     EventTime,
 }
 
+/// How insert-time buckets are sized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BucketSizing {
+    /// Every bucket is the same width and treated as closed, with no descent on object count.
+    Fixed(TimeDelta),
+    /// The bucket width follows the query range along `partition_ladder::LADDER`. `grace` is how
+    /// long after a bucket ends it is still considered open.
+    RangeDriven { grace: TimeDelta },
+}
+
 /// Configuration for Just-In-Time (JIT) partition generation.
 pub struct JitPartitionConfig {
     pub max_nb_objects: i64,
-    pub max_insert_time_slice: TimeDelta,
+    pub bucket_sizing: BucketSizing,
     pub block_order: BlockOrder,
     /// Soft row-count target for a single batched block query (see `batch_windows`). Consecutive
     /// insert-time buckets are packed into one query up to this many blocks, derived from a
-    /// per-bucket `COUNT(*)` run before the batch queries themselves. A config field rather
+    /// per-bucket count query run before the batch queries themselves. A config field rather
     /// than a bare constant so DB-gated tests can lower it to force a run to split into more than
     /// one batch.
     pub target_rows_per_query: i64,
@@ -102,11 +115,53 @@ impl Default for JitPartitionConfig {
     fn default() -> Self {
         JitPartitionConfig {
             max_nb_objects: 20 * 1024 * 1024,
-            max_insert_time_slice: TimeDelta::hours(1),
+            bucket_sizing: BucketSizing::RangeDriven {
+                grace: TimeDelta::seconds(90),
+            },
             block_order: BlockOrder::InsertTime,
             target_rows_per_query: 250_000,
         }
     }
+}
+
+impl JitPartitionConfig {
+    /// `(rung, finest)`: the width the query's buckets start at, and the narrowest the planner
+    /// may descend to. Also the resolution of the per-bucket counts.
+    fn rungs(&self, query_range: &TimeRange) -> (TimeDelta, TimeDelta) {
+        match self.bucket_sizing {
+            BucketSizing::Fixed(slice) => (slice, slice),
+            BucketSizing::RangeDriven { .. } => (select_rung(*query_range), LADDER[0]),
+        }
+    }
+
+    fn plan(
+        &self,
+        insert_range: TimeRange,
+        rung: TimeDelta,
+        finest: TimeDelta,
+        counts: &[BucketCount],
+    ) -> Vec<PlannedBucket> {
+        let (now, grace) = match self.bucket_sizing {
+            // Every bucket is closed under fixed sizing.
+            BucketSizing::Fixed(_) => (DateTime::<Utc>::MAX_UTC, TimeDelta::zero()),
+            BucketSizing::RangeDriven { grace } => (Utc::now(), grace),
+        };
+        plan_buckets(
+            insert_range,
+            rung,
+            finest,
+            now,
+            grace,
+            counts,
+            self.max_nb_objects,
+        )
+    }
+}
+
+/// A planned bucket with the partition specs grouped from its blocks.
+pub struct JitBucket {
+    pub planned: PlannedBucket,
+    pub specs: Vec<SourceDataBlocksInMemory>,
 }
 
 /// Returns the real `[min, max]` `insert_time` range covered by `blocks`, independent of list
@@ -366,52 +421,38 @@ pub fn group_blocks_into_partitions(
     out
 }
 
-/// Packs consecutive insert-time buckets of `[insert_range.begin, insert_range.end)` (stepping by
-/// `slice`, so every bucket edge is `slice`-aligned to `insert_range.begin`) into batch query
-/// windows, greedily closing a window just before it would exceed `target_rows_per_query`.
+/// Packs consecutive planned buckets into batch query windows, greedily closing a window just
+/// before it would exceed `target_rows_per_query`.
 ///
-/// `bucket_counts` holds one `(bucket_start, nb_blocks)` pair per *non-empty* bucket, ascending;
-/// any bucket missing from it is treated as holding zero blocks (and so never forces a close on
-/// its own). A bucket whose own count already exceeds `target_rows_per_query` still forms one
-/// batch on its own -- the loop never splits a bucket.
+/// A bucket whose own block count already exceeds `target_rows_per_query` still forms one batch on
+/// its own -- the loop never splits a bucket.
 ///
-/// Batch edges are always bucket-aligned and batches tile `insert_range` with no gaps or overlaps,
-/// so which width is picked cannot change the specs `group_blocks_into_partitions` later emits
-/// per bucket -- only how many SQL queries it takes to gather them.
+/// Batch edges are always bucket edges and batches tile from the first bucket's start to the last
+/// bucket's end with no gaps or overlaps (the gaps between planned buckets hold no blocks), so
+/// which width is picked cannot change the specs `group_blocks_into_partitions` later emits per
+/// bucket -- only how many SQL queries it takes to gather them. `buckets` must be ascending; an
+/// empty `buckets` yields no window.
 pub fn batch_windows(
-    insert_range: TimeRange,
-    slice: TimeDelta,
-    bucket_counts: &[(DateTime<Utc>, i64)],
+    buckets: &[PlannedBucket],
     target_rows_per_query: i64,
 ) -> impl Iterator<Item = TimeRange> {
     let mut windows = Vec::new();
+    let Some(first) = buckets.first() else {
+        return windows.into_iter();
+    };
     let mut running: i64 = 0;
-    let mut batch_begin = insert_range.begin;
-    let mut bucket_begin = insert_range.begin;
-    let mut counts_idx = 0usize;
-    while bucket_begin < insert_range.end {
-        // bucket_counts is ascending and every bucket we walk here is >= the previous one, so a
-        // single forward-moving index suffices (no need to search backwards).
-        while counts_idx < bucket_counts.len() && bucket_counts[counts_idx].0 < bucket_begin {
-            counts_idx += 1;
-        }
-        let nb_blocks =
-            if counts_idx < bucket_counts.len() && bucket_counts[counts_idx].0 == bucket_begin {
-                let n = bucket_counts[counts_idx].1;
-                counts_idx += 1;
-                n
-            } else {
-                0
-            };
-        if running > 0 && running + nb_blocks > target_rows_per_query {
-            windows.push(TimeRange::new(batch_begin, bucket_begin));
+    let mut batch_begin = first.range.begin;
+    for bucket in buckets {
+        if running > 0 && running + bucket.nb_blocks > target_rows_per_query {
+            windows.push(TimeRange::new(batch_begin, bucket.range.begin));
             running = 0;
-            batch_begin = bucket_begin;
+            batch_begin = bucket.range.begin;
         }
-        running += nb_blocks;
-        bucket_begin += slice;
+        running += bucket.nb_blocks;
     }
-    windows.push(TimeRange::new(batch_begin, insert_range.end));
+    if let Some(last) = buckets.last() {
+        windows.push(TimeRange::new(batch_begin, last.range.end));
+    }
     windows.into_iter()
 }
 
@@ -422,38 +463,33 @@ fn interval_literal(slice: TimeDelta) -> String {
     format!("{} seconds", slice.num_seconds())
 }
 
-/// Splits an insert-time-sorted block list into consecutive runs sharing the same
-/// `insert_time.duration_trunc(slice)` bucket. The SQL feeding this is `ORDER BY insert_time,
-/// block_id`, so buckets are contiguous runs in the list -- no sorting or grouping by key needed,
-/// just a scan that closes a run whenever the bucket changes.
+/// Distributes an insert-time-sorted block list over `buckets` (ascending, parallel to the
+/// result). The SQL feeding this is `ORDER BY insert_time, block_id`, so each bucket's blocks are a
+/// contiguous run. A block outside every bucket (committed between the count query and the fetch)
+/// is left for the next run to plan.
 fn split_into_buckets(
     blocks: Vec<Arc<PartitionSourceBlock>>,
-    slice: TimeDelta,
-) -> Result<Vec<Vec<Arc<PartitionSourceBlock>>>> {
-    let mut buckets = vec![];
-    let mut current: Vec<Arc<PartitionSourceBlock>> = vec![];
-    let mut current_bucket: Option<DateTime<Utc>> = None;
+    buckets: &[PlannedBucket],
+) -> Vec<Vec<Arc<PartitionSourceBlock>>> {
+    let mut split: Vec<Vec<Arc<PartitionSourceBlock>>> = vec![vec![]; buckets.len()];
+    let mut idx = 0usize;
     for block in blocks {
-        let bucket = block.block.insert_time.duration_trunc(slice)?;
-        if current_bucket != Some(bucket) {
-            if !current.is_empty() {
-                buckets.push(std::mem::take(&mut current));
-            }
-            current_bucket = Some(bucket);
+        let insert_time = block.block.insert_time;
+        while idx < buckets.len() && buckets[idx].range.end <= insert_time {
+            idx += 1;
         }
-        current.push(block);
+        if idx < buckets.len() && buckets[idx].range.begin <= insert_time {
+            split[idx].push(block);
+        }
     }
-    if !current.is_empty() {
-        buckets.push(current);
-    }
-    Ok(buckets)
+    split
 }
 
-/// Runs the per-bucket `COUNT(*) ... GROUP BY date_bin(slice, insert_time)` query over
+/// Runs the `COUNT(*), SUM(nb_objects) ... GROUP BY date_bin(slice, insert_time)` query over
 /// `insert_range`, under `identity_predicate` (the batch queries' own identity filter -- process +
 /// stream-tag, or stream id) so the returned counts match what the batch queries themselves will
 /// return -- the event-time predicate of the MIN/MAX pre-query would not do. Returns one
-/// `(bucket_start, nb_blocks)` pair per non-empty bucket, ascending.
+/// `(bucket_start, nb_blocks, nb_objects)` entry per non-empty bucket, ascending.
 async fn fetch_bucket_counts(
     lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
@@ -461,12 +497,14 @@ async fn fetch_bucket_counts(
     insert_range: TimeRange,
     slice: TimeDelta,
     identity_predicate: &str,
-) -> Result<Vec<(DateTime<Utc>, i64)>> {
+) -> Result<Vec<BucketCount>> {
     let slice_literal = interval_literal(slice);
     let begin_iso = insert_range.begin.to_rfc3339();
     let end_iso = insert_range.end.to_rfc3339();
     let sql = format!(
-        r#"SELECT date_bin('{slice_literal}', insert_time) as bucket, COUNT(*) as nb_blocks
+        r#"SELECT date_bin('{slice_literal}', insert_time) as bucket,
+                  COUNT(*) as nb_blocks,
+                  SUM(nb_objects) as nb_objects
              FROM source
              WHERE {identity_predicate}
              AND insert_time >= '{begin_iso}'
@@ -493,10 +531,12 @@ async fn fetch_bucket_counts(
     for rb in &rbs {
         let bucket_column: &TimestampNanosecondArray = typed_column_by_name(rb, "bucket")?;
         let nb_blocks_column: &Int64Array = typed_column_by_name(rb, "nb_blocks")?;
+        let nb_objects_column: &Int64Array = typed_column_by_name(rb, "nb_objects")?;
         for i in 0..rb.num_rows() {
             counts.push((
                 DateTime::from_timestamp_nanos(bucket_column.value(i)),
                 nb_blocks_column.value(i),
+                nb_objects_column.value(i),
             ));
         }
     }
@@ -753,8 +793,8 @@ pub async fn generate_stream_jit_partitions_segment(
 /// these partitions may not exist or they could be out of date
 /// Generates JIT partitions for a given time range.
 ///
-/// Batches its block queries: `batch_windows`, derived from a
-/// per-bucket `COUNT(*)`, picks how many insert-time buckets one query covers, and each batch's
+/// Requires `BucketSizing::Fixed`. Batches its block queries: `batch_windows`, derived from
+/// per-bucket block counts, picks how many insert-time buckets one query covers, and each batch's
 /// rows are then split back into per-bucket runs (`split_into_buckets`) and grouped independently
 /// -- byte-identical to running `generate_stream_jit_partitions_segment` once per bucket, just
 /// fewer, wider queries to get there. `generate_stream_jit_partitions_segment` itself is kept, not
@@ -768,6 +808,9 @@ pub async fn generate_stream_jit_partitions(
     stream: Arc<StreamMetadata>,
     process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
+    let BucketSizing::Fixed(slice) = config.bucket_sizing else {
+        anyhow::bail!("generate_stream_jit_partitions requires BucketSizing::Fixed");
+    };
     let insert_time_range = get_insert_time_range(
         lakehouse.clone(),
         blocks_view,
@@ -779,15 +822,7 @@ pub async fn generate_stream_jit_partitions(
         return Ok(vec![]);
     }
     let insert_time_range = insert_time_range.with_context(|| "missing insert_time_range")?;
-    let insert_time_range = TimeRange::new(
-        insert_time_range
-            .begin
-            .duration_trunc(config.max_insert_time_slice)?,
-        insert_time_range
-            .end
-            .duration_trunc(config.max_insert_time_slice)?
-            + config.max_insert_time_slice,
-    );
+    let insert_time_range = align_outward(insert_time_range, slice)?;
     let source_partitions = instrument_named!(
         PartitionCache::fetch_overlapping_insert_range_for_view(
             &lakehouse.lake().db_pool,
@@ -801,37 +836,30 @@ pub async fn generate_stream_jit_partitions(
 
     let stream_id = stream.stream_id;
     let identity_predicate = format!("stream_id = '{stream_id}'");
-    // A single-bucket insert_time_range can only ever produce one batch window (see
-    // `batch_windows`'s doc comment), regardless of bucket_counts, so skip the COUNT(*) round
-    // trip entirely in that case.
-    let bucket_counts =
-        if insert_time_range.end - insert_time_range.begin <= config.max_insert_time_slice {
-            vec![]
-        } else {
-            fetch_bucket_counts(
-                lakehouse.clone(),
-                blocks_view,
-                &source_partitions,
-                insert_time_range,
-                config.max_insert_time_slice,
-                &identity_predicate,
-            )
-            .await?
-        };
+    // A single-bucket insert_time_range can only ever produce one batch window, regardless of
+    // the counts, so skip the COUNT(*) round trip entirely in that case.
+    let bucket_counts = if insert_time_range.end - insert_time_range.begin <= slice {
+        vec![]
+    } else {
+        fetch_bucket_counts(
+            lakehouse.clone(),
+            blocks_view,
+            &source_partitions,
+            insert_time_range,
+            slice,
+            &identity_predicate,
+        )
+        .await?
+    };
+    let planned = config.plan(insert_time_range, slice, slice, &bucket_counts);
 
-    let windows: Vec<TimeRange> = batch_windows(
-        insert_time_range,
-        config.max_insert_time_slice,
-        &bucket_counts,
-        config.target_rows_per_query,
-    )
-    .collect();
+    let windows: Vec<TimeRange> = batch_windows(&planned, config.target_rows_per_query).collect();
     debug!(
         "generate_stream_jit_partitions: stream={stream_id}: derived {} batch window(s) from {} \
          non-empty bucket(s) (~{} row(s) total, target_rows_per_query={})",
         windows.len(),
-        bucket_counts.len(),
-        bucket_counts.iter().map(|(_, n)| n).sum::<i64>(),
+        planned.len(),
+        planned.iter().map(|b| b.nb_blocks).sum::<i64>(),
         config.target_rows_per_query
     );
 
@@ -880,7 +908,12 @@ pub async fn generate_stream_jit_partitions(
                 }));
             }
         }
-        for bucket_blocks in split_into_buckets(blocks, config.max_insert_time_slice)? {
+        let window_buckets: Vec<PlannedBucket> = planned
+            .iter()
+            .filter(|b| b.range.begin >= batch_range.begin && b.range.end <= batch_range.end)
+            .copied()
+            .collect();
+        for bucket_blocks in split_into_buckets(blocks, &window_buckets) {
             partitions.append(&mut group_blocks_into_partitions(config, bucket_blocks));
         }
     }
@@ -889,10 +922,12 @@ pub async fn generate_stream_jit_partitions(
 
 /// generate_process_jit_partitions lists the partitions that are needed to cover a time span for a specific process
 /// these partitions may not exist or they could be out of date
-/// Generates JIT partitions for a given time range filtered by process.
+/// Generates JIT partitions for a given time range filtered by process, grouped by the insert-time
+/// bucket `plan_buckets` assigned them to.
 ///
-/// Batches its block queries the same way `generate_stream_jit_partitions` does, and additionally
-/// applies the lean projection:
+/// The bucket width comes from `JitPartitionConfig::bucket_sizing`: a fixed slice, or the rung
+/// `select_rung(query_time_range)` picks. Batches its block queries the same way
+/// `generate_stream_jit_partitions` does, and additionally applies the lean projection:
 /// `fetch_stream_metadata_map` fetches every stream's metadata once for the whole insert range,
 /// and each batch's `fetch_process_blocks` call looks it up per block instead of projecting stream
 /// blobs onto every row and rebuilding `StreamMetadata` per row. The grouping call is inlined
@@ -905,7 +940,8 @@ pub async fn generate_process_jit_partitions(
     query_time_range: &TimeRange,
     process: Arc<ProcessMetadata>,
     stream_tag: &str,
-) -> Result<Vec<SourceDataBlocksInMemory>> {
+) -> Result<Vec<JitBucket>> {
+    let (rung, finest) = config.rungs(query_time_range);
     // Get insert time range for all blocks in this process
     let part_provider = LivePartitionProvider::new(lakehouse.lake().db_pool.clone());
     let view_set_name = blocks_view.get_view_set_name();
@@ -959,13 +995,13 @@ pub async fn generate_process_jit_partitions(
         return Ok(vec![]);
     }
 
-    let insert_time_range = TimeRange::new(
-        DateTime::from_timestamp_nanos(min_insert_time)
-            .duration_trunc(config.max_insert_time_slice)?,
-        DateTime::from_timestamp_nanos(max_insert_time)
-            .duration_trunc(config.max_insert_time_slice)?
-            + config.max_insert_time_slice,
-    );
+    let insert_time_range = align_outward(
+        TimeRange::new(
+            DateTime::from_timestamp_nanos(min_insert_time),
+            DateTime::from_timestamp_nanos(max_insert_time),
+        ),
+        rung,
+    )?;
 
     let source_partitions = instrument_named!(
         PartitionCache::fetch_overlapping_insert_range_for_view(
@@ -980,23 +1016,22 @@ pub async fn generate_process_jit_partitions(
 
     let identity_predicate =
         format!(r#"process_id = '{process_id}' AND array_has( "streams.tags", '{stream_tag}' )"#);
-    // A single-bucket insert_time_range can only ever produce one batch window (see
-    // `batch_windows`'s doc comment), regardless of bucket_counts, so skip the COUNT(*) round
-    // trip entirely in that case.
-    let bucket_counts =
-        if insert_time_range.end - insert_time_range.begin <= config.max_insert_time_slice {
-            vec![]
-        } else {
-            fetch_bucket_counts(
-                lakehouse.clone(),
-                blocks_view,
-                &source_partitions,
-                insert_time_range,
-                config.max_insert_time_slice,
-                &identity_predicate,
-            )
-            .await?
-        };
+    // A single-bucket insert_time_range can only ever produce one batch window, regardless of
+    // the counts, so skip the COUNT(*) round trip entirely in that case.
+    let bucket_counts = if insert_time_range.end - insert_time_range.begin <= finest {
+        vec![]
+    } else {
+        fetch_bucket_counts(
+            lakehouse.clone(),
+            blocks_view,
+            &source_partitions,
+            insert_time_range,
+            finest,
+            &identity_predicate,
+        )
+        .await?
+    };
+    let planned = config.plan(insert_time_range, rung, finest, &bucket_counts);
 
     let stream_metadata = fetch_stream_metadata_map(
         lakehouse.clone(),
@@ -1008,24 +1043,18 @@ pub async fn generate_process_jit_partitions(
     )
     .await?;
 
-    let windows: Vec<TimeRange> = batch_windows(
-        insert_time_range,
-        config.max_insert_time_slice,
-        &bucket_counts,
-        config.target_rows_per_query,
-    )
-    .collect();
+    let windows: Vec<TimeRange> = batch_windows(&planned, config.target_rows_per_query).collect();
     debug!(
         "generate_process_jit_partitions: process={process_id} stream_tag={stream_tag}: derived \
-         {} batch window(s) from {} non-empty bucket(s) (~{} row(s) total, \
+         {} batch window(s) from {} planned bucket(s) (~{} row(s) total, \
          target_rows_per_query={})",
         windows.len(),
-        bucket_counts.len(),
-        bucket_counts.iter().map(|(_, n)| n).sum::<i64>(),
+        planned.len(),
+        planned.iter().map(|b| b.nb_blocks).sum::<i64>(),
         config.target_rows_per_query
     );
 
-    let mut partitions = vec![];
+    let mut buckets = vec![];
     for batch_range in windows {
         let blocks = fetch_process_blocks(
             lakehouse.clone(),
@@ -1037,16 +1066,30 @@ pub async fn generate_process_jit_partitions(
             &stream_metadata,
         )
         .await?;
-        for bucket_blocks in split_into_buckets(blocks, config.max_insert_time_slice)? {
-            partitions.append(&mut group_blocks_into_partitions(config, bucket_blocks));
+        let window_buckets: Vec<PlannedBucket> = planned
+            .iter()
+            .filter(|b| b.range.begin >= batch_range.begin && b.range.end <= batch_range.end)
+            .copied()
+            .collect();
+        for (planned, bucket_blocks) in window_buckets
+            .iter()
+            .zip(split_into_buckets(blocks, &window_buckets))
+        {
+            let specs = group_blocks_into_partitions(config, bucket_blocks);
+            if !specs.is_empty() {
+                buckets.push(JitBucket {
+                    planned: *planned,
+                    specs,
+                });
+            }
         }
     }
-    Ok(partitions)
+    Ok(buckets)
 }
 
 /// One `lakehouse_partitions` candidate row, as fetched by `fetch_freshness_candidates`:
 /// `(begin_insert_time, end_insert_time, file_schema_hash, source_data_hash)`. Fields are `pub` so
-/// `analytics/tests/jit_freshness_tests.rs` can build rows directly, without a live database.
+/// `analytics/tests/` can build rows directly, without a live database.
 #[derive(Debug, Clone)]
 pub struct PartitionFreshnessRow {
     pub begin_insert_time: DateTime<Utc>,
@@ -1056,12 +1099,9 @@ pub struct PartitionFreshnessRow {
 }
 
 /// Fetches every `lakehouse_partitions` row for `view_meta` whose insert range *inclusively
-/// overlaps* `range` (`begin_insert_time <= range.end AND end_insert_time >= range.begin`) -- a
-/// superset of what any of the three `BlockOrder`-dependent per-spec queries used to return (an
-/// exact-equality row necessarily overlaps the spec's own range), with the variant-specific
-/// narrowing applied in Rust by `spec_is_up_to_date`. Used both by `is_jit_partition_up_to_date`
-/// (one spec's own range) and `find_up_to_date_partitions` (one range spanning many specs).
-async fn fetch_freshness_candidates(
+/// overlaps* `range` (`begin_insert_time <= range.end AND end_insert_time >= range.begin`), with
+/// the narrowing applied in Rust by the caller (`spec_is_up_to_date`, `resolve_bucket_coverage`).
+pub async fn fetch_freshness_candidates(
     pool: &sqlx::PgPool,
     view_meta: &ViewMetadata,
     range: TimeRange,
@@ -1094,29 +1134,17 @@ async fn fetch_freshness_candidates(
         .collect()
 }
 
-/// Filters `candidates` down to the rows the per-spec SQL used to return (exact range equality for
-/// `BlockOrder::EventTime`, exact match for a degenerate `BlockOrder::InsertTime` range, inclusive
-/// overlap otherwise), then applies the same `rows.len() == 1` / `file_schema_hash` /
-/// object-count checks `is_jit_partition_up_to_date` always has.
-///
-/// `block_order` selects which comparison applies (see `BlockOrder`):
-/// - `BlockOrder::EventTime` (`thread_spans`/`net_spans` only) requires exact insert-range and
-///   exact count equality. Their cut points can move between `jit_update` runs, so a later run's
-///   spec can be narrower than an already-written partition that still overlaps it; the overlap/`>=`
-///   test below would call that stale, wider partition up to date and leave it in place forever.
-///   Exact equality reports "not up to date" instead, so the write falls through to
-///   `RetireMatch::Overlap` (see `write_partition.rs`).
-/// - `BlockOrder::InsertTime` (every other JIT view) keeps the original overlap/`>=`-count test
-///   (with an exact-match branch for a degenerate spec range, to avoid matching multiple/wider
-///   rows). Their cut points are stable across runs, so a stale spec already covered by a wider
-///   committed partition -- e.g. from a concurrent `jit_update` that lost a race -- must stay a
-///   no-op here: `RetireMatch::Containment` cannot retire a merely-overlapping partition, so
-///   calling such a spec "not up to date" would make the subsequent insert trip the
-///   `lakehouse_partitions_no_overlap` exclusion constraint.
+/// Filters `candidates` down to the rows with exactly the spec's insert range, then applies the
+/// `rows.len() == 1` / `file_schema_hash` / exact object-count checks. Used by the
+/// `BlockOrder::EventTime` views (`thread_spans`/`net_spans`) only: their cut points can move
+/// between `jit_update` runs, so a later run's spec can be narrower than an already-written
+/// partition that still overlaps it, and an overlap test would call that stale, wider partition up
+/// to date and leave it in place forever. Exact equality reports "not up to date" instead, so the
+/// write falls through to `RetireMatch::Overlap` (see `write_partition.rs`). The `InsertTime` views
+/// judge freshness per bucket with `resolve_bucket_coverage`.
 pub fn spec_is_up_to_date(
     view_meta: &ViewMetadata,
     spec: &SourceDataBlocksInMemory,
-    block_order: BlockOrder,
     candidates: &[PartitionFreshnessRow],
 ) -> Result<bool> {
     let (min_insert_time, max_insert_time) =
@@ -1129,27 +1157,9 @@ pub fn spec_is_up_to_date(
         *view_meta.view_instance_id,
     );
 
-    // See: https://github.com/madesroches/micromegas/issues/488
     let matches: Vec<&PartitionFreshnessRow> = candidates
         .iter()
-        .filter(|r| match block_order {
-            // Exact insert-range equality (see this function's docs for why).
-            BlockOrder::EventTime => {
-                r.begin_insert_time == min_insert_time && r.end_insert_time == max_insert_time
-            }
-            // Degenerate range: exact-match on the single insert time, to avoid matching
-            // multiple/wider overlapping rows (see this function's docs).
-            BlockOrder::InsertTime if min_insert_time == max_insert_time => {
-                r.begin_insert_time == min_insert_time && r.end_insert_time == min_insert_time
-            }
-            // Overlap test, using inclusive inequalities (<=, >=) to prevent race conditions: with
-            // exclusive inequalities (<, >), identical time ranges never match, causing partitions
-            // to be unnecessarily recreated on every query (see this function's docs and
-            // https://github.com/madesroches/micromegas/issues/488).
-            BlockOrder::InsertTime => {
-                r.begin_insert_time <= max_insert_time && r.end_insert_time >= min_insert_time
-            }
-        })
+        .filter(|r| r.begin_insert_time == min_insert_time && r.end_insert_time == max_insert_time)
         .collect();
     if matches.len() != 1 {
         debug!("{desc}: found {} partitions (expected 1)", matches.len());
@@ -1172,16 +1182,9 @@ pub fn spec_is_up_to_date(
     }
     let existing_count = hash_to_object_count(&r.source_data_hash)?;
     let required_count = hash_to_object_count(&spec.block_ids_hash)?;
-    let up_to_date = match block_order {
-        // Exact count equality: see this function's docs.
-        BlockOrder::EventTime => existing_count == required_count,
-        // `>=`, not exact equality: a stale spec covered by an already-wider partition is a no-op
-        // here, not a rewrite (see this function's docs).
-        BlockOrder::InsertTime => existing_count >= required_count,
-    };
-    if !up_to_date {
+    if existing_count != required_count {
         info!(
-            "{desc}: existing partition object count does not satisfy block_order={block_order:?} \
+            "{desc}: existing partition object count differs \
              (existing={existing_count}, required={required_count}): creating a new partition"
         );
         return Ok(false);
@@ -1194,16 +1197,14 @@ pub fn spec_is_up_to_date(
 /// Checks if a JIT partition is up to date.
 ///
 /// Fetches the spec's own candidate range (`fetch_freshness_candidates`) and runs the shared
-/// matcher (`spec_is_up_to_date`) against it -- see that function's docs for the per-`BlockOrder`
-/// semantics. Kept for the `BlockOrder::EventTime` callers (`net_spans`/`thread_spans`), whose
-/// checks stay per-spec, interleaved with retire logic inside their own `update_partition`. The
-/// five `BlockOrder::InsertTime` callers instead batch through `find_up_to_date_partitions`.
+/// matcher (`spec_is_up_to_date`) against it. Used by the `BlockOrder::EventTime` callers
+/// (`net_spans`/`thread_spans`), whose checks stay per-spec, interleaved with retire logic inside
+/// their own `update_partition`.
 #[span_fn]
 pub async fn is_jit_partition_up_to_date(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
     spec: &SourceDataBlocksInMemory,
-    block_order: BlockOrder,
 ) -> Result<bool> {
     let (min_insert_time, max_insert_time) =
         get_part_insert_time_range(spec).with_context(|| "get_event_time_range")?;
@@ -1216,169 +1217,319 @@ pub async fn is_jit_partition_up_to_date(
         "sql_select_matching_partitions"
     )
     .await?;
-    spec_is_up_to_date(&view_meta, spec, block_order, &candidates)
+    spec_is_up_to_date(&view_meta, spec, &candidates)
 }
 
-/// One candidates fetch over `[specs.first().min, specs.last().max]` (specs have ascending,
-/// non-overlapping insert ranges), then the matcher per spec, run to a fixpoint. An empty `specs`
-/// returns `Ok(vec![])` without issuing any fetch -- reachable at every call site, since
-/// `generate_*_jit_partitions` returns no specs when the range holds no blocks.
-///
-/// The first pass runs `spec_is_up_to_date` for every spec against the full candidate set. After
-/// that, only a worklist of specs whose verdict might have changed is re-evaluated: because specs
-/// have ascending, non-overlapping insert ranges, a candidate row can be entirely contained in at
-/// most two (necessarily adjacent) specs' ranges, so when spec `i` newly becomes stale, the only
-/// other specs whose verdict can possibly change as a result are `i`'s immediate neighbors in the
-/// sorted order (index `i - 1` and `i + 1`) -- no non-adjacent spec's verdict can ever be affected.
-/// A re-evaluated spec `j` is checked against a candidate set that drops any row entirely
-/// contained in the insert range of some *other*, currently-stale spec `i` (`i != j`) -- such a
-/// row is a `RetireMatch::Containment` match for spec `i` and will be gone once `i`'s write runs
-/// this call, so it must not count towards `j`'s freshness. Spec `j`'s own range is always excluded from that drop: a row `j` itself would
-/// retire is not evidence about whether `j`'s *own* data is current, so it must stay in the set
-/// used to (re-)evaluate `j`. A spec, once found stale, is never recomputed again (so verdicts are
-/// monotone -- up to date to stale only -- by construction, with no separate clamping step), and
-/// only newly-stale specs push their neighbors onto the worklist. This bounds total work to at
-/// most `specs.len()` initial `spec_is_up_to_date` calls plus at most two more per spec (once per
-/// neighbor, if ever re-triggered) -- O(specs), not O(specs^2) or O(specs^3). Returns up-to-date
-/// flags parallel to `specs`.
-#[span_fn]
-pub async fn find_up_to_date_partitions(
-    pool: &sqlx::PgPool,
-    view_meta: ViewMetadata,
-    block_order: BlockOrder,
-    specs: &[SourceDataBlocksInMemory],
-) -> Result<Vec<bool>> {
-    if specs.is_empty() {
-        return Ok(vec![]);
+/// What a bucket needs: nothing, or its specs written with the given retire mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coverage {
+    Covered,
+    Stale { retire_match: RetireMatch },
+}
+
+/// What to do after a mandatory write lost an overlap race.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictRetry {
+    /// A concurrent writer already covers the bucket.
+    Drop,
+    /// Write again, retiring with this mode.
+    Retry { retire_match: RetireMatch },
+}
+
+/// A bucket's specs boiled down to what coverage needs.
+struct BucketFacts {
+    range: TimeRange,
+    spec_hulls: Vec<TimeRange>,
+    hull: TimeRange,
+    required: i64,
+}
+
+fn bucket_facts(bucket: &JitBucket) -> Result<BucketFacts> {
+    let mut spec_hulls = vec![];
+    let mut required = 0;
+    for spec in &bucket.specs {
+        spec_hulls
+            .push(blocks_insert_time_range(&spec.blocks).with_context(|| "empty partition spec")?);
+        required += hash_to_object_count(&spec.block_ids_hash)?;
     }
-    let ranges: Vec<(DateTime<Utc>, DateTime<Utc>)> = specs
+    let begin = spec_hulls
         .iter()
-        .map(get_part_insert_time_range)
-        .collect::<Result<Vec<_>>>()?;
-    let outer_range = TimeRange::new(
-        ranges
-            .first()
-            .with_context(|| "find_up_to_date_partitions: empty ranges")?
-            .0,
-        ranges
-            .last()
-            .with_context(|| "find_up_to_date_partitions: empty ranges")?
-            .1,
-    );
-    debug!(
-        "find_up_to_date_partitions: fetching freshness candidates for {} spec(s) over [{}, {}]",
-        specs.len(),
-        outer_range.begin.to_rfc3339(),
-        outer_range.end.to_rfc3339(),
-    );
+        .map(|h| h.begin)
+        .min()
+        .with_context(|| "bucket without specs")?;
+    let end = spec_hulls
+        .iter()
+        .map(|h| h.end)
+        .max()
+        .with_context(|| "bucket without specs")?;
+    Ok(BucketFacts {
+        range: bucket.planned.range,
+        spec_hulls,
+        hull: TimeRange::new(begin, end),
+        required,
+    })
+}
+
+/// A row's inclusive `[begin, end]` insert range against a half-open bucket.
+fn row_intersects(row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
+    row.begin_insert_time < bucket.end && row.end_insert_time >= bucket.begin
+}
+
+fn row_inside(row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
+    row.begin_insert_time >= bucket.begin && row.end_insert_time < bucket.end
+}
+
+/// Judges one bucket against `rows` (the rows that count as present). The retire mode of a stale
+/// verdict is derived from `raw_rows`: a row that the bucket's own write will not retire through
+/// `Containment` must be retired through `Overlap`, or the insert trips the no-overlap constraint,
+/// even when `rows` no longer lists it because another write is about to retire it.
+fn judge_bucket(
+    facts: &BucketFacts,
+    view_meta: &ViewMetadata,
+    rows: &[PartitionFreshnessRow],
+    raw_rows: &[PartitionFreshnessRow],
+) -> Result<Coverage> {
+    let (inner, outer): (Vec<&PartitionFreshnessRow>, Vec<&PartitionFreshnessRow>) = rows
+        .iter()
+        .filter(|r| row_intersects(r, facts.range))
+        .partition(|r| row_inside(r, facts.range));
+    let schema_ok = |r: &&PartitionFreshnessRow| r.file_schema_hash == view_meta.file_schema_hash;
+    let covered = if outer.is_empty() {
+        // Fine-or-equal rungs: the bucket's own rows must add up exactly.
+        let mut inner_count = 0;
+        for r in &inner {
+            inner_count += hash_to_object_count(&r.source_data_hash)?;
+        }
+        !inner.is_empty() && inner_count == facts.required && inner.iter().all(schema_ok)
+    } else if inner.is_empty() && outer.len() == 1 {
+        // Coarser rung: one row written while its bucket was closed, so it holds everything.
+        let r = outer[0];
+        r.begin_insert_time <= facts.hull.begin
+            && r.end_insert_time >= facts.hull.end
+            && schema_ok(&r)
+            && hash_to_object_count(&r.source_data_hash)? >= facts.required
+    } else {
+        false
+    };
+    if covered {
+        return Ok(Coverage::Covered);
+    }
+    let raw_has_outer = raw_rows
+        .iter()
+        .any(|r| row_intersects(r, facts.range) && !row_inside(r, facts.range));
+    Ok(Coverage::Stale {
+        retire_match: if raw_has_outer {
+            RetireMatch::Overlap
+        } else {
+            RetireMatch::Containment
+        },
+    })
+}
+
+/// Judges every bucket against the candidate rows and cascades: writing a stale bucket retires
+/// rows (those inside its spec hulls for `Containment`, those intersecting them for `Overlap`),
+/// which can strip coverage from a bucket that relied on one of them. Verdicts only move from
+/// covered to stale, so the loop ends in at most `buckets.len()` passes, and the query that
+/// triggers the writes never reads a bucket its own writes just emptied.
+///
+/// `buckets` are ascending and non-overlapping; returns verdicts parallel to them. Does no I/O.
+pub fn resolve_bucket_coverage(
+    buckets: &[JitBucket],
+    view_meta: &ViewMetadata,
+    candidates: &[PartitionFreshnessRow],
+) -> Result<Vec<Coverage>> {
+    let facts: Vec<BucketFacts> = buckets.iter().map(bucket_facts).collect::<Result<_>>()?;
+    let mut verdicts: Vec<Coverage> = facts
+        .iter()
+        .map(|f| judge_bucket(f, view_meta, candidates, candidates))
+        .collect::<Result<_>>()?;
+    loop {
+        let mut doomed = vec![false; candidates.len()];
+        for (f, verdict) in facts.iter().zip(&verdicts) {
+            let Coverage::Stale { retire_match } = verdict else {
+                continue;
+            };
+            for hull in &f.spec_hulls {
+                for (row, doomed) in candidates.iter().zip(doomed.iter_mut()) {
+                    *doomed |= match retire_match {
+                        RetireMatch::Containment => {
+                            row.begin_insert_time >= hull.begin && row.end_insert_time <= hull.end
+                        }
+                        RetireMatch::Overlap => {
+                            row.begin_insert_time <= hull.end && row.end_insert_time >= hull.begin
+                        }
+                    };
+                }
+            }
+        }
+        let remaining: Vec<PartitionFreshnessRow> = candidates
+            .iter()
+            .zip(&doomed)
+            .filter(|(_, doomed)| !**doomed)
+            .map(|(row, _)| row.clone())
+            .collect();
+        let mut changed = false;
+        for (f, verdict) in facts.iter().zip(verdicts.iter_mut()) {
+            if *verdict == Coverage::Covered {
+                let rejudged = judge_bucket(f, view_meta, &remaining, candidates)?;
+                if rejudged != Coverage::Covered {
+                    *verdict = rejudged;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return Ok(verdicts);
+        }
+    }
+}
+
+/// Decides what to do with a bucket whose write hit the no-overlap constraint, from the rows
+/// fetched again afterwards. A concurrent writer that committed after the first retire SELECT is
+/// listed in `refetched`, so the retry's retire mode is derived from it.
+pub fn decide_conflict_retry(
+    bucket: &JitBucket,
+    view_meta: &ViewMetadata,
+    refetched: &[PartitionFreshnessRow],
+) -> Result<ConflictRetry> {
+    let facts = bucket_facts(bucket)?;
+    Ok(
+        match judge_bucket(&facts, view_meta, refetched, refetched)? {
+            Coverage::Covered => ConflictRetry::Drop,
+            Coverage::Stale { retire_match } => ConflictRetry::Retry { retire_match },
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn write_spec_with_conflict_retry(
+    lakehouse: &LakehouseContext,
+    view: &dyn View,
+    view_meta: &ViewMetadata,
+    bucket: &JitBucket,
+    spec: &SourceDataBlocksInMemory,
+    retire_match: RetireMatch,
+    same_run_ranges: &[TimeRange],
+    block_processors: &Arc<BlockProcessorMap>,
+) -> Result<()> {
+    let attempt = |retire_match: RetireMatch| {
+        write_partition_from_blocks(
+            lakehouse.lake().clone(),
+            view_meta.clone(),
+            view.get_file_schema(),
+            spec.clone(),
+            block_processors.clone(),
+            retire_match,
+            same_run_ranges.to_vec(),
+        )
+    };
+    let err = match attempt(retire_match).await {
+        Ok(()) => return Ok(()),
+        Err(err) => err,
+    };
+    if !err
+        .chain()
+        .any(|e| e.downcast_ref::<PartitionOverlapConflict>().is_some())
+    {
+        return Err(err);
+    }
+    let facts = bucket_facts(bucket)?;
+    let refetched = fetch_freshness_candidates(
+        &lakehouse.lake().db_pool,
+        view_meta,
+        TimeRange::new(
+            facts.range.begin.min(facts.hull.begin),
+            facts.range.end.max(facts.hull.end),
+        ),
+    )
+    .await?;
+    match decide_conflict_retry(bucket, view_meta, &refetched)? {
+        ConflictRetry::Drop => {
+            info!(
+                "bucket [{}, {}) is now covered by a concurrent writer: dropping write",
+                facts.range.begin.to_rfc3339(),
+                facts.range.end.to_rfc3339()
+            );
+            Ok(())
+        }
+        ConflictRetry::Retry { retire_match } => attempt(retire_match).await,
+    }
+}
+
+/// Brings an `InsertTime` JIT view of one process up to date for `query_range`: sizes buckets from
+/// the range, writes the stale ones, then promotes closed history to the range's rung.
+///
+/// `view` is owned because promotion hands it to `create_merged_partition`.
+#[span_fn]
+pub async fn update_insert_time_jit_view(
+    lakehouse: Arc<LakehouseContext>,
+    view: Arc<dyn View>,
+    process: Arc<ProcessMetadata>,
+    query_range: TimeRange,
+    stream_tag: &str,
+    block_processors: Arc<BlockProcessorMap>,
+) -> Result<()> {
+    let config = JitPartitionConfig::default();
+    let query_rung = select_rung(query_range);
+    let blocks_view = BlocksView::new(lakehouse.default_audience())?;
+    let buckets = generate_process_jit_partitions(
+        &config,
+        lakehouse.clone(),
+        &blocks_view,
+        &query_range,
+        process,
+        stream_tag,
+    )
+    .await
+    .with_context(|| "generate_process_jit_partitions")?;
+    let (Some(first), Some(last)) = (buckets.first(), buckets.last()) else {
+        return Ok(());
+    };
+    let view_meta = view.get_meta();
     let candidates = instrument_named!(
-        fetch_freshness_candidates(pool, &view_meta, outer_range),
+        fetch_freshness_candidates(
+            &lakehouse.lake().db_pool,
+            &view_meta,
+            TimeRange::new(first.planned.range.begin, last.planned.range.end),
+        ),
         "sql_select_freshness_candidates"
     )
     .await?;
+    let verdicts = resolve_bucket_coverage(&buckets, &view_meta, &candidates)
+        .with_context(|| "resolve_bucket_coverage")?;
 
-    resolve_up_to_date_fixpoint(specs, &view_meta, block_order, candidates)
-}
-
-/// The pure fixpoint at the heart of `find_up_to_date_partitions` (see that function's docs for
-/// the derivation): runs `spec_is_up_to_date` once for every spec against `candidates`, then
-/// drains a worklist of specs that might need re-evaluation because a *neighbor* newly became
-/// stale. Because specs have ascending, non-overlapping insert ranges, a candidate row can be
-/// entirely contained in at most two specs' ranges, and only when those two specs are adjacent in
-/// the sorted order (sharing a boundary point, for a degenerate `begin == end` row) -- so the only
-/// specs whose verdict can ever change as a consequence of spec `i` becoming stale are `i`'s
-/// immediate neighbors, index `i - 1` and `i + 1`. A spec is re-evaluated against a candidate set
-/// that drops rows entirely contained in some *other*, currently-stale spec's insert range (never
-/// its own range -- a row a spec would itself retire is not evidence about its own freshness); if
-/// that recompute still comes back stale, the spec is marked stale (it is never recomputed again
-/// -- once stale, verdicts are monotone by construction, with no separate clamping step needed)
-/// and its own neighbors are pushed onto the worklist in turn. Takes an already-fetched
-/// `candidates` and does no I/O, so `analytics/tests/jit_freshness_tests.rs` can drive it directly
-/// without a live `PgPool`.
-pub fn resolve_up_to_date_fixpoint(
-    specs: &[SourceDataBlocksInMemory],
-    view_meta: &ViewMetadata,
-    block_order: BlockOrder,
-    candidates: Vec<PartitionFreshnessRow>,
-) -> Result<Vec<bool>> {
-    let ranges: Vec<(DateTime<Utc>, DateTime<Utc>)> = specs
-        .iter()
-        .map(get_part_insert_time_range)
-        .collect::<Result<Vec<_>>>()?;
-
-    // Initial verdicts: one full pass, every spec against the full, unfiltered candidate set.
-    // This is the one unavoidable full pass; everything after this only re-checks specs that a
-    // neighbor's staleness could plausibly have affected.
-    let mut up_to_date: Vec<bool> = specs
-        .iter()
-        .map(|spec| spec_is_up_to_date(view_meta, spec, block_order, &candidates))
-        .collect::<Result<Vec<_>>>()?;
-
-    // Which spec(s) entirely contain each candidate row -- computed once, up front, because
-    // `ranges` are ascending and non-overlapping (documented on `SourceDataBlocksInMemory`), so a
-    // row can be contained in at most two specs' ranges (only at a shared boundary point, for a
-    // degenerate `begin == end` row), and this containment relationship never changes as specs are
-    // discovered stale. Parallel to `candidates`; O(N*M) once, not O(N*M) per re-evaluation.
-    let containing_specs: Vec<Vec<usize>> = candidates
-        .iter()
-        .map(|row| {
-            ranges
-                .iter()
-                .enumerate()
-                .filter(|(_, (min_i, max_i))| {
-                    row.begin_insert_time >= *min_i && row.end_insert_time <= *max_i
-                })
-                .map(|(i, _)| i)
-                .collect()
-        })
-        .collect();
-
-    // Worklist of spec indices to (re-)evaluate. Only a stale spec's immediate neighbors
-    // (index - 1, index + 1) can ever need re-evaluation: a row can be entirely contained in at
-    // most two specs' ranges, and those two are necessarily adjacent, so no non-adjacent spec's
-    // verdict can be affected by this spec's staleness. Seed it with the neighbors of every spec
-    // that is already stale after the initial pass.
-    let mut pending: VecDeque<usize> = VecDeque::new();
-    for (i, is_up_to_date) in up_to_date.iter().enumerate() {
-        if !is_up_to_date {
-            if i > 0 {
-                pending.push_back(i - 1);
+    // Insert ranges this run already handled, so a later `Overlap` retire never retires a row of
+    // this same run -- see `RetireMatch::Overlap`'s docs.
+    let mut same_run_ranges: Vec<TimeRange> = vec![];
+    for (bucket, verdict) in buckets.iter().zip(&verdicts) {
+        for spec in &bucket.specs {
+            if let Coverage::Stale { retire_match } = verdict {
+                write_spec_with_conflict_retry(
+                    &lakehouse,
+                    view.as_ref(),
+                    &view_meta,
+                    bucket,
+                    spec,
+                    *retire_match,
+                    &same_run_ranges,
+                    &block_processors,
+                )
+                .await
+                .with_context(|| "write_partition_from_blocks")?;
             }
-            if i + 1 < specs.len() {
-                pending.push_back(i + 1);
-            }
+            same_run_ranges.push(blocks_insert_time_range(&spec.blocks)?);
         }
     }
 
-    while let Some(j) = pending.pop_front() {
-        // Already known stale: verdicts are monotone (up to date -> stale only), and this spec's
-        // neighbors were already pushed onto the worklist the moment it first became stale, so
-        // re-checking it again would be a no-op. Skipping without calling the matcher also means
-        // `spec_is_up_to_date`'s internal "partition up to date" log can never be logged for a
-        // spec whose returned verdict is actually stale.
-        if !up_to_date[j] {
-            continue;
-        }
-        let spec = &specs[j];
-        let filtered: Vec<PartitionFreshnessRow> = candidates
-            .iter()
-            .zip(containing_specs.iter())
-            .filter(|(_, containing)| !containing.iter().any(|&i| i != j && !up_to_date[i]))
-            .map(|(row, _)| row.clone())
-            .collect();
-        let recomputed = spec_is_up_to_date(view_meta, spec, block_order, &filtered)?;
-        if !recomputed {
-            up_to_date[j] = false;
-            if j > 0 {
-                pending.push_back(j - 1);
-            }
-            if j + 1 < specs.len() {
-                pending.push_back(j + 1);
-            }
-        }
-    }
-
-    Ok(up_to_date)
+    let targets = promotion_candidates(
+        &buckets,
+        &verdicts,
+        &candidates,
+        query_rung,
+        config.max_nb_objects,
+    );
+    promote_closed_buckets(lakehouse, view, targets, config.max_nb_objects).await;
+    Ok(())
 }
 
 /// get_event_time_range returns the time range covered by a partition spec
@@ -1391,7 +1542,8 @@ fn get_part_insert_time_range(
     Ok((range.begin, range.end))
 }
 
-/// Writes a partition from a set of blocks.
+/// Writes a partition from a set of blocks, retiring the rows `retire_match` selects (see
+/// `RetireMatch`; `same_run_ranges` is only meaningful for `Overlap`).
 ///
 /// `block_processors` keys per-block dispatch on the source block's `format`;
 /// see `BlockPartitionSpec::write` for the unknown-format behavior.
@@ -1402,6 +1554,8 @@ pub async fn write_partition_from_blocks(
     schema: Arc<Schema>,
     source_data: SourceDataBlocksInMemory,
     block_processors: Arc<BlockProcessorMap>,
+    retire_match: RetireMatch,
+    same_run_ranges: Vec<TimeRange>,
 ) -> Result<()> {
     if source_data.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
@@ -1414,6 +1568,8 @@ pub async fn write_partition_from_blocks(
         insert_range,
         source_data: Arc::new(source_data),
         block_processors,
+        retire_match,
+        same_run_ranges,
     };
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     block_spec

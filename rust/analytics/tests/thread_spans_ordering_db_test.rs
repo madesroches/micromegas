@@ -16,7 +16,7 @@ use micromegas_analytics::dfext::typed_column::{
 };
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::jit_partitions::{
-    BlockOrder, JitPartitionConfig, generate_stream_jit_partitions,
+    BlockOrder, BucketSizing, JitPartitionConfig, generate_stream_jit_partitions,
     generate_stream_jit_partitions_segment,
 };
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -821,7 +821,7 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
     // Large max_nb_objects: no splitting, all 3 blocks land in one event-ordered spec.
     let config = JitPartitionConfig {
         max_nb_objects: 1000,
-        max_insert_time_slice: TimeDelta::hours(1),
+        bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
         block_order: BlockOrder::EventTime,
         target_rows_per_query: 250_000,
     };
@@ -1043,7 +1043,7 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
 
     let config = JitPartitionConfig {
         max_nb_objects: 1000,
-        max_insert_time_slice: TimeDelta::hours(1),
+        bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
         block_order: BlockOrder::EventTime,
         target_rows_per_query: 250_000,
     };
@@ -1267,7 +1267,7 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
     // 2 objects/block, so max_nb_objects=4 forces exactly 2 blocks/partition.
     let config = JitPartitionConfig {
         max_nb_objects: 4,
-        max_insert_time_slice: TimeDelta::hours(1),
+        bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
         block_order: BlockOrder::EventTime,
         target_rows_per_query: 250_000,
     };
@@ -1543,7 +1543,7 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
     // insert-safety issue.
     let config = JitPartitionConfig {
         max_nb_objects: 4,
-        max_insert_time_slice: TimeDelta::hours(1),
+        bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
         block_order: BlockOrder::EventTime,
         target_rows_per_query: 250_000,
     };
@@ -1808,7 +1808,7 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
 
     let config = JitPartitionConfig {
         max_nb_objects: 1000,
-        max_insert_time_slice: TimeDelta::hours(1),
+        bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
         block_order: BlockOrder::EventTime,
         target_rows_per_query: 250_000,
     };
@@ -2091,7 +2091,7 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
 
     let config = JitPartitionConfig {
         max_nb_objects: 1000,
-        max_insert_time_slice: TimeDelta::hours(1),
+        bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
         block_order: BlockOrder::EventTime,
         target_rows_per_query: 250_000,
     };
@@ -2293,7 +2293,7 @@ async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
     // (max_nb_objects large).
     let config = JitPartitionConfig {
         max_nb_objects: 1000,
-        max_insert_time_slice: TimeDelta::hours(1),
+        bucket_sizing: BucketSizing::Fixed(TimeDelta::hours(1)),
         block_order: BlockOrder::EventTime,
         target_rows_per_query: 2,
     };
