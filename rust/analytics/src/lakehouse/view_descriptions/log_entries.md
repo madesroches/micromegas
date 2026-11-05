@@ -1,4 +1,4 @@
-One row per log message. Available as a global table and per process through `view_instance('log_entries', process_id)`.
+One row per log message. Available as a global table and per process through `view_instance('log_entries', '<process_id>')`.
 
 - Always bound the query with a time range. For one process, prefer `view_instance('log_entries', '<process_id>')` over `WHERE process_id = ...`, and set the time range to that process's lifetime.
 - `level`: 1=Fatal, 2=Error, 3=Warn, 4=Info, 5=Debug, 6=Trace. `level <= 2` selects errors.

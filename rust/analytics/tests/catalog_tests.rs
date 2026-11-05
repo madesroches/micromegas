@@ -8,7 +8,7 @@ use micromegas_analytics::lakehouse::metrics_view::MetricsViewMaker;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view_definition::build_sql_batch_view;
-use micromegas_analytics::lakehouse::view_factory::{ViewFactory, ViewMaker};
+use micromegas_analytics::lakehouse::view_factory::{ViewFactory, ViewMaker, default_view_factory};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use std::sync::Arc;
@@ -258,4 +258,28 @@ async fn test_list_view_sets_sort_order_of_global_views() -> Result<()> {
             .is_none()
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn every_default_view_set_has_a_description() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let factory = default_view_factory(
+        lakehouse.runtime().clone(),
+        lakehouse.lake().clone(),
+        lakehouse.default_audience(),
+    )
+    .await
+    .expect("default_view_factory");
+    let names = factory
+        .get_global_views()
+        .iter()
+        .map(|v| v.get_view_set_name().to_string())
+        .chain(factory.get_view_sets().keys().cloned());
+    for name in names {
+        let description = factory.get_description(&name);
+        assert!(
+            description.is_some_and(|d| !d.trim().is_empty()),
+            "built-in view set {name} ships without a description"
+        );
+    }
 }

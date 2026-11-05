@@ -213,7 +213,7 @@ micromegas-query [--file <path|->] ["<SQL>"] --begin <time> [--end <time>] [--fo
 **First step: ask the server what exists and how to use it.**
 
 ```
-micromegas-query "SELECT view_set_name, description, columns, sort_order FROM list_view_sets()" --begin 1h --format json
+micromegas-query "SELECT view_set_name, description, columns, sort_order FROM list_view_sets() LIMIT 100" --begin 1h --format json
 ```
 
 `description` is a markdown usage guide per view (what a row is, how to access it, mandatory filters, how to decode columns, join keys, examples), `columns` lists `name: DataType` per column, and `sort_order` lists the columns a scan is already ordered by. It includes any views the deployment defined itself. Use `WHERE view_set_name = '<name>'` to read one. **Do not run DESCRIBE queries** — `columns` and `description` from `list_view_sets()` cover the schemas and usage.

@@ -1,4 +1,4 @@
-One row per numeric measurement (metric sample). Available as a global table and per process through `view_instance('measures', process_id)`.
+One row per numeric measurement (metric sample). Available as a global table and per process through `view_instance('measures', '<process_id>')`.
 
 - High frequency. Always bound the query with a tight time range (a few hours at most) and a `LIMIT`; prefer `view_instance('measures', '<process_id>')` for a single process.
 - Filter on `name` (and `unit`) first. List the names a process emits with `SELECT DISTINCT name`.
