@@ -29,7 +29,9 @@ config file shape and the `--profile` flag.
 
 One file per view set: `<view_set_name>.sql`, holding exactly one `CREATE [OR REPLACE]
 MATERIALIZED VIEW` statement. The filename stem must equal the name in the statement's header, or
-the file is rejected. Nothing else in the directory is read — no config file, no `init` step.
+the file is rejected. A view's `description` option travels inside its `.sql` file, so descriptions
+are versioned and applied like the rest of the definition. Nothing else in the directory is read —
+no config file, no `init` step.
 
 ## Commands
 

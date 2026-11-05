@@ -6,7 +6,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 10;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 11;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -120,6 +120,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v10");
         let mut tr = pool.begin().await?;
         upgrade_v9_to_v10(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 10 == current_version {
+        info!("upgrade lakehouse schema to v11");
+        let mut tr = pool.begin().await?;
+        upgrade_v10_to_v11(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -628,5 +635,27 @@ async fn upgrade_v9_to_v10(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Re
     tr.execute("UPDATE lakehouse_migration SET version=10;")
         .await
         .with_context(|| "Updating lakehouse schema version to 10")?;
+    Ok(())
+}
+
+async fn upgrade_v10_to_v11(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // Gives the seeded `log_stats` row its shipped description. A row an admin has redefined
+    // (`updated_by` no longer 'migration') keeps its own text. No partition content is affected.
+    let def = log_stats_view_definition();
+    let view_options = serde_json::to_string(&def.options)
+        .with_context(|| "serializing log_stats's view_options")?;
+    sqlx::query(
+        "UPDATE lakehouse_view_set_definitions
+         SET definition_sql = $1, view_options = $2, updated_at = now()
+         WHERE view_set_name = 'log_stats' AND updated_by = 'migration';",
+    )
+    .bind(log_stats_ddl_text())
+    .bind(view_options)
+    .execute(&mut **tr)
+    .await
+    .with_context(|| "adding log_stats's description")?;
+    tr.execute("UPDATE lakehouse_migration SET version=11;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 11")?;
     Ok(())
 }

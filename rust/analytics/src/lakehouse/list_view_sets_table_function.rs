@@ -56,6 +56,9 @@ impl TableProvider for ListViewSetsTableProvider {
             Field::new("schema", DataType::Utf8, false),
             Field::new("has_view_maker", DataType::Boolean, false),
             Field::new("global_instance_available", DataType::Boolean, false),
+            Field::new("description", DataType::Utf8, true),
+            Field::new("columns", DataType::Utf8, false),
+            Field::new("sort_order", DataType::Utf8, true),
         ]))
     }
 
@@ -105,6 +108,19 @@ impl TableProvider for ListViewSetsTableProvider {
             .map(|info| info.global_instance_available)
             .collect();
 
+        let descriptions: Vec<Option<&str>> = limited_infos
+            .iter()
+            .map(|info| info.description.as_deref())
+            .collect();
+        let column_lists: Vec<&str> = limited_infos
+            .iter()
+            .map(|info| info.columns.as_str())
+            .collect();
+        let sort_orders: Vec<Option<String>> = limited_infos
+            .iter()
+            .map(|info| info.sort_order.as_ref().map(|cols| cols.join(", ")))
+            .collect();
+
         let view_set_name_array: ArrayRef = Arc::new(StringArray::from(view_set_names));
         let schema_hash_array: ArrayRef = Arc::new(BinaryArray::from(schema_hashes));
         let schema_array: ArrayRef = Arc::new(StringArray::from(schemas));
@@ -117,6 +133,9 @@ impl TableProvider for ListViewSetsTableProvider {
             schema_array,
             has_view_maker_array,
             global_instance_array,
+            Arc::new(StringArray::from(descriptions)),
+            Arc::new(StringArray::from(column_lists)),
+            Arc::new(StringArray::from(sort_orders)),
         ];
 
         let record_batch = RecordBatch::try_new(self.schema(), columns)

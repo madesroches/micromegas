@@ -164,7 +164,8 @@ fn value_to_i32(expr: &SqlExpr) -> Result<i32> {
 /// `time_column` is required unless
 /// both `min_time_column` and `max_time_column` are given individually; `source_partition_delta`
 /// defaults to `'1 day'`; `merge_partition_delta` defaults to `source_partition_delta`;
-/// `merge_sort_order` is an optional comma-separated column list. Anything else is a hard error.
+/// `merge_sort_order` is an optional comma-separated column list; `description` is an optional,
+/// non-blank markdown usage guide. Anything else is a hard error.
 fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result<ViewDefinition> {
     let mut extract_query = None;
     let mut count_src_query = None;
@@ -176,6 +177,7 @@ fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result
     let mut source_partition_delta: Option<String> = None;
     let mut merge_partition_delta: Option<String> = None;
     let mut merge_sort_order: Option<Vec<String>> = None;
+    let mut description: Option<String> = None;
 
     for opt in options {
         let SqlOption::KeyValue { key, value } = opt else {
@@ -214,6 +216,13 @@ fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result
                 }
                 merge_sort_order = Some(cols);
             }
+            "description" => {
+                let s = value_to_string(&value)?;
+                if s.trim().is_empty() {
+                    anyhow::bail!("description must not be empty");
+                }
+                description = Some(s);
+            }
             other => anyhow::bail!("unknown view option '{other}'"),
         }
     }
@@ -251,6 +260,7 @@ fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result
             source_partition_delta,
             merge_partition_delta,
             merge_sort_order,
+            description,
         },
     })
 }

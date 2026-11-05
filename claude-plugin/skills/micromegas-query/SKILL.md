@@ -210,160 +210,19 @@ micromegas-query [--file <path|->] ["<SQL>"] --begin <time> [--end <time>] [--fo
 
 ## Available views
 
-Views are listed below. **Do not run DESCRIBE queries** — all schemas are documented here.
+**First step: ask the server what exists and how to use it.**
+
+```
+micromegas-query "SELECT view_set_name, description, columns, sort_order FROM list_view_sets() LIMIT 100" --begin 1h --format json
+```
+
+`description` is a markdown usage guide per view (what a row is, how to access it, mandatory filters, how to decode columns, join keys, examples), `columns` lists `name: DataType` per column, and `sort_order` lists the columns a scan is already ordered by. It includes any views the deployment defined itself. Use `WHERE view_set_name = '<name>'` to read one. **Do not run DESCRIBE queries** — `columns` and `description` from `list_view_sets()` cover the schemas and usage.
 
 **Ignore internal tables:** Tables prefixed with `__` and suffixed with `__partitions` (e.g. `__log_entries__partitions`) are internal partition tables — never query them directly.
 
 **Log levels:** 1=Fatal, 2=Error, 3=Warn, 4=Info, 5=Debug, 6=Trace
 
-**Type notes:** Types below are simplified for readability. `Dictionary(Utf8)` columns are dictionary-encoded (`Dictionary(Int32, Utf8)`) and behave like `Utf8` in SQL. `properties`/`process_properties` shown as `Binary` are actually `Dictionary(Int32, Binary)` — always read them via `property_get()` / the JSONB functions rather than treating them as raw bytes.
-
-### `processes` — process metadata (global)
-
-| Column | Type |
-|--------|------|
-| process_id | Utf8 |
-| exe | Utf8 |
-| username | Utf8 |
-| realname | Utf8 |
-| computer | Utf8 |
-| distro | Utf8 |
-| cpu_brand | Utf8 |
-| tsc_frequency | Int64 |
-| start_time | Timestamp(ns, UTC) |
-| start_ticks | Int64 |
-| insert_time | Timestamp(ns, UTC) |
-| parent_process_id | Utf8 |
-| properties | Binary (use `property_get()`) |
-| last_update_time | Timestamp(ns, UTC) |
-| last_block_end_ticks | Int64 |
-| last_block_end_time | Timestamp(ns, UTC) |
-
-### `streams` — stream metadata (global)
-
-| Column | Type |
-|--------|------|
-| stream_id | Utf8 |
-| process_id | Utf8 |
-| dependencies_metadata | Binary |
-| objects_metadata | Binary |
-| tags | List(Utf8) |
-| properties | Binary (use `property_get()`) |
-| insert_time | Timestamp(ns, UTC) |
-| format | Utf8 |
-| last_update_time | Timestamp(ns, UTC) |
-
-### `blocks` — block metadata with joined stream/process info (global)
-
-Common columns below. The view also exposes the full set of joined `streams.*` and `processes.*` fields (e.g. `streams.dependencies_metadata`, `streams.insert_time`, `streams.format`, `processes.start_time`, `processes.tsc_frequency`, `processes.realname`, `processes.distro`, `processes.cpu_brand`, `processes.parent_process_id`, …).
-
-| Column | Type |
-|--------|------|
-| block_id | Utf8 |
-| stream_id | Utf8 |
-| process_id | Utf8 |
-| begin_time | Timestamp(ns, UTC) |
-| begin_ticks | Int64 |
-| end_time | Timestamp(ns, UTC) |
-| end_ticks | Int64 |
-| nb_objects | Int32 |
-| object_offset | Int64 |
-| payload_size | Int64 |
-| insert_time | Timestamp(ns, UTC) |
-| streams.tags | List(Utf8) |
-| streams.properties | Binary (use `property_get()`) |
-| processes.exe | Utf8 |
-| processes.username | Utf8 |
-| processes.computer | Utf8 |
-| processes.properties | Binary (use `property_get()`) |
-
-### `log_entries` — log messages (global + per-process via view_instance)
-
-| Column | Type |
-|--------|------|
-| process_id | Dictionary(Utf8) |
-| stream_id | Dictionary(Utf8) |
-| block_id | Dictionary(Utf8) |
-| insert_time | Timestamp(ns, UTC) |
-| exe | Dictionary(Utf8) |
-| username | Dictionary(Utf8) |
-| computer | Dictionary(Utf8) |
-| time | Timestamp(ns, UTC) |
-| target | Dictionary(Utf8) |
-| level | Int32 |
-| msg | Utf8 |
-| properties | Binary (use `property_get()`) |
-| process_properties | Binary (use `property_get()`) |
-
-### `log_stats` — pre-aggregated log counts by minute (global)
-
-| Column | Type |
-|--------|------|
-| time_bin | Timestamp(ns, UTC) |
-| process_id | Dictionary(Utf8) |
-| level | Int32 |
-| target | Dictionary(Utf8) |
-| count | Int64 |
-
-### `measures` — numeric metrics (global + per-process via view_instance)
-
-High-frequency numeric metrics. Use `view_instance('measures', process_id)` for single-process queries. Keep `--begin` tight — a few hours at most.
-
-| Column | Type |
-|--------|------|
-| process_id | Dictionary(Utf8) |
-| stream_id | Dictionary(Utf8) |
-| block_id | Dictionary(Utf8) |
-| insert_time | Timestamp(ns, UTC) |
-| exe | Dictionary(Utf8) |
-| username | Dictionary(Utf8) |
-| computer | Dictionary(Utf8) |
-| time | Timestamp(ns, UTC) |
-| target | Dictionary(Utf8) |
-| name | Dictionary(Utf8) |
-| unit | Dictionary(Utf8) |
-| value | Float64 |
-| properties | Binary (use `property_get()`) |
-| process_properties | Binary (use `property_get()`) |
-
-### `thread_spans` — sync spans (NO global view, view_instance only)
-
-**No global view — must use `view_instance('thread_spans', stream_id)` or `process_spans(process_id, 'thread')`.** Always use tight `--begin`/`--end` and `LIMIT`.
-
-| Column | Type |
-|--------|------|
-| id | Int64 |
-| parent | Int64 |
-| depth | UInt32 |
-| hash | UInt32 |
-| begin | Timestamp(ns, UTC) |
-| end | Timestamp(ns, UTC) |
-| duration | Int64 (nanoseconds) |
-| name | Dictionary(Utf8) |
-| target | Dictionary(Utf8) |
-| filename | Dictionary(Utf8) |
-| line | UInt32 |
-| properties | Dictionary(Int32, Binary) — end-event properties, use `property_get()`; empty set when none |
-
-### `async_events` — async span events (NO global view, view_instance only)
-
-**No global view — access via `view_instance('async_events', process_id)` or `process_spans(process_id, 'async')`.**
-
-| Column | Type |
-|--------|------|
-| stream_id | Dictionary(Utf8) |
-| block_id | Dictionary(Utf8) |
-| time | Timestamp(ns, UTC) |
-| event_type | Dictionary(Utf8) |
-| span_id | Int64 |
-| parent_span_id | Int64 |
-| depth | UInt32 |
-| hash | UInt32 |
-| name | Dictionary(Utf8) |
-| filename | Dictionary(Utf8) |
-| target | Dictionary(Utf8) |
-| line | UInt32 |
-| properties | Dictionary(Int32, Binary) — end-event properties, use `property_get()`; empty set on begin rows |
+**Type notes:** `Dictionary(Utf8)` columns are dictionary-encoded (`Dictionary(Int32, Utf8)`) and behave like `Utf8` in SQL. `properties`/`process_properties` are `Dictionary(Int32, Binary)` — always read them via `property_get()` / the JSONB functions rather than treating them as raw bytes.
 
 ## Key functions
 

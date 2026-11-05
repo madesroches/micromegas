@@ -249,8 +249,63 @@ fn seeded_log_stats_ddl_round_trips() {
             name, definition, ..
         } => {
             assert_eq!(name, "log_stats");
+            assert!(definition.options.description.is_some());
             assert_eq!(*definition, log_stats_view_definition());
         }
         ViewDdl::Drop { .. } => panic!("expected Create"),
     }
+}
+
+fn with_option(option: &str) -> String {
+    CREATE_SQL.replacen("WITH (", &format!("WITH ({option}, "), 1)
+}
+
+fn parsed_description(sql: &str) -> Option<String> {
+    match parse_view_ddl(sql).unwrap().expect("should parse") {
+        ViewDdl::Create { definition, .. } => definition.options.description,
+        ViewDdl::Drop { .. } => panic!("expected Create"),
+    }
+}
+
+#[test]
+fn description_option_accepts_single_and_dollar_quoted() {
+    assert_eq!(parsed_description(CREATE_SQL), None);
+    assert_eq!(
+        parsed_description(&with_option("description = 'plain text'")).as_deref(),
+        Some("plain text")
+    );
+    assert_eq!(
+        parsed_description(&with_option(
+            "description = $md$# Title\nbody with $$ inside$md$"
+        ))
+        .as_deref(),
+        Some("# Title\nbody with $$ inside")
+    );
+}
+
+#[test]
+fn blank_description_is_a_named_error() {
+    for blank in ["''", "'   '"] {
+        let err = parse_view_ddl(&with_option(&format!("description = {blank}"))).unwrap_err();
+        assert!(format!("{err:#}").contains("description"), "{err:#}");
+    }
+}
+
+#[test]
+fn view_options_description_serde_round_trip() {
+    use micromegas_analytics::lakehouse::view_definition::ViewOptions;
+    let legacy = r#"{"min_time_column":"t","max_time_column":"t","source_partition_delta":"1 day","merge_partition_delta":"1 day","merge_sort_order":null}"#;
+    let options: ViewOptions = serde_json::from_str(legacy).expect("legacy options");
+    assert_eq!(options.description, None);
+    assert_eq!(serde_json::to_string(&options).unwrap(), legacy);
+
+    let described = ViewOptions {
+        description: Some("# d".to_string()),
+        ..options
+    };
+    let json = serde_json::to_string(&described).unwrap();
+    assert_eq!(
+        serde_json::from_str::<ViewOptions>(&json).unwrap(),
+        described
+    );
 }

@@ -53,6 +53,7 @@ fn base_options() -> ViewOptions {
         source_partition_delta: "1 day".to_string(),
         merge_partition_delta: "1 day".to_string(),
         merge_sort_order: None,
+        description: None,
     }
 }
 
