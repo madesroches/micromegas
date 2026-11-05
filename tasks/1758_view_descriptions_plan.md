@@ -95,7 +95,6 @@ $md$,
   `get_description(&self, view_set_name: &str) -> Option<Arc<str>>`.
   - It is cloned with the rest of the factory, so `build_factory`'s clone of the base carries the
     built-in descriptions forward.
-  - The memory cost is a few KB of text per view.
 - **`default_view_factory`** calls `set_description` for each built-in set, using
   `include_str!("view_descriptions/<name>.md")`.
   - Markdown files keep long prose out of Rust string literals and can be reviewed as documents.
@@ -283,6 +282,7 @@ lakehouse-role service (flight-sql, maintenance, monolith) applies v11 at startu
   - the `description` option;
   - lakehouse schema v11 updates `log_stats`, and pre-v11 lakehouse services will not start
     against a migrated database (upgrade them together; rollback needs a database restore);
+  - deployments that keep `log_stats` in a views-as-code repo should re-run `micromegas-views pull` after upgrading (see `mkdocs/docs/admin/views-as-code.md`);
   - the existing columns are unchanged;
   - **Minor breaking change:** `ViewOptions` gains `description`, and `ViewSetInfo` gains
     `description`, `columns` and `sort_order`.
@@ -304,7 +304,7 @@ All of these are unit tests in `rust/analytics/tests/`, with no database.
   - `sort_order` is `None` for a maker-only set.
 - **Completeness**:
   - every view set in `default_view_factory` has a non-empty `get_description`;
-  - the factory is built over a lazily-connected pool and an in-memory object store;
+  - it uses `make_offline_lakehouse_context()` for setup and sits next to `real_view_factory_covers_every_registered_view_set` in `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs`;
   - this test catches a new built-in shipping without a description.
 - **`build_factory` registers DDL descriptions**, tested through the existing `ViewRegistry`
   test seam (the `ViewDefinitionStore` fake in
