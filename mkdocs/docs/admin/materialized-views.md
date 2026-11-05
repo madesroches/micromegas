@@ -73,7 +73,7 @@ With `merge_sort_order`, the merge query must not need an input order beyond the
 an `ORDER BY` inside an aggregate such as `array_agg(x ORDER BY y)` adds a sort that survives in
 the plan, and the merge then buffers its whole input instead of streaming. The result is still
 correct, so nothing fails at `CREATE` time; run
-[`check_view_merge()`](functions-reference.md#check_view_merge), or `micromegas-views plan`, which
+[`check_view_merge()`](functions-reference.md#check_view_mergeddl), or `micromegas-views plan`, which
 calls it, to find out.
 
 ## What is checked at `CREATE` time

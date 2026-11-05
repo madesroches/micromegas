@@ -54,7 +54,7 @@ server are listed separately, since they are never dropped without `--prune`. `p
 drift, not its exit code.
 
 For every view it would create or update, `plan` also asks the server
-([`check_view_merge()`](functions-reference.md#check_view_merge)) whether the view's merge keeps
+([`check_view_merge()`](functions-reference.md#check_view_mergeddl)) whether the view's merge keeps
 its streaming k-way shape, and prints a `warning:` line per view that does not, naming the
 `SortExec` plan line and the view's `merge_sort_order`. Views without `merge_sort_order` are not
 checked. A view that cannot be planned yet (for example one reading a view created in the same
