@@ -127,7 +127,8 @@ build cross-block trees that finer buckets would cut more often. They are out of
 `generate_process_jit_partitions` returns
 `Vec<JitBucket { planned: PlannedBucket, specs: Vec<SourceDataBlocksInMemory> }>`. EventTime
 callers flatten the result. `generate_stream_jit_partitions` keeps its return type and only
-switches to `BucketSizing::Fixed`.
+switches to `BucketSizing::Fixed`: it takes the slice from `Fixed(d)` and bails with an error on
+`RangeDriven` (no caller reaches it; every caller is pinned to `Fixed(1 h)`).
 
 ### 4. Bucket-coverage freshness (replaces the InsertTime arm)
 
@@ -196,10 +197,6 @@ to `create_merged_partition`, which takes `Arc<dyn View>`. The five views derive
 5. Write the stale buckets, with the 23P01 retry.
 6. Call `promote_closed_buckets` (§6) and await it.
 
-Only steps 1–5 can fail the query. Step 6 runs inside `jit_update`, so it finishes before
-`MaterializedView::scan` calls `part_provider.fetch` (`materialized_view.rs:108-142`), and the
-query reads the merged partitions.
-
 The signature is typed with `query_range: TimeRange`, already defaulted by the caller. Each view
 keeps its own process lookup (`async_events_view.rs` uses `find_process_with_latest_timing`), default
 range end, `global` early return (only `log_view` and `metrics_view` have one) and block-processor
@@ -212,13 +209,14 @@ object storage is read:
 
 ```rust
 pub fn promotion_candidates(buckets: &[JitBucket], verdicts: &[Coverage],
-                            candidates: &[PartitionFreshnessRow], max_nb_objects: i64)
+                            candidates: &[PartitionFreshnessRow], query_rung: TimeDelta,
+                            max_nb_objects: i64)
     -> Vec<PromotionTarget { bucket: TimeRange, inputs: Vec<PartitionFreshnessRow> }>;
 ```
 
 A bucket is promoted when all of the following hold:
 
-- The planner emitted it closed, at the query's rung (`planned.rung == select_rung(query_range)`),
+- The planner emitted it closed, at the query's rung (`planned.rung == query_rung`, the `select_rung(query_range)` of §5 step 1),
   not descended. Open buckets never qualify.
 - It was judged covered by at least 2 `inner` rows.
 - The sum of their counts is at most `max_nb_objects`.
@@ -238,17 +236,16 @@ is optional: it never fails the query, and on contention it skips instead of wai
      to `micromegas_ingestion::data_lake_connection::is_read_only`. If it is on, skip with
      `reason = "read_only"` before any merge or upload. The `is_read_only_violation` check below
      stays as a fallback.
-   - Re-fetch the rows in the bucket with inclusive bounds, like
-     `fetch_freshness_candidates` (`fetch_overlapping_insert_range_for_view` has strict bounds,
+   - Re-fetch the rows in the bucket with the new inclusive-bounds single-view fetch in
+     `partition_cache.rs` (Phase 3 step 7), which returns full `Partition` rows
+     (`fetch_overlapping_insert_range_for_view` has strict bounds,
      while the snapshot, the merge retire and `filter_inside_range` are inclusive). Map each
      `Partition` to a `PartitionFreshnessRow` (begin/end insert time, `file_schema_hash`,
      `source_data_hash`), re-check the selection predicate, and compute the hull from the
      re-fetched set. Merge only if that hull equals the re-checked inputs' hull. Another query may
      have promoted the bucket between the snapshot and the lock.
    - The lock transaction stays open across `create_merged_partition`, which opens a second
-     transaction from the same pool in `insert_partition_transaction`. Each promoting query
-     therefore holds 2 connections. Pool exhaustion is bounded by the sqlx acquire timeout and
-     surfaces as `jit_promotion_failed`.
+     transaction from the same pool in `insert_partition_transaction`.
    - Call `create_merged_partition` with `insert_range` set to that hull, the re-fetched cache
      passed as both `partitions_to_merge` and `partitions_all_views`, and
      `Arc::new(ResponseWriter::new(None))` as the logger. A JIT partition's range is block-derived,
@@ -311,7 +308,10 @@ as a stopgap.
 
 ### Phase 3: Promotion
 7. Create `rust/analytics/src/lakehouse/jit_promotion.rs` with `PromotionTarget`,
-   `promotion_candidates` and `promote_closed_buckets` (§6).
+   `promotion_candidates` and `promote_closed_buckets` (§6). In `partition_cache.rs`, add an
+   inclusive-bounds single-view variant of `fetch_overlapping_insert_range_for_view`
+   (`begin_insert_time <= end AND end_insert_time >= begin`) sharing its row-to-`Partition`
+   decoding; the promotion cache is `PartitionCache::empty(hull)` with `partitions` set.
 8. Await `promote_closed_buckets` at the end of `update_insert_time_jit_view`.
 
 ### Phase 4: Docs and changelog
@@ -324,6 +324,7 @@ as a stopgap.
 - `rust/analytics/src/lakehouse/mod.rs`
 - `rust/analytics/src/lakehouse/jit_partitions.rs`
 - `rust/analytics/src/lakehouse/block_partition_spec.rs`
+- `rust/analytics/src/lakehouse/partition_cache.rs` (inclusive-bounds fetch variant)
 - `rust/analytics/src/lakehouse/write_partition.rs` (typed overlap-conflict error, doc comments)
 - `rust/analytics/src/lakehouse/{log_view,metrics_view,async_events_view,images_view}.rs`
   (derive `Clone`, call the helper)
@@ -358,8 +359,6 @@ as a stopgap.
   never wait behind it. Serving the query from the merge stream (a tee in
   `QueryMerger::execute_merge_query`) would remove the re-read but needs `QueryMerger` changes, so
   it is a follow-up.
-- **Leaving the EventTime views on a fixed hour.** Their cut points are not stable across runs,
-  which breaks the nesting the ladder relies on. They could be revisited separately.
 - **Objects as the cap unit rather than rows or bytes.** `max_nb_objects` is the unit JIT
   partitions are already cut by, and objects are known before decoding. A size cut in a coarse bucket could fall mid-hour and break nesting. Measured `num_rows` and
   `file_size` matter for #1495's projections and joins, not for block-derived views.
