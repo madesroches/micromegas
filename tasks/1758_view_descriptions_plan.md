@@ -1,6 +1,6 @@
 # View Descriptions in Lakehouse Metadata Plan
 
-Issue: https://github.com/madesroches/micromegas/issues/1758
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1758
 
 ## Overview
 
