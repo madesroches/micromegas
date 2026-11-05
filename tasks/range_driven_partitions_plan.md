@@ -182,7 +182,10 @@ re-fetches the candidates for that bucket and re-runs the coverage rule once. If
 covered, the write is dropped. If it is still uncovered, the write is re-attempted once with the
 retire mode re-derived from the re-fetched rows (a concurrent writer that committed after the first
 retire SELECT is then seen and retired), and the error propagates only if that second attempt
-fails. The retry decision is a pure function over the re-fetched rows.
+fails. The retry decision is a pure function over the re-fetched rows. The helper detects the
+conflict with `err.chain().find_map(|e| e.downcast_ref::<PartitionOverlapConflict>())`, a typed
+error that `insert_partition_transaction` returns for a `lakehouse_partitions_no_overlap`
+violation (Phase 2 step 5).
 
 ### 5. Shared InsertTime `jit_update` helper
 
@@ -192,14 +195,22 @@ promotion passes it to `create_merged_partition` from a `'static` spawned task. 
 derive `Clone` and each `jit_update` passes `Arc::new(self.clone())`. It runs the steps below, and
 the five views' `jit_update` bodies collapse into a call to it.
 
-1. Select the rung.
-2. Call `generate_process_jit_partitions` with `RangeDriven`.
+1. Select the rung with `select_rung(query_range)`.
+2. Call `generate_process_jit_partitions` with `RangeDriven` and the selected rung as a new
+   parameter (`Fixed(d)` uses `d`). The MIN/MAX insert range it queries is truncated outward to
+   that rung, replacing today's truncation to the fixed slice, so `plan_buckets` walks whole
+   rung-aligned buckets.
 3. Fetch the candidates in one query over the hull (`fetch_freshness_candidates`, unchanged).
 4. Call `resolve_bucket_coverage`.
 5. Write the stale buckets, with the 23P01 retry.
 6. Call `schedule_promotion` (§6).
 
 Only steps 1–5 can fail the query.
+
+The signature is typed with `query_range: TimeRange`, already defaulted by the caller. Each view
+keeps its own process lookup (`async_events_view.rs` uses `find_process_with_latest_timing`), default
+range end, `global` early return (only `log_view` and `metrics_view` have one) and block-processor
+construction before calling the helper. The shared part is everything from rung selection on.
 
 ### 6. On-demand promotion (new `lakehouse/jit_promotion.rs`)
 
@@ -231,7 +242,11 @@ immediately. The work is optional and must never add latency or failures to the 
      `("promote", view, instance, bucket.begin, bucket.end)`. If the lock is not granted, skip the
      target: log `info!` "skipped_locked" and record `jit_promotion_skipped` with
      `reason = "locked"`. Another query is already promoting it.
-   - Under the lock, re-fetch the rows in the bucket with inclusive bounds, like
+   - Under the lock, check `SHOW transaction_read_only` with the existing `is_read_only` helper
+     (`data_lake_connection.rs`, made `pub` if needed). If it is on, skip with
+     `reason = "read_only"` before any merge or upload. The `is_read_only_violation` check below
+     stays as a fallback.
+   - Re-fetch the rows in the bucket with inclusive bounds, like
      `fetch_freshness_candidates` (`fetch_overlapping_insert_range_for_view` has strict bounds,
      while the snapshot, the merge retire and `filter_inside_range` are inclusive). Map each
      `Partition` to a `PartitionFreshnessRow` (begin/end insert time, `file_schema_hash`,
@@ -283,6 +298,9 @@ as a stopgap.
 5. Add `retire_match` and `same_run_ranges` parameters to `write_partition_from_blocks` and the
    matching fields to `BlockPartitionSpec` (`block_partition_spec.rs`), which today hard-codes
    `RetireMatch::Containment` and no `same_run_ranges`.
+   Also change `insert_partition_transaction` in `write_partition.rs` to return a typed
+   `thiserror` error `PartitionOverlapConflict` for a `lakehouse_partitions_no_overlap` violation
+   in place of the string `bail!`, keeping the legible message as its `Display`.
 6. Add `update_insert_time_jit_view` (§5, taking `Arc<dyn View>`), derive `Clone` on the five
    InsertTime views, accumulating `same_run_ranges` the way
    `net_spans_view.rs:256-293` does, and switch `log_view.rs`, `metrics_view.rs`,
@@ -304,6 +322,7 @@ as a stopgap.
 - `rust/analytics/src/lakehouse/mod.rs`
 - `rust/analytics/src/lakehouse/jit_partitions.rs`
 - `rust/analytics/src/lakehouse/block_partition_spec.rs`
+- `rust/analytics/src/lakehouse/write_partition.rs` (typed overlap-conflict error, doc comments)
 - `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/src/lakehouse/{log_view,metrics_view,async_events_view,images_view}.rs`
   (derive `Clone`, call the helper)
@@ -354,6 +373,12 @@ as a stopgap.
 
 ## Documentation
 
+- Doc comments that say only the EventTime views use `RetireMatch::Overlap` or per-bucket
+  `COUNT(*)`. In `write_partition.rs`: the `RetireMatch::Containment` docs ("Used by everything
+  except the two EventTime JIT views"), the `RetireMatch::Overlap` docs, the `retire_partitions`
+  comment, the advisory-lock comment in `insert_partition_transaction` and the
+  `write_partition_from_rows` doc. In `jit_partitions.rs`: the `generate_*_jit_partitions` docs on
+  per-bucket COUNT(*) and the `spec_is_up_to_date` docs.
 - `mkdocs/docs/architecture/index.md`, "JIT ETL (On-Demand)": add that partition size follows the
   query range on a minute → day ladder, that only the open minute is rewritten while live, and that
   closed history is merged on demand when a longer query reads it.
