@@ -1,9 +1,9 @@
 //! Offline (no live DB) regression tests for `tasks/admin_gate_mutating_lakehouse_functions_plan.md`:
-//! `make_session_context`'s `CallerContext::is_admin` gate registration of the nine
+//! `make_session_context`'s `CallerContext::is_admin` gate registration of the ten
 //! admin-gated lakehouse UDTFs/UDFs (`retire_partitions`, `materialize_partitions`,
 //! `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`, the
-//! query deny list's `list_query_denials`, `deny_queries`, `remove_query_denial`, and
-//! `list_view_set_definitions`). These tests
+//! query deny list's `list_query_denials`, `deny_queries`, `remove_query_denial`,
+//! `list_view_set_definitions`, and `check_view_merge`). These tests
 //! only assert on DataFusion *planning*, never execution: the gated functions' own
 //! `call_with_args` implementations only parse arguments and return a lazy provider (or, for
 //! `deny_queries`, additionally compile the match expression and read `rule_count()` from the
@@ -69,6 +69,7 @@ const MUTATING_UDTF_CALLS: &[&str] = &[
     "SELECT * FROM list_query_denials()",
     "SELECT * FROM deny_queries('client = ''x''', 'r')",
     "SELECT * FROM list_view_set_definitions()",
+    "SELECT * FROM check_view_merge('CREATE MATERIALIZED VIEW gate_probe WITH (extract_query = $$SELECT 1 AS x$$, count_src_query = $$SELECT 0 AS count$$, merge_partitions_query = $$SELECT * FROM {source}$$, update_group = 1, time_column = ''x'')')",
 ];
 
 const MUTATING_UDF_CALLS: &[&str] = &[

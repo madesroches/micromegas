@@ -686,6 +686,38 @@ LEFT JOIN incompatible_summary i ON t.view_set_name = i.view_set_name
 ORDER BY size_percentage DESC;
 ```
 
+### `check_view_merge(ddl)`
+
+!!! note "Requires admin"
+    Same gate as `retire_partitions()` and friends — see [Authorization](authorization.md#admin-gated-lakehouse-functions).
+
+**Description**: Plans the merge of a `CREATE [OR REPLACE] MATERIALIZED VIEW` definition the way
+the maintenance daemon would, without executing it, and reports whether the merge keeps its
+streaming per-file k-way shape. When a `SortExec` remains in the physical plan the merge buffers
+its whole input in memory instead of streaming; `merge_sort_order` guarantees a correctly ordered
+result either way. Returns no row for a definition without `merge_sort_order`. Passing anything
+other than a `CREATE` statement is an error. The verdict is exact for merge queries that read only
+`{source}`; other views a merge query reads are planned as empty.
+
+**Usage**:
+```sql
+SELECT streams, sort_exec_line
+FROM check_view_merge('CREATE MATERIALIZED VIEW my_view WITH (...)');
+```
+
+**Returns**: Table with columns:
+
+| Column | Type | Description |
+|---|---|---|
+| `view_set_name` | String | The view set's name |
+| `merge_sort_order` | String | The declared `merge_sort_order`, comma-joined |
+| `streams` | Boolean | `false` when a `SortExec` survives in the merge plan |
+| `sort_exec_line` | String, nullable | The first plan line containing `SortExec`; NULL when `streams` is `true` |
+| `plan` | String | The physical plan |
+
+`micromegas-views plan` and `apply` call this for every view they would write; see
+[View Sets as Code](views-as-code.md).
+
 ### `list_view_set_definitions()`
 
 !!! note "Requires admin"

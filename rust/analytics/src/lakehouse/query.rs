@@ -1,5 +1,6 @@
 use super::{
     answer::Answer,
+    check_view_merge_table_function::CheckViewMergeTableFunction,
     deny_queries_table_function::DenyQueriesTableFunction,
     get_payload_function::GetPayload,
     lakehouse_context::LakehouseContext,
@@ -118,6 +119,7 @@ pub fn register_lakehouse_functions(
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
     caller: &CallerContext,
+    configurator: Arc<dyn SessionConfigurator>,
 ) {
     // The call-level guard: one guard, shared (via `Arc`) across every
     // arg-addressed UDTF/UDF this call registers below -- `view_instance`, `process_spans`,
@@ -253,6 +255,16 @@ pub fn register_lakehouse_functions(
                 view_factory.clone(),
             )),
         );
+        // Plans a definition's merge as the daemon would, so it needs the same session
+        // configurator the real sessions use.
+        ctx.register_udtf(
+            "check_view_merge",
+            Arc::new(CheckViewMergeTableFunction::new(
+                lakehouse.clone(),
+                view_factory.clone(),
+                configurator,
+            )),
+        );
     }
 }
 
@@ -272,6 +284,7 @@ pub fn register_functions(
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
     caller: &CallerContext,
+    configurator: Arc<dyn SessionConfigurator>,
 ) {
     register_lakehouse_functions(
         ctx,
@@ -280,6 +293,7 @@ pub fn register_functions(
         query_range,
         view_factory,
         caller,
+        configurator,
     );
     register_extension_functions(ctx);
 }
@@ -319,6 +333,7 @@ pub async fn make_session_context(
         query_range,
         view_factory.clone(),
         &caller,
+        configurator.clone(),
     );
     for view in view_factory.get_global_views() {
         register_table(

@@ -75,20 +75,60 @@ def _server_df(rows):
     return pd.DataFrame(list(rows))
 
 
+_CHECK_COLUMNS = [
+    "view_set_name",
+    "merge_sort_order",
+    "streams",
+    "sort_exec_line",
+    "plan",
+]
+
+
+def _check_df(report):
+    """A `check_view_merge()`-shaped frame; no report means the view was not checked."""
+    if report is None:
+        return pd.DataFrame(columns=_CHECK_COLUMNS)
+    return pd.DataFrame([report], columns=_CHECK_COLUMNS)
+
+
+def _buffering_report(name):
+    return {
+        "view_set_name": name,
+        "merge_sort_order": "k1, k2",
+        "streams": False,
+        "sort_exec_line": "SortExec: expr=[k1@0 ASC]",
+        "plan": "SortExec: expr=[k1@0 ASC]\n  DataSourceExec",
+    }
+
+
 class FakeClient:
     """`.query(sql)`: a SELECT returns the canned server-state DataFrame; anything else is
     DDL, recorded in `statements`, and answered with `ddl_results`/`ddl_errors` (by the
     view-set name parsed out of the statement).
     """
 
-    def __init__(self, server_rows=(), ddl_results=None, ddl_errors=None):
+    def __init__(
+        self,
+        server_rows=(),
+        ddl_results=None,
+        ddl_errors=None,
+        check_results=None,
+        check_errors=None,
+    ):
         self.server_df = _server_df(server_rows)
         self.statements = []
         self.ddl_results = ddl_results or {}
         self.ddl_errors = ddl_errors or {}
+        self.check_results = check_results or {}
+        self.check_errors = check_errors or {}
 
     def query(self, sql):
         self.statements.append(sql)
+        if "check_view_merge(" in sql:
+            name = _ddl_name(sql)
+            if name in self.check_errors:
+                raise self.check_errors[name]
+            return _check_df(self.check_results.get(name))
         if _is_select(sql):
             return self.server_df
         name = _ddl_name(sql)
@@ -119,6 +159,7 @@ def make_args(**overrides):
         "auto_approve": False,
         "color": False,
         "format": "table",
+        "strict": False,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -456,6 +497,114 @@ class TestCmdPlan:
         monkeypatch.setattr(views_module, "make_client", lambda args: RaisingClient())
         with pytest.raises(pyarrow.lib.ArrowException):
             cmd_plan(make_args(dir=str(tmp_path)))
+
+
+class TestStreamingCheck:
+    def _write(self, tmp_path, name="foo"):
+        (tmp_path / f"{name}.sql").write_text(
+            f"CREATE MATERIALIZED VIEW {name} WITH (x=1)\n", encoding="utf-8"
+        )
+
+    def test_warning_names_view_sort_exec_line_and_sort_order(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._write(tmp_path)
+        client = FakeClient(check_results={"foo": _buffering_report("foo")})
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+        cmd_plan(make_args(dir=str(tmp_path)))  # advisory without --strict
+        err = capsys.readouterr().err
+        assert "warning: foo" in err
+        assert "SortExec: expr=[k1@0 ASC]" in err
+        assert "k1, k2" in err
+
+    def test_strict_exits_nonzero_on_warning(self, tmp_path, monkeypatch):
+        self._write(tmp_path)
+        client = FakeClient(check_results={"foo": _buffering_report("foo")})
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_plan(make_args(dir=str(tmp_path), strict=True))
+        assert exc_info.value.code == 1
+
+    def test_strict_passes_when_view_streams_or_has_no_sort_order(
+        self, tmp_path, monkeypatch
+    ):
+        self._write(tmp_path, "streams")
+        self._write(tmp_path, "unordered")
+        report = _buffering_report("streams")
+        report["streams"] = True
+        report["sort_exec_line"] = None
+        client = FakeClient(check_results={"streams": report})
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+        cmd_plan(make_args(dir=str(tmp_path), strict=True))
+
+    def test_skipped_check_is_printed_but_does_not_fail_strict(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._write(tmp_path)
+        client = FakeClient(
+            check_errors={"foo": pyarrow.lib.ArrowException("table 'dep' not found")}
+        )
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+        cmd_plan(make_args(dir=str(tmp_path), strict=True))
+        err = capsys.readouterr().err
+        assert "check skipped: foo" in err
+        assert "table 'dep' not found" in err
+
+    def test_unchanged_views_are_not_checked(self, tmp_path, monkeypatch):
+        self._write(tmp_path)
+        client = FakeClient(
+            server_rows=[_server_row("foo", "CREATE MATERIALIZED VIEW foo WITH (x=1)")],
+            check_results={"foo": _buffering_report("foo")},
+        )
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+        cmd_plan(make_args(dir=str(tmp_path), strict=True))
+        assert not any("check_view_merge(" in s for s in client.statements)
+
+    def test_ddl_single_quotes_are_doubled_in_the_sql_literal(self):
+        client = FakeClient()
+        views_module.check_merge_streaming(
+            client, "CREATE MATERIALIZED VIEW foo WITH (a = 'it''s')"
+        )
+        expected = (
+            "SELECT * FROM check_view_merge("
+            "'CREATE MATERIALIZED VIEW foo WITH (a = ''it''''s'')')"
+        )
+        assert client.statements[0] == expected
+
+    def test_apply_strict_exits_before_the_prompt_and_applies_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        self._write(tmp_path)
+        client = FakeClient(check_results={"foo": _buffering_report("foo")})
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+
+        def fail_input(prompt=""):
+            raise AssertionError("must exit before prompting")
+
+        monkeypatch.setattr("builtins.input", fail_input)
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_apply(make_args(dir=str(tmp_path), strict=True))
+        assert exc_info.value.code == 1
+        assert client.ddl_statements == []
+
+    def test_apply_without_strict_warns_and_proceeds(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._write(tmp_path)
+        client = FakeClient(check_results={"foo": _buffering_report("foo")})
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+        cmd_apply(make_args(dir=str(tmp_path), auto_approve=True))
+        assert "warning: foo" in capsys.readouterr().err
+        assert len(client.ddl_statements) == 1
+
+    def test_apply_skipped_check_does_not_fail_strict(self, tmp_path, monkeypatch):
+        self._write(tmp_path)
+        client = FakeClient(
+            check_errors={"foo": pyarrow.lib.ArrowException("not planned yet")}
+        )
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+        cmd_apply(make_args(dir=str(tmp_path), auto_approve=True, strict=True))
+        assert len(client.ddl_statements) == 1
 
 
 # ---------------------------------------------------------------------------
