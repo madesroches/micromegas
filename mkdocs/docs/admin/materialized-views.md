@@ -159,6 +159,10 @@ conventions instead:
 - The merge query's aggregates must be composable over already-aggregated rows — `sum(count)`,
   never `count(*)`; carry `sum` and `count` separately and divide at read time rather than
   averaging an average.
+- Querying `<name>` runs `merge_partitions_query` over the partitions the query range selects; the
+  unmerged partitions are readable as `__<name>__partitions`. A view whose merge query
+  re-aggregates by its grain returns one row per grain key even before the daemon merges
+  partitions.
 - Every row's audience/process_id column must be non-`NULL` — a `NULL` is filtered out for every
   non-admin caller silently, with no error.
 
