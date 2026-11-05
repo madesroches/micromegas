@@ -5,9 +5,9 @@ Issue: https://github.com/madesroches/micromegas/issues/1758
 ## Overview
 
 AI agents (and people) querying micromegas need more than a schema to use a view correctly:
-what it contains, how it relates to other views, which filters are mandatory, how to decode
-encoded columns, and how much data it holds. Today that guidance lives in hand-maintained agent
-skill files (e.g. `claude-plugin/skills/micromegas-query/SKILL.md`), one per deployment, and
+what it contains, how it relates to other views, which filters are mandatory, and how to decode
+encoded columns. Today that guidance lives in hand-maintained agent skill files (the shipped
+`claude-plugin/skills/micromegas-query/SKILL.md`, plus any copies a deployment maintains), and
 those files drift from the real view definitions. This plan stores a markdown description per
 view set and exposes it by appending columns to the existing `list_view_sets()` table function,
 so any SQL client can discover it. Built-in views ship their description in code. DDL-defined
@@ -67,10 +67,10 @@ with no client change:
 
 ```sql
 CREATE OR REPLACE MATERIALIZED VIEW error_counts WITH (
-  description = $$
+  description = $md$
 Per-minute error counts by `exe`, pre-aggregated from `log_entries` (level <= 2).
 Cheap to scan over days; prefer it to `log_entries` for trends.
-$$,
+$md$,
   extract_query = '...',
   ...
 );
@@ -81,7 +81,9 @@ $$,
 - **`ViewOptions`** gains
   `#[serde(default, skip_serializing_if = "Option::is_none")] pub description: Option<String>`.
   - It lives in the JSON, so the schema needs no column, and `SELECT_COLUMNS` does not change.
-  - Older servers ignore the unknown field, so a rollback is safe.
+  - Older servers ignore the unknown field when parsing, but the v11 bump stops pre-v11
+    lakehouse services from starting against a migrated database. Lakehouse services upgrade
+    together, and a rollback requires a database restore.
   - `validate_view_definition` ignores the field.
   - A `CREATE OR REPLACE` that only changes the description bumps `updated_at`, which triggers a
     reload that picks up the new text. It does not change the file schema hash, so no partition
@@ -107,9 +109,10 @@ $$,
   - `description: Option<Arc<str>>`, from `factory.get_description`.
   - `columns: String`, with one `name: DataType` line per field, using arrow's `Display`. It is
     taken from the same schema `schema` is formatted from.
-  - `sort_order: Option<Vec<String>>`, the column list of the global view's
-    `get_scan_output_ordering()` (`Concatenated` or `PerFile`). It is `None` for `Unordered` and
-    for maker-only sets, which have no instance to ask without building one.
+  - `sort_order: Option<Vec<String>>`, the column names of the global view's
+    `get_scan_output_ordering()` (`Concatenated` or `PerFile`). Names only, because ordered
+    scans are ascending-only (a descending column is never certified). It is `None` for
+    `Unordered` and for maker-only sets, which have no instance to ask without building one.
 
 ### 3. `list_view_sets()` output
 
@@ -124,7 +127,7 @@ Three columns are appended after the existing five, which are unchanged in name,
 | `global_instance_available` | Boolean | existing; queryable as a plain table |
 | `description` | Utf8, nullable | **new**: markdown usage guide |
 | `columns` | Utf8 | **new**: one `name: DataType` line per field, readable in the CLI |
-| `sort_order` | Utf8, nullable | **new**: comma-joined sort columns |
+| `sort_order` | Utf8, nullable | **new**: comma-joined sort column names (ascending only) |
 
 `ListViewSetsTableProvider::scan` keeps its shape: a call to `catalog::list_view_sets`, a limit,
 array construction, then a `MemorySourceConfig`. It never touches Postgres.
@@ -144,7 +147,8 @@ There is one `.md` file per built-in view set: `processes`, `streams`, `blocks`,
 - one or two example queries.
 
 The files do **not** repeat the column list, which the `columns` column carries. The source
-material is the per-view sections of `SKILL.md` and `schema-reference.md`.
+material is the per-view sections of `SKILL.md` and `schema-reference.md`. `net_spans`,
+`otel_spans` and `images` have no `SKILL.md` section, so they draw only on `schema-reference.md`.
 
 ### 5. Migration (lakehouse schema v10 → v11)
 
@@ -153,7 +157,8 @@ material is the per-view sections of `SKILL.md` and `schema-reference.md`.
 - `log_stats_view_definition()` sets
   `options.description = Some(include_str!("view_descriptions/log_stats.md").into())`.
   `log_stats_ddl_text()` gains the matching `description = $$...$$` option, so the seeded
-  definition and its `definition_sql` stay in agreement.
+  definition and its `definition_sql` stay in agreement. `log_stats.md` must stay free of `$$`,
+  since the untagged quote would end early.
 - The step runs
   `UPDATE lakehouse_view_set_definitions SET definition_sql = $1, view_options = $2,
   updated_at = now() WHERE view_set_name = 'log_stats' AND updated_by = 'migration'`. An admin
@@ -161,9 +166,8 @@ material is the per-view sections of `SKILL.md` and `schema-reference.md`.
 - On a fresh database, the v10 `INSERT ... ON CONFLICT DO NOTHING` already seeds the new text,
   and the v11 `UPDATE` rewrites the same values.
 
-There is no `SCHEMA_VERSION` change, since no partition content is affected. A replica running
-the new code against a v10 database works normally: `log_stats` has no description until
-ingestion migrates.
+There is no `SCHEMA_VERSION` change, since no partition content is affected. Every
+lakehouse-role service (flight-sql, maintenance, monolith) applies v11 at startup.
 
 ## Implementation Steps
 
@@ -198,6 +202,8 @@ ingestion migrates.
 - `rust/analytics/tests/view_ddl_parse_tests.rs`
 - `rust/analytics/tests/catalog_tests.rs`
 - `rust/analytics/tests/view_registry_tests.rs`
+- `rust/analytics/tests/view_definition_validation_tests.rs` (`description: None` in
+  `base_options()`)
 - `mkdocs/docs/admin/materialized-views.md`
 - `mkdocs/docs/admin/views-as-code.md`
 - `mkdocs/docs/admin/functions-reference.md`
@@ -208,15 +214,6 @@ ingestion migrates.
 
 ## Trade-offs
 
-- **Extending `list_view_sets()` rather than adding a new UDTF.** It already lists exactly the
-  queryable view sets for every caller, along with the access-pattern booleans. Appending columns
-  is additive under the SQL stability rule. A second function would duplicate its rows and its
-  three columns, and give agents two places to look.
-- **Descriptions held in `ViewFactory` rather than read from Postgres per call.** The registry
-  already parses every DDL row when it builds the factory, and the text is small.
-  `list_view_sets()` stays a pure in-memory scan with no per-call I/O. Like the rest of the
-  factory, the descriptions it serves are the loaded ones: a DDL change shows up at the inline
-  reload after commit, or at the next periodic refresh.
 - **A map on `ViewFactory` rather than a `View`/`ViewMaker` trait method.** A trait method would
   be split across views and makers: `processes`, `streams` and `blocks` have no maker, and the
   span views have no global view. It would also need a default, or a dummy implementation on
@@ -234,11 +231,10 @@ ingestion migrates.
   costs little and lets agents skip `schema`.
 - **No single-view variant such as `view_description('<name>')`.**
   `WHERE view_set_name = '...'` does the same thing.
-- **Volume as free text, not computed.** Partition row counts are meaningless for the views
-  reachable only through `view_instance()` (`thread_spans`, `async_events`, `net_spans`,
-  `otel_spans`), which are exactly the dangerous ones. Computing them would also cost a
-  `lakehouse_partitions` aggregation per call, and `list_partitions()` already gives exact
-  numbers to anyone who wants them.
+- **Volume is not computed.** Partition row counts are meaningless for the views reachable only
+  through `view_instance()` (`thread_spans`, `async_events`, `net_spans`, `otel_spans`), and
+  computing them would cost a `lakehouse_partitions` aggregation per call. `list_partitions()`
+  gives exact numbers, and DDL authors may write volume into their own description.
 
 ## Decisions
 
@@ -247,7 +243,8 @@ ingestion migrates.
   window guidance, the follow-up is a settings-backed `view_notes` map, which can be added
   without changing anything here.
 - Keep the option name `description`, not `comment` (user call).
-- Extend `list_view_sets()`, and serve descriptions from memory rather than Postgres (user call).
+- Extend `list_view_sets()`, and serve descriptions from memory rather than Postgres (user call);
+  a DDL change appears at the inline reload after commit, or at the next periodic refresh.
   `source`, `updated_at` and `updated_by` are not added, because admins already get them from
   `list_view_set_definitions()`.
 - Descriptions are readable by every caller, with no audience rule. They describe the view, not
@@ -261,27 +258,31 @@ ingestion migrates.
 ## Documentation
 
 - `mkdocs/docs/admin/materialized-views.md`: document the `description` option, with a
-  dollar-quoted markdown example.
+  tagged dollar-quoted markdown example (e.g. `$md$...$md$`), so a description containing `$$`
+  is safe.
 - `mkdocs/docs/admin/views-as-code.md`: one sentence saying that descriptions travel inside each
   `.sql` file.
 - `mkdocs/docs/admin/functions-reference.md` and `mkdocs/docs/query-guide/functions-reference.md`:
   - document the three new `list_view_sets()` columns;
-  - state that every caller can use it. It is registered outside the admin block, despite its
-    current "Administrative Function" label.
-- `mkdocs/docs/query-guide/schema-reference.md`: a short pointer in "Views Overview" to
-  `SELECT view_set_name, description, columns FROM list_view_sets()` as the live,
-  per-deployment list, DDL views included.
+  - in the query-guide page only, fix the "Administrative Function" label: every caller can use
+    it, since it is registered outside the admin block.
+- `mkdocs/docs/query-guide/schema-reference.md`: extend the existing `list_view_sets()` sentence
+  (line ~27) to point at `SELECT view_set_name, description, columns FROM list_view_sets()` as
+  the live, per-deployment list, DDL views included.
 - `claude-plugin/skills/micromegas-query/SKILL.md`:
   - make running `SELECT view_set_name, description, columns, sort_order FROM list_view_sets()`
     the first step of "Available views";
   - keep the MANDATORY RULES and the generic sections (CLI syntax, key functions, common query
     patterns, performance tips);
   - remove the per-view tables and the per-view prose, after moving any guidance they carry that
-    is still missing into the matching `view_descriptions/<name>.md`.
+    is still missing into the matching `view_descriptions/<name>.md`;
+  - reword the "Do not run DESCRIBE queries — all schemas are documented here" line (~213) to
+    point at the `columns` and `description` output of `list_view_sets()`.
 - `CHANGELOG.md`, under Unreleased:
   - `list_view_sets()` gains trailing `description`, `columns` and `sort_order` columns;
   - the `description` option;
-  - lakehouse schema v11 updates `log_stats`;
+  - lakehouse schema v11 updates `log_stats`, and pre-v11 lakehouse services will not start
+    against a migrated database (upgrade them together; rollback needs a database restore);
   - the existing columns are unchanged;
   - **Minor breaking change:** `ViewOptions` gains `description`, and `ViewSetInfo` gains
     `description`, `columns` and `sort_order`.
@@ -324,7 +325,8 @@ Postgres. A failure would be immediately visible as an error or a missing descri
 
 1. Start the services on a database last migrated by the current release:
    `python3 local_test_env/ai_scripts/start_services.py`.
-   - Expected: `/tmp/ingestion.log` reports the lakehouse migration to version 11.
+   - Expected: `/tmp/analytics.log` (or `/tmp/daemon.log`) reports the lakehouse migration to
+     version 11.
 2. Check the descriptions:
    `micromegas-query "SELECT view_set_name, description IS NOT NULL AS has_desc, sort_order FROM list_view_sets()"`.
    - Expected: every built-in set, plus `log_stats`, has `has_desc = true`.
@@ -333,5 +335,3 @@ Postgres. A failure would be immediately visible as an error or a missing descri
      inline reload.
    - Expected: `micromegas-views plan` is clean afterwards, so the description round-trips
      through `definition_sql`.
-4. Run `list_view_sets()` as a non-admin identity.
-   - Expected: the same rows and descriptions.
