@@ -298,6 +298,9 @@ as a stopgap.
 5. Add `retire_match` and `same_run_ranges` parameters to `write_partition_from_blocks` and the
    matching fields to `BlockPartitionSpec` (`block_partition_spec.rs`), which today hard-codes
    `RetireMatch::Containment` and no `same_run_ranges`.
+   The global batch specs built in `log_view.rs` and `metrics_view.rs` set
+   `retire_match: RetireMatch::Containment` and an empty `same_run_ranges`, preserving today's
+   behavior.
    Also change `insert_partition_transaction` in `write_partition.rs` to return a typed
    `thiserror` error `PartitionOverlapConflict` for a `lakehouse_partitions_no_overlap` violation
    in place of the string `bail!`, keeping the legible message as its `Display`.
@@ -387,7 +390,9 @@ as a stopgap.
   by `bucket_sizing: BucketSizing`, `generate_process_jit_partitions` returns `Vec<JitBucket>`,
   `batch_windows` takes planned buckets, `resolve_up_to_date_fixpoint` and
   `find_up_to_date_partitions` are removed, and `spec_is_up_to_date` and
-  `is_jit_partition_up_to_date` lose their `block_order` parameter.
+  `is_jit_partition_up_to_date` lose their `block_order` parameter, `write_partition_from_blocks`
+  gains `retire_match` and `same_run_ranges` parameters, and `BlockPartitionSpec` gains
+  `retire_match` and `same_run_ranges` fields.
 
 ## Testing Strategy
 
