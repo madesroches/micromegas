@@ -30,4 +30,4 @@ Alternatives are a new section or rewording lines 12 and 62. A single bullet nex
 The change is the documentation itself.
 
 ## Testing Strategy
-No code changes, so there is no automated coverage. Check that the page builds, if the mkdocs tooling is available.
+No code changes, so there is no automated coverage. Run `pip install -r mkdocs/docs-requirements.txt && mkdocs build --strict --config-file mkdocs/mkdocs.yml` (same as the publish-docs CI job) and confirm no warnings.
