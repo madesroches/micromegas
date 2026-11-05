@@ -16,7 +16,9 @@ Docs-only change. Add this bullet immediately after the "merge query's aggregate
 
 ## Implementation Steps
 1. Edit `mkdocs/docs/admin/materialized-views.md` to insert the bullet.
-2. Add a `CHANGELOG.md` entry if the project's convention covers doc changes.
+
+No `CHANGELOG.md` entry: the user declined one for this docs-only change.
+The plan file is deleted before the PR is opened, not moved to `tasks/completed/`.
 
 ## Files to Modify
 - `mkdocs/docs/admin/materialized-views.md`
