@@ -373,6 +373,7 @@ as a stopgap.
 - The coarser-rung coverage case keeps a `>=` count check rather than an exact one. Accepted risk:
   a block committed more than `grace` after its insert-time stamp, inside a bucket already promoted
   or written coarse, would be missed. This is the same class of risk as today's `>=` test.
+- `TARGET_BUCKETS_PER_QUERY` = 24 for now; it can be tuned later.
 - Promotion runs inline before the query reads (merge, then query), chosen over background
   compaction.
 - No live-DB test is added. No bug in this area has been seen in the wild, so the DB-facing pieces
@@ -455,8 +456,3 @@ emitting logs.
 3. Fire two `--begin 24h` queries at once. Expected: both succeed, there is at most one promotion
    per bucket (the other query logs `skipped_locked` or finds no candidate), and
    `/tmp/analytics.log` shows no 23P01 errors.
-
-## Open Questions
-
-- Is 24 the right `TARGET_BUCKETS_PER_QUERY`? It gives 24–288 partitions per query (worst case just
-  under 24 h); a lower target coarsens short ranges.
