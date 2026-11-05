@@ -109,7 +109,9 @@ cut inside a non-minute bucket. Such a cut could fall mid-hour and break nesting
 slice for `Fixed`, the minute for `RangeDriven`), and the planner sums those counts up to coarser
 rungs in memory. The query returns one row per non-empty minute (at most about 43k rows for a busy
 30-day process). The existing shortcut that skips the query is kept for an insert range that is a
-single bucket at that resolution, so `Fixed(1 h)` skips it exactly where today's code does.
+single bucket at that resolution, so `Fixed(1 h)` skips it exactly where today's code does. When
+the count query is skipped, the planner emits that single bucket as non-empty without consulting
+counts, since it cannot be over the cap or need descent.
 
 `batch_windows` and `split_into_buckets` take `&[PlannedBucket]` (or their ranges) instead of a
 fixed `slice`. Batch edges stay on bucket edges, so the batching remains invisible to the specs
@@ -131,9 +133,10 @@ The compiler does not catch every construction site: `net_spans_view.rs:359-362`
 `thread_spans_view.rs:386-389` use `..Default::default()` and would silently pick up the new
 `RangeDriven` default, which is why Phase 1 step 3 pins them explicitly.
 
-`generate_process_jit_partitions` and `generate_stream_jit_partitions` return
+`generate_process_jit_partitions` returns
 `Vec<JitBucket { planned: PlannedBucket, specs: Vec<SourceDataBlocksInMemory> }>`. EventTime
-callers flatten the result.
+callers flatten the result. `generate_stream_jit_partitions` keeps its return type and only
+switches to `BucketSizing::Fixed`.
 
 ### 4. Bucket-coverage freshness (replaces the InsertTime arm)
 
@@ -183,9 +186,11 @@ fails. The retry decision is a pure function over the re-fetched rows.
 
 ### 5. Shared InsertTime `jit_update` helper
 
-Add `jit_partitions::update_insert_time_jit_view(lakehouse, view: &dyn View, process, query_range,
-stream_tag, block_processors)`. It runs the steps below, and the five views' `jit_update` bodies
-collapse into a call to it.
+Add `jit_partitions::update_insert_time_jit_view(lakehouse, view: Arc<dyn View>, process,
+query_range, stream_tag, block_processors)`. It takes an owned `Arc` because the background
+promotion passes it to `create_merged_partition` from a `'static` spawned task. The five views
+derive `Clone` and each `jit_update` passes `Arc::new(self.clone())`. It runs the steps below, and
+the five views' `jit_update` bodies collapse into a call to it.
 
 1. Select the rung.
 2. Call `generate_process_jit_partitions` with `RangeDriven`.
@@ -217,10 +222,11 @@ A bucket is promoted when all of the following hold:
 **Execution: answer from the fragmented set, then compact.** `schedule_promotion` returns
 immediately. The work is optional and must never add latency or failures to the triggering query:
 
-1. Take a permit from a process-wide `tokio::sync::Semaphore` held on `LakehouseContext`
-   (`compaction_permits`, 2 permits) with `try_acquire`. If none is free, skip the step and record
-   `imetric!("jit_promotion_skipped", "count", reason = "busy", 1_u64)`.
-2. Spawn the work with `spawn_with_context`. It handles each target in turn:
+1. Take a permit from a process-wide `Arc<tokio::sync::Semaphore>` held on `LakehouseContext`
+   (`compaction_permits`, 2 permits) with `try_acquire_owned`. If none is free, skip the step and
+   record `imetric!("jit_promotion_skipped", "count", reason = "busy", 1_u64)`.
+2. Spawn the work with `spawn_with_context`, moving the owned permit into the task so it is held
+   until the promotion finishes. It handles each target in turn:
    - Open a transaction and call `pg_try_advisory_xact_lock(key)`, where the key hashes
      `("promote", view, instance, bucket.begin, bucket.end)`. If the lock is not granted, skip the
      target: log `info!` "skipped_locked" and record `jit_promotion_skipped` with
@@ -247,6 +253,9 @@ concurrent reader still holding the old partition list keeps reading them, as wi
 
 ## Implementation Steps
 
+Phase 1 steps 2-3 and Phase 2 land together as one compile unit; the five views are not flattened
+as a stopgap.
+
 ### Phase 1: Ladder and planner (pure)
 1. Create `rust/analytics/src/lakehouse/partition_ladder.rs` with `LADDER`,
    `TARGET_BUCKETS_PER_QUERY`, `select_rung`, `finer_rung`, `PlannedBucket` and `plan_buckets`.
@@ -257,18 +266,25 @@ concurrent reader still holding the old partition list keeps reading them, as wi
    - Extend `fetch_bucket_counts` with `SUM(nb_objects)` and run it at the finest resolution the
      planner can emit (§2).
    - Generalize `batch_windows` and `split_into_buckets` to planned buckets.
-   - Make both generators return `Vec<JitBucket>`.
-3. Pin `thread_spans_view.rs`, `net_spans_view.rs` and their tests to `BucketSizing::Fixed(1 h)`
-   and flatten their results.
+   - Make `generate_process_jit_partitions` return `Vec<JitBucket>`.
+3. Pin `thread_spans_view.rs`, `net_spans_view.rs` and their tests (including those calling
+   `generate_stream_jit_partitions`) to `BucketSizing::Fixed(1 h)` and flatten the results of
+   `generate_process_jit_partitions`.
 
 ### Phase 2: Coverage
 4. In `jit_partitions.rs`, add `Coverage` and `resolve_bucket_coverage` (§4), plus the pure
-   23P01-retry decision. Remove `resolve_up_to_date_fixpoint` and the InsertTime arms of
-   `spec_is_up_to_date` once nothing calls them.
+   23P01-retry decision. Remove `resolve_up_to_date_fixpoint`, `find_up_to_date_partitions` (used
+   only by the five views being switched) and the InsertTime arms of `spec_is_up_to_date` once
+   nothing calls them. The `block_order` parameter of `spec_is_up_to_date` and
+   `is_jit_partition_up_to_date` is then always `EventTime`, so remove it. In
+   `rust/analytics/tests/jit_freshness_tests.rs`, delete the InsertTime-only and fixpoint tests
+   (their scenarios move to `jit_bucket_coverage_tests.rs`) and cut the two tests that loop over
+   both block orders to their EventTime arm.
 5. Add `retire_match` and `same_run_ranges` parameters to `write_partition_from_blocks` and the
    matching fields to `BlockPartitionSpec` (`block_partition_spec.rs`), which today hard-codes
    `RetireMatch::Containment` and no `same_run_ranges`.
-6. Add `update_insert_time_jit_view` (§5), accumulating `same_run_ranges` the way
+6. Add `update_insert_time_jit_view` (§5, taking `Arc<dyn View>`), derive `Clone` on the five
+   InsertTime views, accumulating `same_run_ranges` the way
    `net_spans_view.rs:256-293` does, and switch `log_view.rs`, `metrics_view.rs`,
    `async_events_view.rs`, `images_view.rs` and `otel/spans_view.rs` to it.
 
@@ -290,11 +306,14 @@ concurrent reader still holding the old partition list keeps reading them, as wi
 - `rust/analytics/src/lakehouse/block_partition_spec.rs`
 - `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/src/lakehouse/{log_view,metrics_view,async_events_view,images_view}.rs`
-- `rust/analytics/src/lakehouse/otel/spans_view.rs`
+  (derive `Clone`, call the helper)
+- `rust/analytics/src/lakehouse/otel/spans_view.rs` (same)
 - `rust/analytics/src/lakehouse/{thread_spans_view,net_spans_view}.rs` (config only)
-- `rust/analytics/tests/jit_batch_windows_tests.rs`, `jit_freshness_tests.rs`,
+- `rust/analytics/tests/jit_batch_windows_tests.rs`,
   `jit_partition_grouping_tests.rs`, `jit_process_batch_db_test.rs`,
   `thread_spans_ordering_db_test.rs` (config and signature updates)
+- `rust/analytics/tests/jit_freshness_tests.rs` (InsertTime-only and fixpoint tests deleted, the
+  two both-order tests cut to EventTime, `block_order` argument dropped)
 - `rust/analytics/tests/partition_ladder_tests.rs`, `jit_bucket_coverage_tests.rs`,
   `jit_promotion_tests.rs` (new)
 - `mkdocs/docs/architecture/index.md`, `CHANGELOG.md`
@@ -340,9 +359,10 @@ concurrent reader still holding the old partition list keeps reading them, as wi
   closed history is merged on demand when a longer query reads it.
 - `CHANGELOG.md` (Unreleased): describe the behavior change and say that the SQL surface is
   unchanged. Add **Minor breaking change:** `JitPartitionConfig::max_insert_time_slice` is replaced
-  by `bucket_sizing: BucketSizing`, `generate_process_jit_partitions` and
-  `generate_stream_jit_partitions` return `Vec<JitBucket>`, `batch_windows` takes planned buckets,
-  and `resolve_up_to_date_fixpoint` is removed.
+  by `bucket_sizing: BucketSizing`, `generate_process_jit_partitions` returns `Vec<JitBucket>`,
+  `batch_windows` takes planned buckets, `resolve_up_to_date_fixpoint` and
+  `find_up_to_date_partitions` are removed, and `spec_is_up_to_date` and
+  `is_jit_partition_up_to_date` lose their `block_order` parameter.
 
 ## Testing Strategy
 
@@ -357,6 +377,8 @@ No-DB unit tests under `rust/analytics/tests/`:
     - a bucket over the cap descends exactly one level at a time;
     - an over-cap minute bucket is emitted as is;
     - empty buckets are skipped;
+    - a single-bucket range whose count query is skipped (empty counts) yields that bucket as
+      non-empty;
     - every emitted bucket nests inside one bucket of every coarser rung;
     - `Fixed(1 h)` reproduces today's buckets.
 - `jit_batch_windows_tests.rs`: the existing cases ported to planned buckets, plus mixed-width
@@ -376,8 +398,8 @@ No-DB unit tests under `rust/analytics/tests/`:
   - `promotion_candidates` rejects open buckets, descended buckets, single-row buckets, over-cap
     sums and mixed schema hashes;
   - it accepts 60 minute rows inside a closed hour on an hour-rung query.
-- Existing `jit_partition_grouping_tests.rs` and `jit_freshness_tests.rs` (EventTime cases) keep
-  passing after the config change.
+- Existing `jit_partition_grouping_tests.rs` and the EventTime cases of `jit_freshness_tests.rs`
+  keep passing after the config and signature changes.
 
 ## Manual Verification
 
@@ -388,7 +410,7 @@ emitting logs.
 
 1. Run `micromegas-query "SELECT count(*) FROM view_instance('log_entries','<pid>')" --begin 1m`
    several times over a few minutes. Then run
-   `micromegas-query "SELECT begin_insert_time, end_insert_time FROM list_partitions() WHERE view_set_name='log_entries' AND view_instance_id='<pid>' ORDER BY begin_insert_time"`.
+   `micromegas-query "SELECT begin_insert_time, end_insert_time, updated FROM list_partitions() WHERE view_set_name='log_entries' AND view_instance_id='<pid>' ORDER BY begin_insert_time"`.
    Expected: minute-sized partitions, and earlier minutes are not rewritten (`updated` stays the
    same).
 2. Run the same count with `--begin 24h`, then list partitions again a few seconds later. Expected:
