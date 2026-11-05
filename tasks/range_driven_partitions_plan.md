@@ -77,8 +77,10 @@ rung; 6 h → 5 min; 24 h → hour (24 buckets); 7 d → 6 h; 30 d → day.
 pub struct PlannedBucket { pub range: TimeRange /* half-open, aligned */, pub rung: TimeDelta,
                            pub closed: bool, pub nb_blocks: i64, pub nb_objects: i64 }
 
-pub fn plan_buckets(insert_range: TimeRange, rung: TimeDelta, now: DateTime<Utc>,
-                    grace: TimeDelta, minute_counts: &[(DateTime<Utc>, i64 /*blocks*/, i64 /*objects*/)],
+pub type BucketCount = (DateTime<Utc>, i64 /*blocks*/, i64 /*objects*/);
+
+pub fn plan_buckets(insert_range: TimeRange, rung: TimeDelta, finest: TimeDelta,
+                    now: DateTime<Utc>, grace: TimeDelta, counts: &[BucketCount],
                     max_nb_objects: i64) -> Vec<PlannedBucket>;
 ```
 
@@ -140,8 +142,9 @@ bucket `B` against the candidate rows `C` that intersect `B`'s half-open range:
 
 - `inner` = rows contained in `B`; `outer` = the rest of `C`.
 - **Covered** if either:
-  - `outer` is empty, `Σ inner counts == Σ spec counts` (exact), and every schema hash is current.
-    This is the fine-or-equal case.
+  - `outer` is empty, `Σ inner counts >= Σ spec counts`, and every schema hash is current.
+    This is the fine-or-equal case. A surplus is tolerated because retention deletes blocks before
+    it retires the partitions that hold them; a count below the requirement is stale.
   - `inner` is empty, there is one `outer` row, it contains the hull of `B`'s specs, its schema
     hash is current, and its count is `>=` the specs'. This is the coarser-rung case. It is sound
     because of the closed-when-written invariant in §2.
@@ -370,6 +373,11 @@ as a stopgap.
 - The coarser-rung coverage case keeps a `>=` count check rather than an exact one. Accepted risk:
   a block committed more than `grace` after its insert-time stamp, inside a bucket already promoted
   or written coarse, would be missed. This is the same class of risk as today's `>=` test.
+- The fine-or-equal coverage case uses `inner_count >= required`, not an exact match. Retention
+  deletes blocks before the partitions that hold them, so a surviving partition can count more
+  objects than the remaining blocks. An exact check would call it stale and rewrite it, but the
+  retire misses that row (it lies outside the remaining specs' hull) and the insert trips the
+  no-overlap constraint. A count below the requirement still means new blocks arrived: stale.
 - `TARGET_BUCKETS_PER_QUERY` = 24 for now; it can be tuned later.
 - Promotion runs inline before the query reads (merge, then query), chosen over background
   compaction.
@@ -417,8 +425,11 @@ No-DB unit tests under `rust/analytics/tests/`:
 - `jit_batch_windows_tests.rs`: the existing cases ported to planned buckets, plus mixed-width
   buckets.
 - `jit_bucket_coverage_tests.rs`, table-driven over `resolve_bucket_coverage`:
-  - inner exact sum → covered;
-  - inner sum off by one → stale (`Containment`);
+  - `inner_rows_summing_exactly_are_covered`: inner sum equals the requirement → covered;
+  - `inner_rows_summing_below_the_requirement_are_stale`: inner sum below it → stale
+    (`Containment`);
+  - `inner_rows_outliving_deleted_blocks_are_covered`: inner sum above it (retention deleted
+    blocks) → covered;
   - one coarse outer row containing the hull → covered;
   - a coarse outer row ending mid-bucket (the legacy open-hour partition) → stale (`Overlap`);
   - a schema-hash mismatch → stale;

@@ -55,6 +55,7 @@ is accepted, rather than staying unhealthy for the outage's whole duration.
 | Reads against a `'global'` view instance | Work — global partitions are written only by the maintenance daemon, so a query against a global view never needs the write path |
 | A query whose JIT partitions are already materialized | Works — `jit_update` only writes what's missing |
 | A query against a process-scoped view instance needing new JIT partitions | Fails with a clear error: the lakehouse is on a read-only connection and the requested range needs partitions that aren't materialized yet. Serving un-materialized data from memory without persisting it is out of scope |
+| On-demand promotion of JIT partitions to a coarser range | Skipped without failing the query — the query reads the partitions that already exist, and the skip is counted in `jit_promotion` with `reason="read_only"` |
 | API-key authentication | Works, minus the `last_used_at` bump — the lookup falls back to a plain `SELECT` when the `UPDATE ... RETURNING` fails on a read-only connection |
 | Admin writes (deny-list changes, materialize/retire UDFs) | Fail — these require a writable primary |
 | View-set definition changes, lakehouse schema migrations | Fail — a schema migration also requires a writable primary, so FlightSQL falling back to a replica requires the lakehouse schema to already be current |
@@ -67,3 +68,9 @@ is accepted, rather than staying unhealthy for the outage's whole duration.
   FlightSQL) accepted a read-only connection after its fallback window elapsed.
 - `jit_update_failed_read_only` — a query needing new JIT partitions failed because
   the lakehouse was on a read-only connection.
+- `jit_promotion` — an on-demand promotion of JIT partitions was attempted. The `reason`
+  property is one of `promoted` (the partitions were rewritten), `locked` (another query holds
+  the promotion lock), `read_only` (the connection is read-only), or `changed` (the partitions
+  changed between the snapshot and the lock, so there was nothing left to promote).
+- `jit_promotion_failed` — a promotion failed for any other reason. The query proceeds without
+  the promotion.
