@@ -280,8 +280,8 @@ fn emit_partition(
 ///   *identical degenerate* range (every block in both carrying the same `insert_time`), which
 ///   requires more than `max_nb_objects` objects at a single microsecond and so does not occur in
 ///   production; `tstzrange(t, t)` is empty, so the constraint stays quiet, but the
-///   `BlockOrder::EventTime` arm of `is_jit_partition_up_to_date` would see more than one row for
-///   that range and never report the partitions up to date.
+///   up-to-date check (`spec_is_up_to_date`) would see more than one row for that range and never
+///   report the partitions up to date.
 ///
 /// Under `BlockOrder::InsertTime` both invariants hold for free: `blocks` is already sorted by
 /// `insert_time`, so every candidate cut point is insert-safe and this function cuts at exactly
@@ -1275,7 +1275,7 @@ fn row_intersects(row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
     row.begin_insert_time < bucket.end && row.end_insert_time >= bucket.begin
 }
 
-fn row_inside(row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
+pub(crate) fn row_inside(row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
     row.begin_insert_time >= bucket.begin && row.end_insert_time < bucket.end
 }
 
@@ -1295,12 +1295,16 @@ fn judge_bucket(
         .partition(|r| row_inside(r, facts.range));
     let schema_ok = |r: &&PartitionFreshnessRow| r.file_schema_hash == view_meta.file_schema_hash;
     let covered = if outer.is_empty() {
-        // Fine-or-equal rungs: the bucket's own rows must add up exactly.
+        // Fine-or-equal rungs: the bucket's own rows must cover every required object. A surplus
+        // is harmless: retention deletes blocks before it retires the rows that hold them, so a
+        // surviving row can count more objects than the blocks that remain. Rewriting would
+        // trip the no-overlap constraint, because the retire misses the row (it lies outside the
+        // remaining specs' hull).
         let mut inner_count = 0;
         for r in &inner {
             inner_count += hash_to_object_count(&r.source_data_hash)?;
         }
-        !inner.is_empty() && inner_count == facts.required && inner.iter().all(schema_ok)
+        !inner.is_empty() && inner_count >= facts.required && inner.iter().all(schema_ok)
     } else if inner.is_empty() && outer.len() == 1 {
         // Coarser rung: one row written while its bucket was closed, so it holds everything.
         let r = outer[0];

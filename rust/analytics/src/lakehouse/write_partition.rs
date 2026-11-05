@@ -231,7 +231,8 @@ pub async fn retire_partitions(
     // For RetireMatch::Containment: this is not an overlap test, we need to assume that we are
     // not making a new smaller partition where a bigger one existed. It gets tricky in the jit
     // case where a partition can have only one block and begin_insert == end_insert -- handled by
-    // the exact-match branch below. RetireMatch::Overlap (thread_spans/net_spans only) additionally
+    // the exact-match branch below. RetireMatch::Overlap (thread_spans/net_spans, and InsertTime JIT buckets beside a straddling
+    // partition) additionally
     // matches a stale, wider partition that only overlaps the new range; see RetireMatch's docs.
     let same_run_begins: Vec<DateTime<Utc>> = same_run_ranges.iter().map(|r| r.begin).collect();
     let same_run_ends: Vec<DateTime<Utc>> = same_run_ranges.iter().map(|r| r.end).collect();
@@ -516,13 +517,15 @@ async fn insert_partition_transaction(
     // The lock only serializes writers of this exact (view, instance, range) key, avoiding
     // duplicate work. Correctness against overlapping writers of *different* ranges depends on
     // retire_match: under RetireMatch::Containment (every caller except thread_spans/net_spans
-    // and InsertTime JIT buckets beside a straddling partition), it is enforced by the lakehouse_partitions_no_overlap exclusion constraint at insert time --
+    // and InsertTime JIT buckets beside a straddling partition), it is enforced by the
+    // lakehouse_partitions_no_overlap exclusion constraint at insert time --
     // a losing writer's insert fails loudly (PartitionOverlapConflict). Under RetireMatch::Overlap,
     // the Overlap retire step below routes around that constraint (it can delete a
     // differently-ranged, already-committed partition before this insert), so two concurrent
-    // writers of different, overlapping ranges are instead reconciled by the next `jit_update`'s
-    // exact-equality `is_jit_partition_up_to_date` check, not by the exclusion constraint -- see
-    // `RetireMatch::Overlap`'s docs.
+    // writers of different, overlapping ranges are instead reconciled afterwards -- by the next
+    // `jit_update`'s up-to-date check for thread_spans/net_spans, by `resolve_bucket_coverage` and
+    // `write_spec_with_conflict_retry` for InsertTime JIT buckets -- not by the exclusion
+    // constraint; see `RetireMatch::Overlap`'s docs.
     instrument_named!(
         sqlx::query("SELECT pg_advisory_xact_lock($1);")
             .bind(lock_key)

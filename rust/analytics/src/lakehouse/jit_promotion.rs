@@ -6,7 +6,7 @@
 //! never fails the query, and it skips instead of waiting when another query is already on it.
 
 use super::{
-    jit_partitions::{Coverage, JitBucket, PartitionFreshnessRow},
+    jit_partitions::{Coverage, JitBucket, PartitionFreshnessRow, row_inside},
     lakehouse_context::LakehouseContext,
     merge::create_merged_partition,
     partition::Partition,
@@ -28,10 +28,6 @@ use std::sync::Arc;
 pub struct PromotionTarget {
     pub bucket: TimeRange,
     pub inputs: Vec<PartitionFreshnessRow>,
-}
-
-fn row_inside(row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
-    row.begin_insert_time >= bucket.begin && row.end_insert_time < bucket.end
 }
 
 /// Whether `inputs` are worth merging: at least two of them, within the object cap, all written

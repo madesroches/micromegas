@@ -132,12 +132,17 @@ fn inner_rows_summing_exactly_are_covered() {
 }
 
 #[test]
-fn inner_rows_summing_off_by_one_are_stale() {
-    for count in [9, 11] {
-        let bucket = minute_bucket("10:00:00", "10:00:05", "10:00:30", 10);
-        let rows = [row("10:00:05", "10:00:30", count)];
-        assert_eq!(resolve(&[bucket], &rows), vec![STALE_CONTAINMENT]);
-    }
+fn inner_rows_summing_below_the_requirement_are_stale() {
+    let bucket = minute_bucket("10:00:00", "10:00:05", "10:00:30", 10);
+    let rows = [row("10:00:05", "10:00:30", 9)];
+    assert_eq!(resolve(&[bucket], &rows), vec![STALE_CONTAINMENT]);
+}
+
+#[test]
+fn inner_rows_outliving_deleted_blocks_are_covered() {
+    let bucket = minute_bucket("10:00:00", "10:00:05", "10:00:30", 10);
+    let rows = [row("10:00:05", "10:00:30", 11)];
+    assert_eq!(resolve(&[bucket], &rows), vec![Coverage::Covered]);
 }
 
 #[test]
