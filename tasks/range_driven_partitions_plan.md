@@ -190,10 +190,10 @@ violation (Phase 2 step 5).
 ### 5. Shared InsertTime `jit_update` helper
 
 Add `jit_partitions::update_insert_time_jit_view(lakehouse, view: Arc<dyn View>, process,
-query_range, stream_tag, block_processors)`. It takes an owned `Arc` because the background
-promotion passes it to `create_merged_partition` from a `'static` spawned task. The five views
-derive `Clone` and each `jit_update` passes `Arc::new(self.clone())`. It runs the steps below, and
-the five views' `jit_update` bodies collapse into a call to it.
+query_range, stream_tag, block_processors)`. It takes an owned `Arc` because promotion passes it
+to `create_merged_partition`, which takes `Arc<dyn View>`. The five views derive `Clone` and each
+`jit_update` passes `Arc::new(self.clone())`. It runs the steps below, and the five views'
+`jit_update` bodies collapse into a call to it.
 
 1. Select the rung with `select_rung(query_range)`.
 2. Call `generate_process_jit_partitions` with `RangeDriven` and the selected rung as a new
@@ -203,9 +203,11 @@ the five views' `jit_update` bodies collapse into a call to it.
 3. Fetch the candidates in one query over the hull (`fetch_freshness_candidates`, unchanged).
 4. Call `resolve_bucket_coverage`.
 5. Write the stale buckets, with the 23P01 retry.
-6. Call `schedule_promotion` (§6).
+6. Call `promote_closed_buckets` (§6) and await it.
 
-Only steps 1–5 can fail the query.
+Only steps 1–5 can fail the query. Step 6 runs inside `jit_update`, so it finishes before
+`MaterializedView::scan` calls `part_provider.fetch` (`materialized_view.rs:108-142`), and the
+query reads the merged partitions.
 
 The signature is typed with `query_range: TimeRange`, already defaulted by the caller. Each view
 keeps its own process lookup (`async_events_view.rs` uses `find_process_with_latest_timing`), default
@@ -230,18 +232,16 @@ A bucket is promoted when all of the following hold:
 - The sum of their counts is at most `max_nb_objects`.
 - They all share the current schema hash.
 
-**Execution: answer from the fragmented set, then compact.** `schedule_promotion` returns
-immediately. The work is optional and must never add latency or failures to the triggering query:
+**Execution: merge, then query.** `promote_closed_buckets` runs inline, before the query fetches
+its partitions. The query then reads the coarse partitions, and later queries reuse them. The work
+is optional: it never fails the query, and on contention it skips instead of waiting.
 
-1. Take a permit from a process-wide `Arc<tokio::sync::Semaphore>` held on `LakehouseContext`
-   (`compaction_permits`, 2 permits) with `try_acquire_owned`. If none is free, skip the step and
-   record `imetric!("jit_promotion_skipped", "count", reason = "busy", 1_u64)`.
-2. Spawn the work with `spawn_with_context`, moving the owned permit into the task so it is held
-   until the promotion finishes. It handles each target in turn:
+1. For each target in turn:
    - Open a transaction and call `pg_try_advisory_xact_lock(key)`, where the key hashes
      `("promote", view, instance, bucket.begin, bucket.end)`. If the lock is not granted, skip the
-     target: log `info!` "skipped_locked" and record `jit_promotion_skipped` with
-     `reason = "locked"`. Another query is already promoting it.
+     target: log `info!` "skipped_locked" and record
+     `imetric!("jit_promotion_skipped", "count", reason = "locked", 1_u64)`. Another query is
+     already promoting it, and this one reads the fine partitions as they are.
    - Under the lock, check `SHOW transaction_read_only` with the existing `is_read_only` helper
      (`data_lake_connection.rs`, made `pub` if needed). If it is on, skip with
      `reason = "read_only"` before any merge or upload. The `is_read_only_violation` check below
@@ -259,9 +259,11 @@ immediately. The work is optional and must never add latency or failures to the 
      not bucket-aligned, and the hull keeps it that way. The merge writes the sum of the inputs'
      `source_data_hash` and retires the inputs with `Containment`, so they go away atomically.
    - On success, log `info!` "promoted" and record `jit_promotion` with `reason = "promoted"`.
-3. On failure, log `warn!` and record `imetric!("jit_promotion_failed", "count", 1_u64)`. On a
+2. A target's failure is caught, not returned: log `warn!`, record
+   `imetric!("jit_promotion_failed", "count", 1_u64)`, and move on to the next target. On a
    read-only violation (`is_read_only_violation`), log at `debug!` and record
-   `jit_promotion_skipped` with `reason = "read_only"`.
+   `jit_promotion_skipped` with `reason = "read_only"` instead. The fine partitions are untouched
+   (the merge's retire and insert share one transaction), so the query still reads a complete set.
 
 Retired files go through `temporary_files` with a one-hour expiry (`write_partition.rs:30`), so a
 concurrent reader still holding the old partition list keeps reading them, as with daemon merges.
@@ -311,12 +313,11 @@ as a stopgap.
 
 ### Phase 3: Promotion
 7. Create `rust/analytics/src/lakehouse/jit_promotion.rs` with `PromotionTarget`,
-   `promotion_candidates` and `schedule_promotion` (§6).
-8. Add `compaction_permits: Arc<Semaphore>` to `LakehouseContext`, with an accessor.
-9. Call `schedule_promotion` at the end of `update_insert_time_jit_view`.
+   `promotion_candidates` and `promote_closed_buckets` (§6).
+8. Await `promote_closed_buckets` at the end of `update_insert_time_jit_view`.
 
 ### Phase 4: Docs and changelog
-10. Update `mkdocs/docs/architecture/index.md` and `CHANGELOG.md` (see Documentation).
+9. Update `mkdocs/docs/architecture/index.md` and `CHANGELOG.md` (see Documentation).
 
 ## Files to Modify
 
@@ -326,7 +327,6 @@ as a stopgap.
 - `rust/analytics/src/lakehouse/jit_partitions.rs`
 - `rust/analytics/src/lakehouse/block_partition_spec.rs`
 - `rust/analytics/src/lakehouse/write_partition.rs` (typed overlap-conflict error, doc comments)
-- `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/src/lakehouse/{log_view,metrics_view,async_events_view,images_view}.rs`
   (derive `Clone`, call the helper)
 - `rust/analytics/src/lakehouse/otel/spans_view.rs` (same)
@@ -353,11 +353,13 @@ as a stopgap.
 - **Merging parquet rather than re-decoding blocks to promote.** A merge reads a few small files
   instead of decoding every block again, and `create_merged_partition` already exists with the
   right retire semantics.
-- **Background promotion rather than synchronous promotion.** A synchronous merge puts tail latency
-  on the query that triggered it, and on the hottest instances that is exactly the latency cliff
-  the issue warns about. Each promoted bucket costs one extra read plus one write, once. Serving
-  the query from the merge stream (a tee in `QueryMerger::execute_merge_query`) would remove the
-  re-read but needs `QueryMerger` changes, so it is a follow-up.
+- **Merge, then query, rather than background promotion.** A background task would keep the merge
+  latency off the triggering query, but it needs a spawned task, a concurrency bound and shutdown
+  handling. The inline merge costs the triggering query one extra read of the fine partitions and
+  one write, once per bucket. Only the query that wins the try-lock pays it, so concurrent queries
+  never wait behind it. Serving the query from the merge stream (a tee in
+  `QueryMerger::execute_merge_query`) would remove the re-read but needs `QueryMerger` changes, so
+  it is a follow-up.
 - **Leaving the EventTime views on a fixed hour.** Their cut points are not stable across runs,
   which breaks the nesting the ladder relies on. They could be revisited separately.
 - **Objects as the cap unit rather than rows or bytes.** `max_nb_objects` is the unit JIT
@@ -371,6 +373,8 @@ as a stopgap.
 - The coarser-rung coverage case keeps a `>=` count check rather than an exact one. Accepted risk:
   a block committed more than `grace` after its insert-time stamp, inside a bucket already promoted
   or written coarse, would be missed. This is the same class of risk as today's `>=` test.
+- Promotion runs inline before the query reads (merge, then query), chosen over background
+  compaction.
 - No live-DB test is added. No bug in this area has been seen in the wild, so the DB-facing pieces
   (try-lock, merge, 23P01 retry plumbing) are covered by manual verification.
 
@@ -443,9 +447,11 @@ emitting logs.
    `micromegas-query "SELECT begin_insert_time, end_insert_time, updated FROM list_partitions() WHERE view_set_name='log_entries' AND view_instance_id='<pid>' ORDER BY begin_insert_time"`.
    Expected: minute-sized partitions, and earlier minutes are not rewritten (`updated` stays the
    same).
-2. Run the same count with `--begin 24h`, then list partitions again a few seconds later. Expected:
-   closed hours have collapsed to one partition each, the open minute is still a minute partition,
-   and both counts match a `--begin 24h` count taken before promotion.
+2. Pick a closed hour `H` and record its count over a 1-hour range (`--begin <H> --end <H+1h>`).
+   That range is on the minute rung, so it does not promote. Then run the same count with
+   `--begin 24h`, and run the step 1 `list_partitions()` command right after. Expected: the closed
+   hours have collapsed to one partition each, the open minute is still a minute partition, and
+   re-running the 1-hour count for `H` gives the same number as before.
 3. Fire two `--begin 24h` queries at once. Expected: both succeed, there is at most one promotion
    per bucket (the other query logs `skipped_locked` or finds no candidate), and
    `/tmp/analytics.log` shows no 23P01 errors.
