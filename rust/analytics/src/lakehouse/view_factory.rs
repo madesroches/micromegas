@@ -256,6 +256,7 @@ pub trait ViewMaker: Send + Sync + Debug {
 pub struct ViewFactory {
     view_sets: HashMap<String, Arc<dyn ViewMaker>>,
     global_views: Vec<Arc<dyn View>>,
+    descriptions: HashMap<String, Arc<str>>,
 }
 
 impl ViewFactory {
@@ -263,7 +264,16 @@ impl ViewFactory {
         Self {
             view_sets: HashMap::new(),
             global_views,
+            descriptions: HashMap::new(),
         }
+    }
+
+    pub fn set_description(&mut self, view_set_name: &str, text: Arc<str>) {
+        self.descriptions.insert(view_set_name.to_string(), text);
+    }
+
+    pub fn get_description(&self, view_set_name: &str) -> Option<Arc<str>> {
+        self.descriptions.get(view_set_name).cloned()
     }
 
     pub fn get_global_views(&self) -> &[Arc<dyn View>] {
@@ -369,6 +379,33 @@ pub async fn default_view_factory(
 
     // Add otel_spans view maker (per-process JIT only — no global instance)
     updated_factory.add_view_set(String::from("otel_spans"), Arc::new(OtelSpansViewMaker {}));
+
+    for (name, text) in [
+        ("processes", include_str!("view_descriptions/processes.md")),
+        ("streams", include_str!("view_descriptions/streams.md")),
+        ("blocks", include_str!("view_descriptions/blocks.md")),
+        (
+            "log_entries",
+            include_str!("view_descriptions/log_entries.md"),
+        ),
+        ("measures", include_str!("view_descriptions/measures.md")),
+        ("images", include_str!("view_descriptions/images.md")),
+        (
+            "thread_spans",
+            include_str!("view_descriptions/thread_spans.md"),
+        ),
+        (
+            "async_events",
+            include_str!("view_descriptions/async_events.md"),
+        ),
+        ("net_spans", include_str!("view_descriptions/net_spans.md")),
+        (
+            "otel_spans",
+            include_str!("view_descriptions/otel_spans.md"),
+        ),
+    ] {
+        updated_factory.set_description(name, Arc::from(text));
+    }
 
     Ok(updated_factory)
 }

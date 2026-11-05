@@ -22,6 +22,9 @@ SELECT * FROM list_view_sets();
 | `schema` | String | Full schema as formatted string |
 | `has_view_maker` | Boolean | Whether view set supports non-global instances |
 | `global_instance_available` | Boolean | Whether a global instance exists |
+| `description` | String (nullable) | Markdown usage guide for the view set: what a row is, access pattern, filters, joins. `NULL` when none was written |
+| `columns` | String | One `name: DataType` line per column |
+| `sort_order` | String (nullable) | Comma-separated ascending sort columns of the global view's scan; `NULL` when unordered or when the view set has no global instance |
 
 **Example**:
 ```sql
@@ -29,6 +32,9 @@ SELECT * FROM list_view_sets();
 SELECT view_set_name, current_schema_hash, has_view_maker 
 FROM list_view_sets()
 ORDER BY view_set_name;
+
+-- Read how to use each view set
+SELECT view_set_name, description, columns, sort_order FROM list_view_sets();
 
 -- Find view sets with specific schema version
 SELECT * FROM list_view_sets() 

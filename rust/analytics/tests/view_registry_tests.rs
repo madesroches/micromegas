@@ -92,6 +92,7 @@ fn row(
         source_partition_delta: "1 day".to_string(),
         merge_partition_delta: "1 day".to_string(),
         merge_sort_order: None,
+        description: None,
     };
     ViewDefinitionRow {
         view_set_name: name.to_string(),
@@ -105,6 +106,14 @@ fn row(
         updated_at,
         updated_by: Some("test".to_string()),
     }
+}
+
+fn with_description(mut row: ViewDefinitionRow, description: &str) -> ViewDefinitionRow {
+    let mut options: ViewOptions =
+        serde_json::from_str(&row.view_options).expect("parse ViewOptions");
+    options.description = Some(description.to_string());
+    row.view_options = serde_json::to_string(&options).expect("serialize ViewOptions");
+    row
 }
 
 /// `a`: reads `log_entries` directly (update_group 2500), carries `audience`, `count`, and an
@@ -359,4 +368,20 @@ async fn dependent_protection_ignores_a_definition_already_failing_to_build() {
             "an already-broken definition must not by itself block an unrelated DROP of \
              something else",
         );
+}
+
+#[tokio::test]
+async fn reload_registers_descriptions_of_loaded_views_only() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let store = Arc::new(FakeStore::new(vec![
+        with_description(row_a(Utc::now(), true), "# a"),
+        row_c(Utc::now()),
+        with_description(row_broken(Utc::now()), "# broken"),
+    ]));
+    let registry = make_registry(&lakehouse, store);
+    registry.reload().await.expect("reload");
+    let factory = registry.current();
+    assert_eq!(factory.get_description("a").as_deref(), Some("# a"));
+    assert!(factory.get_description("c").is_none());
+    assert!(factory.get_description("broken").is_none());
 }

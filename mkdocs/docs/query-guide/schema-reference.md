@@ -24,7 +24,8 @@ Micromegas organizes telemetry data into several views that can be queried using
 | [`otel_spans`](#otel_spans) | OpenTelemetry spans materialized from OTLP-ingested traces | Distributed tracing, OTel SDK interop |
 | [`images`](#images) | Screenshots and image data captured via `send_image()` | Visual telemetry, screenshot history |
 
-`list_view_sets()` returns this same inventory plus any [DDL-defined materialized
+`SELECT view_set_name, description, columns FROM list_view_sets()` returns this same inventory
+live, with a usage guide for each view, plus any [DDL-defined materialized
 view](../admin/materialized-views.md) an admin has created — their schemas are
 deployment-specific, since an admin controls what such a view projects, unlike the built-in views
 documented below.

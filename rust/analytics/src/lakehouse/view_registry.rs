@@ -169,6 +169,9 @@ pub async fn build_factory(
             continue;
         }
         factory.add_global_view(Arc::new(view));
+        if let Some(description) = &def.options.description {
+            factory.set_description(&name, Arc::from(description.as_str()));
+        }
     }
     Ok((Arc::new(factory), failed))
 }

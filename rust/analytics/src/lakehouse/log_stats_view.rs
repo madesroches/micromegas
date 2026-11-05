@@ -57,6 +57,9 @@ const MERGE_QUERY: &str = r#"
         GROUP BY process_id, level, target, time_bin, audience
         "#;
 
+// Embedded in the seeded DDL text inside `$$...$$`, so it must never contain `$$`.
+const LOG_STATS_DESCRIPTION: &str = include_str!("view_descriptions/log_stats.md");
+
 /// `log_stats`'s definition, expressed as a `ViewDefinition` -- the single source of truth shared
 /// by the migration seed (`migration.rs`'s `upgrade_v9_to_v10`), the parser round-trip test, and
 /// [`make_log_stats_view`] below. `log_stats` is a `SqlBatchView` whose only distinction from a
@@ -83,6 +86,7 @@ pub fn log_stats_view_definition() -> ViewDefinition {
                 "level".to_string(),
                 "target".to_string(),
             ]),
+            description: Some(LOG_STATS_DESCRIPTION.to_string()),
         },
     }
 }
@@ -95,6 +99,7 @@ pub fn log_stats_ddl_text() -> String {
     let def = log_stats_view_definition();
     format!(
         "CREATE MATERIALIZED VIEW {} WITH (\n\
+         \x20 description = $${}$$,\n\
          \x20 extract_query = $${}$$,\n\
          \x20 count_src_query = $${}$$,\n\
          \x20 merge_partitions_query = $${}$$,\n\
@@ -105,6 +110,7 @@ pub fn log_stats_ddl_text() -> String {
          \x20 merge_sort_order = '{}'\n\
          )",
         def.view_set_name,
+        LOG_STATS_DESCRIPTION,
         def.extract_query,
         def.count_src_query,
         def.merge_partitions_query,

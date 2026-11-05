@@ -684,3 +684,27 @@ async fn real_view_factory_covers_every_registered_view_set() {
         }
     }
 }
+
+#[tokio::test]
+async fn every_default_view_set_has_a_description() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let factory = default_view_factory(
+        lakehouse.runtime().clone(),
+        lakehouse.lake().clone(),
+        lakehouse.default_audience(),
+    )
+    .await
+    .expect("default_view_factory");
+    let names = factory
+        .get_global_views()
+        .iter()
+        .map(|v| v.get_view_set_name().to_string())
+        .chain(factory.get_view_sets().keys().cloned());
+    for name in names {
+        let description = factory.get_description(&name);
+        assert!(
+            description.is_some_and(|d| !d.trim().is_empty()),
+            "built-in view set {name} ships without a description"
+        );
+    }
+}

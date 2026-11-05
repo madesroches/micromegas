@@ -1,9 +1,16 @@
 use anyhow::Result;
+use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::catalog::list_view_sets;
+use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
+use micromegas_analytics::lakehouse::log_stats_view::log_stats_view_definition;
 use micromegas_analytics::lakehouse::log_view::LogViewMaker;
 use micromegas_analytics::lakehouse::metrics_view::MetricsViewMaker;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
-use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
+use micromegas_analytics::lakehouse::view_definition::build_sql_batch_view;
+use micromegas_analytics::lakehouse::view_factory::{ViewFactory, ViewMaker};
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_telemetry::blob_storage::BlobStorage;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -148,5 +155,107 @@ async fn test_view_sets_properties() -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
+    let db_pool = sqlx::PgPool::connect_lazy("postgres://user:pass@127.0.0.1:1/db")
+        .expect("connect_lazy should not touch the network");
+    let object_store: Arc<dyn object_store::ObjectStore> =
+        Arc::new(object_store::memory::InMemory::new());
+    let blob_storage = Arc::new(BlobStorage::new(
+        object_store,
+        object_store::path::Path::from("lakehouse"),
+    ));
+    let lake = Arc::new(DataLakeConnection::new(db_pool, blob_storage));
+    let runtime = Arc::new(make_runtime_env().expect("make_runtime_env"));
+    Arc::new(LakehouseContext::new(lake, runtime).expect("LakehouseContext::new"))
+}
+
+fn base_factory(lakehouse: &LakehouseContext) -> ViewFactory {
+    let blocks_view =
+        Arc::new(BlocksView::new(lakehouse.default_audience()).expect("BlocksView::new"));
+    let log_entries_view = LogViewMaker {}
+        .make_view("global")
+        .expect("log_entries global view");
+    let mut factory = ViewFactory::new(vec![log_entries_view, blocks_view]);
+    factory.add_view_set("log_entries".to_string(), Arc::new(LogViewMaker {}));
+    factory
+}
+
+#[tokio::test]
+async fn test_list_view_sets_description_and_columns() -> Result<()> {
+    let mut view_factory = ViewFactory::new(vec![]);
+    view_factory.add_view_set(String::from("log_entries"), Arc::new(LogViewMaker {}));
+    view_factory.add_view_set(String::from("measures"), Arc::new(MetricsViewMaker {}));
+    view_factory.set_description("measures", Arc::from("# measures"));
+
+    let view_sets = list_view_sets(&view_factory)?;
+    let find = |name: &str| view_sets.iter().find(|vs| vs.view_set_name == name);
+    let measures = find("measures").expect("measures");
+    assert_eq!(measures.description.as_deref(), Some("# measures"));
+    assert!(
+        find("log_entries")
+            .expect("log_entries")
+            .description
+            .is_none()
+    );
+
+    let lines: Vec<&str> = measures.columns.lines().collect();
+    assert!(
+        lines.contains(&"name: Dictionary(Int32, Utf8)"),
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"value: Float64"), "{lines:?}");
+    assert!(
+        lines.iter().all(|l| l.split_once(": ").is_some()),
+        "every line is `name: type`: {lines:?}"
+    );
+    assert!(
+        measures.sort_order.is_none(),
+        "maker-only set has no sort order"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_list_view_sets_sort_order_of_global_views() -> Result<()> {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let mut factory = base_factory(&lakehouse);
+
+    let ordered_def = log_stats_view_definition();
+    let mut unordered_def = log_stats_view_definition();
+    unordered_def.view_set_name = "unordered_stats".to_string();
+    unordered_def.options.merge_sort_order = None;
+
+    for definition in [ordered_def, unordered_def] {
+        let view = build_sql_batch_view(
+            &definition,
+            lakehouse.runtime().clone(),
+            lakehouse.lake().clone(),
+            Arc::new(factory.clone()),
+            Arc::new(NoOpSessionConfigurator),
+        )
+        .await?;
+        factory.add_global_view(Arc::new(view));
+    }
+
+    let view_sets = list_view_sets(&factory)?;
+    let find = |name: &str| view_sets.iter().find(|vs| vs.view_set_name == name);
+    assert_eq!(
+        find("log_stats").expect("log_stats").sort_order,
+        Some(vec![
+            "time_bin".to_string(),
+            "process_id".to_string(),
+            "level".to_string(),
+            "target".to_string()
+        ])
+    );
+    assert!(
+        find("unordered_stats")
+            .expect("unordered_stats")
+            .sort_order
+            .is_none()
+    );
     Ok(())
 }

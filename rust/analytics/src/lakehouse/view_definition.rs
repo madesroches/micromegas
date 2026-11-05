@@ -43,6 +43,8 @@ pub struct ViewOptions {
     pub source_partition_delta: String,
     pub merge_partition_delta: String,
     pub merge_sort_order: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// The normalized shape of a `CREATE MATERIALIZED VIEW` definition -- every option plus the three

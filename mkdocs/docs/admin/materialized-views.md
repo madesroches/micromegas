@@ -66,8 +66,29 @@ if you prefer it and have no embedded quotes to escape.
 | `source_partition_delta` | No (default `'1 day'`) | How wide a fresh partition may be, as `'<n> <unit>'` (`second(s)`, `minute(s)`, `hour(s)`, `day(s)`) |
 | `merge_partition_delta` | No (defaults to `source_partition_delta`) | How wide a merged partition may be |
 | `merge_sort_order` | No | Comma-separated column list the merged output is sorted by, enabling a streaming k-way merge instead of a buffering sort |
+| `description` | No | Markdown usage guide, served to every caller in the `description` column of [`list_view_sets()`](functions-reference.md#list_view_sets). Must not be empty |
 
 An unrecognized option name is rejected outright rather than silently ignored.
+
+### Describing a view
+
+`description` tells people and AI agents what the view contains, how it relates to other views and
+which filters to use. Use a tagged dollar-quoted literal such as `$md$...$md$`, so the text may
+itself contain `$$`:
+
+```sql
+CREATE OR REPLACE MATERIALIZED VIEW error_counts WITH (
+  description = $md$
+Per-minute error counts by `exe`, pre-aggregated from `log_entries` (level <= 2).
+Cheap to scan over days; prefer it to `log_entries` for trends.
+$md$,
+  extract_query = $$ ... $$,
+  ...
+);
+```
+
+A change to the description alone updates the view without rebuilding any partition. Every caller
+that can run queries can read descriptions, so never put secrets in one.
 
 With `merge_sort_order`, the merge query must not need an input order beyond the declared one:
 an `ORDER BY` inside an aggregate such as `array_agg(x ORDER BY y)` adds a sort that survives in

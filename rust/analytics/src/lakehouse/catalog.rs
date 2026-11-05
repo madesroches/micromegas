@@ -5,8 +5,10 @@
 //! - Comparing partition schema hashes with current versions
 //! - Finding outdated partitions across view sets
 
-use super::view_factory::ViewFactory;
+use super::{partitioned_execution_plan::ScanOrdering, view_factory::ViewFactory};
 use anyhow::Result;
+use datafusion::arrow::datatypes::Schema;
+use std::sync::Arc;
 
 /// Information about a view set's current schema
 #[derive(Debug, Clone)]
@@ -16,6 +18,20 @@ pub struct ViewSetInfo {
     pub schema: String,
     pub has_view_maker: bool,
     pub global_instance_available: bool,
+    pub description: Option<Arc<str>>,
+    /// One `name: DataType` line per field.
+    pub columns: String,
+    /// Ascending sort columns of the global view's scan; `None` when unordered or maker-only.
+    pub sort_order: Option<Vec<String>>,
+}
+
+fn format_columns(schema: &Schema) -> String {
+    schema
+        .fields()
+        .iter()
+        .map(|f| format!("{}: {}", f.name(), f.data_type()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// List all view sets with their current schema information from the ViewFactory.
@@ -37,12 +53,24 @@ pub fn list_view_sets(view_factory: &ViewFactory) -> Result<Vec<ViewSetInfo>> {
         // Check if this view set has a ViewMaker (supports non-global instances)
         let has_view_maker = view_factory.get_view_sets().contains_key(&view_set_name);
 
+        let columns = format_columns(&global_view.get_file_schema());
+        let sort_order = match global_view.get_scan_output_ordering() {
+            ScanOrdering::Unordered => None,
+            ScanOrdering::Concatenated { columns, .. } | ScanOrdering::PerFile { columns } => {
+                Some(columns.iter().map(|c| c.column.to_string()).collect())
+            }
+        };
+
+        let description = view_factory.get_description(&view_set_name);
         schema_infos.push(ViewSetInfo {
             view_set_name,
             current_schema_hash,
             schema,
             has_view_maker,
             global_instance_available: true,
+            description,
+            columns,
+            sort_order,
         });
     }
 
@@ -63,6 +91,9 @@ pub fn list_view_sets(view_factory: &ViewFactory) -> Result<Vec<ViewSetInfo>> {
             schema,
             has_view_maker: true,
             global_instance_available: false,
+            description: view_factory.get_description(view_set_name),
+            columns: format_columns(&view_maker.get_schema()),
+            sort_order: None,
         });
     }
 
