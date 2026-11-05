@@ -12,9 +12,7 @@ contention. Two things improve. A live "last minute" poll stops re-decoding the 
 on every refresh, because only the open minute is rewritten. And a long-range query reads roughly
 24 to 288 partitions (worst case just under 24 h) whatever its span, because closed history is promoted to the rung that range
 calls for. The first cut targets the five `BlockOrder::InsertTime` JIT views (`log_entries`,
-`measures`, `async_events`, `images`, otel `spans`). The ladder, rung selection, bucket planner,
-coverage resolver and promotion helper are written so that the cached range functions of #1495
-can reuse them unchanged.
+`measures`, `async_events`, `images`, otel `spans`).
 
 ## Current State
 
@@ -55,7 +53,6 @@ can reuse them unchanged.
 - **Closed buckets are immutable.** The ingestion service stamps `blocks.insert_time` with
   `Utc::now()` at insert (`ingestion/src/web_ingestion_service.rs:350`). Once an insert-time bucket
   is in the past, no new block can land in it, apart from commit lag.
-- No partition-access tracking exists in `analytics/src`.
 
 ## Design
 
@@ -101,9 +98,6 @@ As a result, the open edge is only ever materialized at the minute rung, and eve
 coarser than a minute was written while its bucket was closed. The coverage rule in §4 relies on
 this invariant.
 
-The cap uses objects, the unit `max_nb_objects` already uses, so a coarse rung never forces a size
-cut inside a non-minute bucket. Such a cut could fall mid-hour and break nesting.
-
 `minute_counts` comes from `fetch_bucket_counts`, extended to return `SUM(nb_objects)` next to
 `COUNT(*)`. It runs over the whole insert range at the finest rung the planner can emit (the fixed
 slice for `Fixed`, the minute for `RangeDriven`), and the planner sums those counts up to coarser
@@ -129,9 +123,6 @@ pub enum BucketSizing { Fixed(TimeDelta), RangeDriven { grace: TimeDelta } }
 cap descent, every bucket treated as closed). The two EventTime views (`thread_spans`,
 `net_spans`) and their tests stay on `Fixed(1 h)`. Their cut points move between runs, and they
 build cross-block trees that finer buckets would cut more often. They are out of scope.
-The compiler does not catch every construction site: `net_spans_view.rs:359-362` and
-`thread_spans_view.rs:386-389` use `..Default::default()` and would silently pick up the new
-`RangeDriven` default, which is why Phase 1 step 3 pins them explicitly.
 
 `generate_process_jit_partitions` returns
 `Vec<JitBucket { planned: PlannedBucket, specs: Vec<SourceDataBlocksInMemory> }>`. EventTime
@@ -196,8 +187,8 @@ to `create_merged_partition`, which takes `Arc<dyn View>`. The five views derive
 `jit_update` bodies collapse into a call to it.
 
 1. Select the rung with `select_rung(query_range)`.
-2. Call `generate_process_jit_partitions` with `RangeDriven` and the selected rung as a new
-   parameter (`Fixed(d)` uses `d`). The MIN/MAX insert range it queries is truncated outward to
+2. Call `generate_process_jit_partitions` with `RangeDriven`. It derives the rung internally
+   (`Fixed(d) => d`, `RangeDriven{..} => select_rung(*query_time_range)`). The MIN/MAX insert range it queries is truncated outward to
    that rung, replacing today's truncation to the fixed slice, so `plan_buckets` walks whole
    rung-aligned buckets.
 3. Fetch the candidates in one query over the hull (`fetch_freshness_candidates`, unchanged).
@@ -227,7 +218,8 @@ pub fn promotion_candidates(buckets: &[JitBucket], verdicts: &[Coverage],
 
 A bucket is promoted when all of the following hold:
 
-- The planner emitted it closed, at the query's rung, not descended. Open buckets never qualify.
+- The planner emitted it closed, at the query's rung (`planned.rung == select_rung(query_range)`),
+  not descended. Open buckets never qualify.
 - It was judged covered by at least 2 `inner` rows.
 - The sum of their counts is at most `max_nb_objects`.
 - They all share the current schema hash.
@@ -240,10 +232,10 @@ is optional: it never fails the query, and on contention it skips instead of wai
    - Open a transaction and call `pg_try_advisory_xact_lock(key)`, where the key hashes
      `("promote", view, instance, bucket.begin, bucket.end)`. If the lock is not granted, skip the
      target: log `info!` "skipped_locked" and record
-     `imetric!("jit_promotion_skipped", "count", reason = "locked", 1_u64)`. Another query is
+     `imetric!("jit_promotion", "count", reason = "locked", 1_u64)`. Another query is
      already promoting it, and this one reads the fine partitions as they are.
-   - Under the lock, check `SHOW transaction_read_only` with the existing `is_read_only` helper
-     (`data_lake_connection.rs`, made `pub` if needed). If it is on, skip with
+   - Under the lock, run `SHOW transaction_read_only` on the lock transaction and pass the result
+     to `micromegas_ingestion::data_lake_connection::is_read_only`. If it is on, skip with
      `reason = "read_only"` before any merge or upload. The `is_read_only_violation` check below
      stays as a fallback.
    - Re-fetch the rows in the bucket with inclusive bounds, like
@@ -253,6 +245,10 @@ is optional: it never fails the query, and on contention it skips instead of wai
      `source_data_hash`), re-check the selection predicate, and compute the hull from the
      re-fetched set. Merge only if that hull equals the re-checked inputs' hull. Another query may
      have promoted the bucket between the snapshot and the lock.
+   - The lock transaction stays open across `create_merged_partition`, which opens a second
+     transaction from the same pool in `insert_partition_transaction`. Each promoting query
+     therefore holds 2 connections. Pool exhaustion is bounded by the sqlx acquire timeout and
+     surfaces as `jit_promotion_failed`.
    - Call `create_merged_partition` with `insert_range` set to that hull, the re-fetched cache
      passed as both `partitions_to_merge` and `partitions_all_views`, and
      `Arc::new(ResponseWriter::new(None))` as the logger. A JIT partition's range is block-derived,
@@ -262,7 +258,7 @@ is optional: it never fails the query, and on contention it skips instead of wai
 2. A target's failure is caught, not returned: log `warn!`, record
    `imetric!("jit_promotion_failed", "count", 1_u64)`, and move on to the next target. On a
    read-only violation (`is_read_only_violation`), log at `debug!` and record
-   `jit_promotion_skipped` with `reason = "read_only"` instead. The fine partitions are untouched
+   `jit_promotion` with `reason = "read_only"` instead. The fine partitions are untouched
    (the merge's retire and insert share one transaction), so the query still reads a complete set.
 
 Retired files go through `temporary_files` with a one-hour expiry (`write_partition.rs:30`), so a
@@ -279,13 +275,15 @@ as a stopgap.
    Register it in `lakehouse/mod.rs`.
 2. In `jit_partitions.rs`:
    - Replace `max_insert_time_slice` with `BucketSizing`, add `grace` to `RangeDriven`, and update
-     `Default` to `RangeDriven { grace: 90 s }`.
+     `Default` to `RangeDriven { grace: 90 s }`. The rung is derived inside
+     `generate_process_jit_partitions` from the sizing and `query_time_range`.
    - Extend `fetch_bucket_counts` with `SUM(nb_objects)` and run it at the finest resolution the
      planner can emit (§2).
    - Generalize `batch_windows` and `split_into_buckets` to planned buckets.
    - Make `generate_process_jit_partitions` return `Vec<JitBucket>`.
 3. Pin `thread_spans_view.rs`, `net_spans_view.rs` and their tests (including those calling
-   `generate_stream_jit_partitions`) to `BucketSizing::Fixed(1 h)` and flatten the results of
+   `generate_stream_jit_partitions`) to `BucketSizing::Fixed(1 h)` (both use `..Default::default()` at `net_spans_view.rs:359-362` /
+   `thread_spans_view.rs:386-389`, so the compiler won't flag them) and flatten the results of
    `generate_process_jit_partitions`.
 
 ### Phase 2: Coverage
@@ -306,9 +304,9 @@ as a stopgap.
    Also change `insert_partition_transaction` in `write_partition.rs` to return a typed
    `thiserror` error `PartitionOverlapConflict` for a `lakehouse_partitions_no_overlap` violation
    in place of the string `bail!`, keeping the legible message as its `Display`.
-6. Add `update_insert_time_jit_view` (§5, taking `Arc<dyn View>`), derive `Clone` on the five
-   InsertTime views, accumulating `same_run_ranges` the way
-   `net_spans_view.rs:256-293` does, and switch `log_view.rs`, `metrics_view.rs`,
+6. Add `update_insert_time_jit_view` (§5, taking `Arc<dyn View>`), which accumulates
+   `same_run_ranges` the way `net_spans_view.rs:256-293` does; derive `Clone` on the five
+   InsertTime views; switch `log_view.rs`, `metrics_view.rs`,
    `async_events_view.rs`, `images_view.rs` and `otel/spans_view.rs` to it.
 
 ### Phase 3: Promotion
@@ -363,7 +361,7 @@ as a stopgap.
 - **Leaving the EventTime views on a fixed hour.** Their cut points are not stable across runs,
   which breaks the nesting the ladder relies on. They could be revisited separately.
 - **Objects as the cap unit rather than rows or bytes.** `max_nb_objects` is the unit JIT
-  partitions are already cut by, and objects are known before decoding. Measured `num_rows` and
+  partitions are already cut by, and objects are known before decoding. A size cut in a coarse bucket could fall mid-hour and break nesting. Measured `num_rows` and
   `file_size` matter for #1495's projections and joins, not for block-derived views.
 
 ## Decisions
@@ -376,6 +374,7 @@ as a stopgap.
 - `TARGET_BUCKETS_PER_QUERY` = 24 for now; it can be tuned later.
 - Promotion runs inline before the query reads (merge, then query), chosen over background
   compaction.
+- Promotion holds 2 pool connections per promoting query (default pool of 10, 30 s acquire timeout). Accepted risk: exhaustion is bounded by the acquire timeout and caught as `jit_promotion_failed`.
 - No live-DB test is added. No bug in this area has been seen in the wild, so the DB-facing pieces
   (try-lock, merge, 23P01 retry plumbing) are covered by manual verification.
 
@@ -438,8 +437,7 @@ No-DB unit tests under `rust/analytics/tests/`:
 
 ## Manual Verification
 
-These checks need the real Postgres lock, merge and object-store round trip. A failure there shows
-up immediately as wrong partition counts or a logged error, not as silent corruption. Run them
+These checks need the real Postgres lock, merge and object-store round trip. Run them
 with `python3 local_test_env/ai_scripts/start_services.py` and a live instrumented process
 emitting logs.
 
