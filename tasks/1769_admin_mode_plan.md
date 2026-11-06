@@ -154,6 +154,7 @@ fixes the check-before-substitute gap described in Current State.
   which owns the `ADMIN_ONLY_PATHS` list (moved out of `AppShell.tsx`; `AppShell` imports it) and matches (exact `/admin/<name>` prefixes, not `startsWith('/admin')`).
   `/admin` and `/admin/ingestion-keys` are excluded because they are role-filtered and visible to
   non-admins (`AppShell.tsx:7-9`).
+  Red marks an admin page or admin mode, whether or not the page issues SQL.
 
 **Notebooks: viewer's choice, per page visit.**
 
@@ -319,6 +320,7 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
 
 - Admin pages are implicitly in admin mode. Notebooks are off by default and the viewing admin
   turns them on; the author never can (user call).
+- AFK: Red chrome covers every `ADMIN_ONLY_PATHS` route, including admin pages that issue no SQL; the rule is "red marks an admin page or admin mode" (kept the existing uniform behaviour over limiting it to SQL-issuing pages).
 - Admin mode is never persisted (config, URL or storage) and resets on reload or navigation.
 - Read-only admin functions (`list_query_denials`, `list_view_set_definitions`, `check_view_merge`)
   stay allowed on `/api/query-stream`.
