@@ -3,7 +3,8 @@
 //! Provides a streaming query endpoint that streams RecordBatches as Arrow IPC messages.
 //! Uses a JSON-framed protocol for the frontend to parse.
 
-use crate::auth::AuthToken;
+use crate::admin_statements::classify_admin_statement;
+use crate::auth::{AdminUser, AuthToken};
 use crate::data_source_cache::DataSourceCache;
 use anyhow::{Context, Result};
 use arrow_ipc::writer::{IpcDataGenerator, IpcWriteContext, IpcWriteOptions, write_message};
@@ -86,22 +87,6 @@ fn json_line<T: Serialize>(value: &T) -> Bytes {
     Bytes::from(json)
 }
 
-/// List of destructive functions that should be blocked in web queries
-const BLOCKED_FUNCTIONS: &[&str] = &[
-    "retire_partitions",
-    "retire_partition_by_metadata",
-    "retire_partition_by_file",
-];
-
-/// Check if the SQL query contains any blocked destructive functions
-pub fn contains_blocked_function(sql: &str) -> Option<&'static str> {
-    let sql_lower = sql.to_lowercase();
-    BLOCKED_FUNCTIONS
-        .iter()
-        .find(|&func| sql_lower.contains(func))
-        .copied()
-}
-
 /// Maximum length for a client-supplied origin label (notebook/cell name) before
 /// it's rejected outright rather than forwarded into a gRPC header and a log line.
 const MAX_ORIGIN_LABEL_LEN: usize = 128;
@@ -176,6 +161,15 @@ pub fn encode_batch(
     Ok(buffer)
 }
 
+/// Which endpoint a streaming query came through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryMode {
+    /// Refuses statements that modify the lakehouse.
+    Standard,
+    /// Reached only by admins; statements are not classified.
+    Admin,
+}
+
 /// Streaming SQL query endpoint using Arrow IPC protocol
 ///
 /// Returns a stream of JSON-framed Arrow IPC messages:
@@ -183,30 +177,55 @@ pub fn encode_batch(
 /// - `{"type":"batch","size":N}\n` followed by N bytes of batch IPC
 /// - `{"type":"done"}\n` on success
 /// - `{"type":"error","code":"..","message":"..}\n` on error
-#[span_fn]
 pub async fn stream_query_handler(
     Extension(auth_token): Extension<AuthToken>,
     Extension(cache): Extension<DataSourceCache>,
     Json(request): Json<StreamQueryRequest>,
 ) -> impl IntoResponse {
+    run_stream_query(auth_token, cache, request, QueryMode::Standard).await
+}
+
+/// Same as [`stream_query_handler`] but admin-only, and allowed to run statements that modify
+/// the lakehouse.
+pub async fn admin_stream_query_handler(
+    AdminUser(_user): AdminUser,
+    Extension(auth_token): Extension<AuthToken>,
+    Extension(cache): Extension<DataSourceCache>,
+    Json(request): Json<StreamQueryRequest>,
+) -> impl IntoResponse {
+    run_stream_query(auth_token, cache, request, QueryMode::Admin).await
+}
+
+#[span_fn]
+pub async fn run_stream_query(
+    auth_token: AuthToken,
+    cache: DataSourceCache,
+    request: StreamQueryRequest,
+    mode: QueryMode,
+) -> axum::response::Response {
     let notebook = request.notebook.as_deref().and_then(sanitize_origin_label);
     let cell = request.cell.as_deref().and_then(sanitize_origin_label);
+    let mode_label = match mode {
+        QueryMode::Standard => "standard",
+        QueryMode::Admin => "admin",
+    };
 
     info!(
-        "stream query sql={} params={:?} begin={:?} end={:?} data_source={} notebook={notebook:?} cell={cell:?}",
+        "stream query mode={mode_label} sql={} params={:?} begin={:?} end={:?} data_source={} notebook={notebook:?} cell={cell:?}",
         request.sql, request.params, request.begin, request.end, request.data_source
     );
 
-    // Check for blocked functions first (before starting the stream)
-    if let Some(blocked_func) = contains_blocked_function(&request.sql) {
+    // Classify the text that will actually run, and before any data-source work.
+    let sql = substitute_macros(&request.sql, &request.params);
+    if mode == QueryMode::Standard
+        && let Some(statement) = classify_admin_statement(&sql)
+    {
         return (
             StatusCode::FORBIDDEN,
             Json(ErrorFrame {
                 frame_type: "error",
                 code: ErrorCode::Forbidden,
-                message: format!(
-                    "The function '{blocked_func}' is not allowed in web queries for security reasons",
-                ),
+                message: statement.refusal_message(),
             }),
         )
             .into_response();
@@ -257,13 +276,15 @@ pub async fn stream_query_handler(
 
     let flightsql_url = data_source_config.url;
 
-    // Substitute macros
-    let sql = substitute_macros(&request.sql, &request.params);
-
     // Build time range if provided
     let time_range = match (request.begin, request.end) {
         (Some(begin), Some(end)) => Some(TimeRange::new(begin, end)),
         _ => None,
+    };
+
+    let client_type = match mode {
+        QueryMode::Standard => "web",
+        QueryMode::Admin => "web-admin",
     };
 
     let stream = stream! {
@@ -271,7 +292,7 @@ pub async fn stream_query_handler(
         let mut client_factory = BearerFlightSQLClientFactory::new_with_client_type(
             flightsql_url,
             auth_token.0,
-            "web".to_string(),
+            client_type.to_string(),
         );
         if let Some(notebook) = &notebook {
             client_factory = client_factory.with_metadata("x-client-notebook", notebook.clone());

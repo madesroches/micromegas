@@ -1,9 +1,12 @@
 import { useEffect, useRef } from 'react'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import type { CellConfig, QueryCellConfig } from './notebook-types'
 
 interface UseCellSortCheckParams {
   executionCells: CellConfig[]
   executeCellByName: (name: string) => void
+  /** While true a sort change is recorded but doesn't re-run the cell */
+  adminMode?: boolean
 }
 
 /**
@@ -15,7 +18,9 @@ interface UseCellSortCheckParams {
 export function useCellSortCheck({
   executionCells,
   executeCellByName,
+  adminMode = false,
 }: UseCellSortCheckParams): void {
+  const adminModeRef = useLatestRef(adminMode)
   const prevCellOptionsRef = useRef<Map<string, Record<string, unknown>>>(new Map())
 
   useEffect(() => {
@@ -31,6 +36,7 @@ export function useCellSortCheck({
         const currentSortDirection = currentOptions?.sortDirection
 
         if (
+          !adminModeRef.current &&
           prevOptions !== undefined &&
           (prevSortColumn !== currentSortColumn || prevSortDirection !== currentSortDirection)
         ) {
@@ -42,5 +48,5 @@ export function useCellSortCheck({
     }
 
     executionCells.forEach(checkCell)
-  }, [executionCells, executeCellByName])
+  }, [executionCells, executeCellByName, adminModeRef])
 }

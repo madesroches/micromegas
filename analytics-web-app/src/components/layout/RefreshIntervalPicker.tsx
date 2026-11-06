@@ -24,6 +24,8 @@ interface RefreshIntervalPickerProps {
   onRefresh: () => void
   /** Whether execution is in progress (spins the icon) */
   isExecuting?: boolean
+  /** Auto-refresh is suspended (admin mode); the interval cannot be changed */
+  paused?: boolean
   /** Extra classes on the refresh button (e.g. border rounding) */
   className?: string
 }
@@ -33,6 +35,7 @@ export function RefreshIntervalPicker({
   onIntervalChange,
   onRefresh,
   isExecuting,
+  paused = false,
   className = '',
 }: RefreshIntervalPickerProps) {
   const activeLabel = labelForMs(intervalMs)
@@ -42,19 +45,26 @@ export function RefreshIntervalPicker({
       <button
         onClick={onRefresh}
         className={`flex items-center justify-center px-2 sm:px-2.5 bg-theme-border border-l border-theme-border-hover text-theme-text-primary hover:bg-theme-border-hover transition-colors ${className}`}
-        title={activeLabel ? `Auto-refreshing every ${activeLabel}` : 'Refresh'}
+        title={
+          paused
+            ? 'Paused while admin mode is on'
+            : activeLabel
+              ? `Auto-refreshing every ${activeLabel}`
+              : 'Refresh'
+        }
       >
         <RefreshCw className={`w-4 h-4 ${isExecuting ? 'animate-spin' : ''}`} />
       </button>
       {activeLabel && (
         <span className="flex items-center px-1.5 bg-theme-border border-l border-theme-border-hover text-xs text-theme-text-secondary select-none">
-          {activeLabel}
+          {paused ? `${activeLabel} · paused` : activeLabel}
         </span>
       )}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button
-            className="flex items-center justify-center px-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+            disabled={paused}
+            className="flex items-center justify-center px-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Auto-refresh interval"
           >
             <ChevronDown className="w-3 h-3" />

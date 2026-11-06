@@ -44,6 +44,8 @@ export interface ScreenRendererProps {
   onErrorChange?: (hasError: boolean) => void
   /** Saved screen name (the notebook's own identity), undefined for an unsaved new screen — used for query attribution */
   screenName?: string
+  /** Viewer turned on admin mode for this page visit (notebooks only) */
+  adminMode?: boolean
 }
 
 /**

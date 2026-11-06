@@ -2085,3 +2085,106 @@ describe('useCellExecution', () => {
     })
   })
 })
+
+describe('useCellExecution admin mode', () => {
+  const rawTimeRange = { from: '2024-01-01T00:00:00Z', to: '2024-01-02T00:00:00Z' }
+  const sqlCells: CellConfig[] = [
+    { type: 'table', name: 'T', sql: 'SELECT 1', layout: { height: 'auto' } } as CellConfig,
+  ]
+  const noEngineVars = { current: {} as Record<string, never> }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockStreamQuery.mockImplementation(() => createSuccessResults())
+    mockFetchQueryIPC.mockResolvedValue(new Uint8Array([1]))
+  })
+
+  function render(props: { adminMode: boolean; engine?: NotebookQueryEngine | null; range?: typeof rawTimeRange; refreshTrigger?: number; cells?: CellConfig[] }) {
+    return renderHook(
+      (p: typeof props) =>
+        useCellExecution({
+          cells: p.cells ?? sqlCells,
+          rawTimeRange: p.range ?? rawTimeRange,
+          variableValuesRef: noEngineVars,
+          setVariableValue: vi.fn(),
+          refreshTrigger: p.refreshTrigger ?? 0,
+          dataSource: 'remote',
+          engine: p.engine ?? null,
+          adminMode: p.adminMode,
+        }),
+      { initialProps: props }
+    )
+  }
+
+  it('sends adminMode on the streaming path', async () => {
+    const { result } = render({ adminMode: true })
+    await act(async () => {
+      await result.current.executeCell(0)
+    })
+    expect(mockStreamQuery.mock.calls[0][0].adminMode).toBe(true)
+  })
+
+  it('sends adminMode on the IPC path', async () => {
+    const { result } = render({ adminMode: true, engine: createMockEngine() })
+    await act(async () => {
+      await result.current.executeCell(0)
+    })
+    expect(mockFetchQueryIPC.mock.calls[0][0].adminMode).toBe(true)
+  })
+
+  it('does not send adminMode when off', async () => {
+    const { result } = render({ adminMode: false })
+    await act(async () => {
+      await result.current.executeCell(0)
+    })
+    expect(mockStreamQuery.mock.calls[0][0].adminMode).toBe(false)
+  })
+
+  it('flipping the mode runs nothing', async () => {
+    const { rerender } = render({ adminMode: false })
+    rerender({ adminMode: true })
+    rerender({ adminMode: false })
+    await act(async () => {})
+    expect(mockStreamQuery).not.toHaveBeenCalled()
+  })
+
+  it('a time-range change does not execute, but a refresh does', async () => {
+    const engine = createMockEngine()
+    const { rerender } = render({ adminMode: true, engine })
+    await act(async () => {})
+    expect(mockFetchQueryIPC).not.toHaveBeenCalled()
+
+    rerender({ adminMode: true, engine, range: { from: 'now-1h', to: 'now' } })
+    await act(async () => {})
+    expect(mockFetchQueryIPC).not.toHaveBeenCalled()
+
+    rerender({ adminMode: true, engine, range: { from: 'now-1h', to: 'now' }, refreshTrigger: 1 })
+    await waitFor(() => expect(mockFetchQueryIPC).toHaveBeenCalled())
+  })
+
+  it('the initial run is consumed while on and not replayed afterwards', async () => {
+    const engine = createMockEngine()
+    const { rerender } = render({ adminMode: true, engine })
+    await act(async () => {})
+    rerender({ adminMode: false, engine })
+    await act(async () => {})
+    // A later time-range change after the mode is off must not run anything via the mount effect.
+    rerender({ adminMode: false, engine, cells: [...sqlCells] })
+    await act(async () => {})
+    expect(mockFetchQueryIPC).not.toHaveBeenCalled()
+    expect(engine.reset).not.toHaveBeenCalled()
+  })
+
+  it('a selection change does not execute downstream cells', async () => {
+    const cells = [
+      ...sqlCells,
+      { type: 'table', name: 'U', sql: 'SELECT 2', layout: { height: 'auto' } } as CellConfig,
+    ]
+    const { result } = render({ adminMode: true, cells })
+    await act(async () => {
+      result.current.updateCellSelection('T', { a: 1 })
+    })
+    expect(result.current.cellSelectionsRef.current['T']).toEqual({ a: 1 })
+    expect(mockStreamQuery).not.toHaveBeenCalled()
+  })
+})

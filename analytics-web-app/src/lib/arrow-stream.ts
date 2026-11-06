@@ -133,6 +133,10 @@ class BufferedReader {
   }
 }
 
+export function queryStreamUrl(adminMode?: boolean): string {
+  return `${getApiBase()}/${adminMode ? 'admin/query-stream' : 'query-stream'}`;
+}
+
 export interface StreamQueryParams {
   sql: string;
   params?: Record<string, string>;
@@ -143,6 +147,8 @@ export interface StreamQueryParams {
   notebook?: string;
   /** Originating cell name within the notebook, for query attribution. */
   cell?: string;
+  /** Send the query to the admin endpoint, which accepts statements that modify the lakehouse. */
+  adminMode?: boolean;
 }
 
 /**
@@ -158,7 +164,7 @@ export async function* streamQuery(
   params: StreamQueryParams,
   signal?: AbortSignal
 ): AsyncGenerator<StreamResult> {
-  const response = await authenticatedFetch(`${getApiBase()}/query-stream`, {
+  const response = await authenticatedFetch(queryStreamUrl(params.adminMode), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -327,7 +333,7 @@ export async function fetchQueryIPC(
   signal?: AbortSignal,
   onProgress?: (progress: FetchProgress) => void,
 ): Promise<Uint8Array> {
-  const response = await authenticatedFetch(`${getApiBase()}/query-stream`, {
+  const response = await authenticatedFetch(queryStreamUrl(params.adminMode), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

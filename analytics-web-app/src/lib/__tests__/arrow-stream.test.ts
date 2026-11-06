@@ -400,3 +400,34 @@ describe('error code retryability', () => {
     });
   });
 });
+
+describe('admin mode endpoint selection', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('queryStreamUrl picks the admin endpoint only when asked', async () => {
+    const { queryStreamUrl } = await import('../arrow-stream');
+    expect(queryStreamUrl()).toBe('/api/query-stream');
+    expect(queryStreamUrl(false)).toBe('/api/query-stream');
+    expect(queryStreamUrl(true)).toBe('/api/admin/query-stream');
+  });
+
+  it('streamQuery and fetchQueryIPC use the endpoint selected by adminMode', async () => {
+    const { streamQuery, fetchQueryIPC } = await import('../arrow-stream');
+    for (const [adminMode, url] of [
+      [undefined, '/api/query-stream'],
+      [true, '/api/admin/query-stream'],
+    ] as const) {
+      mockedFetch.mockResolvedValue(createMockResponse(['{"type":"done"}\n']));
+      for await (const _ of streamQuery({ sql: 'SELECT 1', adminMode })) {
+        // consume
+      }
+      expect(mockedFetch.mock.calls.at(-1)?.[0]).toBe(url);
+
+      mockedFetch.mockResolvedValue(createMockResponse(['{"type":"done"}\n']));
+      await fetchQueryIPC({ sql: 'SELECT 1', adminMode }).catch(() => undefined);
+      expect(mockedFetch.mock.calls.at(-1)?.[0]).toBe(url);
+    }
+  });
+});

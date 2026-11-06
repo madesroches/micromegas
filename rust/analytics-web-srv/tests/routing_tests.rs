@@ -561,3 +561,19 @@ async fn auth_me_route_still_works_with_observability_layer() {
     let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
     assert_eq!(json["auth_disabled"], true);
 }
+
+#[tokio::test]
+async fn disable_auth_admin_query_stream_is_mounted() {
+    let response = disabled_auth_app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/query-stream")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"sql":"SELECT 1","data_source":""}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

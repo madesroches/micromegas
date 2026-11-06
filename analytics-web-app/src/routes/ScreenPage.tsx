@@ -1,6 +1,7 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef, type ComponentType } from 'react'
 import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { useRegisterAdminModeToggle } from '@/lib/admin-mode'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'
 import { useTabExecutionState, computeTabState } from '@/hooks/useTabExecutionState'
 import { AlertCircle, Save, GitCompareArrows, Undo2 } from 'lucide-react'
@@ -96,6 +97,17 @@ function ScreenPageContent() {
 
   // Refresh trigger - increment to tell renderer to re-execute query
   const [refreshTrigger, setRefreshTrigger] = useState(0)
+
+  // Viewer's choice for this page visit only: never persisted, reset on route change and discard
+  const [adminMode, setAdminMode] = useState(false)
+  const routeKey = `${name ?? ''}:${isNew}:${typeParam ?? ''}`
+  const [adminModeRouteKey, setAdminModeRouteKey] = useState(routeKey)
+  if (adminModeRouteKey !== routeKey) {
+    setAdminModeRouteKey(routeKey)
+    setAdminMode(false)
+  }
+  const adminModeAllowed = screenType === 'notebook'
+  useRegisterAdminModeToggle(adminModeAllowed, adminMode && adminModeAllowed, setAdminMode)
 
   // Execution state reported by renderer (for header spinner)
   const [isExecuting, setIsExecuting] = useState(false)
@@ -230,7 +242,8 @@ function ScreenPageContent() {
     [handleScreenConfigChange]
   )
 
-  useRefreshInterval(refreshIntervalMs, isExecuting, handleRefresh)
+  // A mutating cell must never be re-run on a timer; the stored interval is left untouched.
+  useRefreshInterval(adminMode ? 0 : refreshIntervalMs, isExecuting, handleRefresh)
 
   // Save existing screen — API call + state update only; URL cleanup is the renderer's job
   const handleSave = useCallback(async (): Promise<ScreenConfig | null> => {
@@ -298,6 +311,7 @@ function ScreenPageContent() {
     // baselineConfig, not screen.config: after a save the server response may order JSON keys
     // differently, which the order-sensitive comparison in hasUnsavedChanges would flag.
     setScreenConfig(baselineConfig)
+    setAdminMode(false)
     setDiscardNonce((n) => n + 1)
     setPendingDiscard(false)
   }
@@ -514,6 +528,7 @@ function ScreenPageContent() {
                 onExecutingChange={setIsExecuting}
                 onErrorChange={setHasError}
                 screenName={screen?.name}
+                adminMode={adminModeAllowed && adminMode}
               />
             )}
           </div>

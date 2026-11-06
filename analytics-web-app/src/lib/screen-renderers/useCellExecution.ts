@@ -35,6 +35,11 @@ interface UseCellExecutionParams {
   notebookName?: string
   /** Signed-in viewer, injected as the `me` variable. Undefined when there's no real viewer. */
   viewer?: Record<string, string>
+  /**
+   * Viewer opted into admin mode for this page visit: queries go to the admin endpoint and
+   * nothing runs unless the viewer explicitly asks.
+   */
+  adminMode?: boolean
 }
 
 export interface UseCellExecutionResult {
@@ -61,9 +66,9 @@ async function executeSql(
   sql: string,
   timeRange: { begin: string; end: string },
   abortSignal: AbortSignal,
-  attribution: { dataSource?: string; notebookName?: string; cellName?: string } = {}
+  attribution: { dataSource?: string; notebookName?: string; cellName?: string; adminMode?: boolean } = {}
 ): Promise<Table> {
-  const { dataSource, notebookName, cellName } = attribution
+  const { dataSource, notebookName, cellName, adminMode } = attribution
   const batches: import('apache-arrow').RecordBatch[] = []
 
   for await (const result of streamQuery(
@@ -75,6 +80,7 @@ async function executeSql(
       dataSource,
       notebook: notebookName,
       cell: cellName,
+      adminMode,
     },
     abortSignal
   )) {
@@ -111,6 +117,7 @@ export function useCellExecution({
   engine,
   notebookName,
   viewer,
+  adminMode = false,
 }: UseCellExecutionParams): UseCellExecutionResult {
   const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -120,6 +127,8 @@ export function useCellExecution({
   // Ref for synchronous access during execution, so a mid-session auth refresh
   // doesn't change executeCell's identity (same pattern as variableValuesRef).
   const viewerRef = useLatestRef(viewer)
+  // Read through a ref so toggling the mode never changes callback identities and re-runs cells.
+  const adminModeRef = useLatestRef(adminMode)
 
   // Helper: update both the ref (for synchronous access) and React state atomically
   const completeCellExecution = useCallback((name: string, state: CellState) => {
@@ -295,6 +304,7 @@ export function useCellExecution({
                   dataSource: cellDataSource,
                   notebook: notebookName,
                   cell: cell.name,
+                  adminMode: adminModeRef.current,
                 },
                 controller.signal,
                 reportProgress,
@@ -307,6 +317,7 @@ export function useCellExecution({
                 dataSource: cellDataSource,
                 notebookName,
                 cellName: cell.name,
+                adminMode: adminModeRef.current,
               })
             }
           },
@@ -333,6 +344,7 @@ export function useCellExecution({
                   dataSource: resolvedDs,
                   notebook: notebookName,
                   cell: cell.name,
+                  adminMode: adminModeRef.current,
                 },
                 controller.signal,
                 reportProgress,
@@ -344,6 +356,7 @@ export function useCellExecution({
                 dataSource: resolvedDs,
                 notebookName,
                 cellName: cell.name,
+                adminMode: adminModeRef.current,
               })
             }
           },
@@ -381,7 +394,7 @@ export function useCellExecution({
         return false
       }
     },
-    [cells, rawTimeRange, variableValuesRef, viewerRef, setVariableValue, dataSource, engine, notebookName, completeCellExecution]
+    [cells, rawTimeRange, variableValuesRef, viewerRef, adminModeRef, setVariableValue, dataSource, engine, notebookName, completeCellExecution]
   )
 
   // A direct run supersedes any in-flight sequential loop
@@ -475,9 +488,11 @@ export function useCellExecution({
   useEffect(() => {
     if (!hasExecutedRef.current && cells.length > 0 && engine !== null) {
       hasExecutedRef.current = true
-      executeFromCell(0)
+      // In admin mode the initial run is consumed without executing, so turning the mode off
+      // later doesn't replay it on the next unrelated change of these deps.
+      if (!adminModeRef.current) executeFromCell(0)
     }
-  }, [cells.length, engine, executeFromCell])
+  }, [cells.length, engine, executeFromCell, adminModeRef])
 
   // Re-execute on refresh trigger
   const prevRefreshRef = useRef(refreshTrigger)
@@ -496,9 +511,9 @@ export function useCellExecution({
       prevTimeRangeRef.current.to !== rawTimeRange.to
     ) {
       prevTimeRangeRef.current = rawTimeRange
-      executeFromCell(0)
+      if (!adminModeRef.current) executeFromCell(0)
     }
-  }, [rawTimeRange, executeFromCell])
+  }, [rawTimeRange, executeFromCell, adminModeRef])
 
   // Update selection for a cell and re-execute downstream cells
   const updateCellSelection = useCallback(
@@ -514,11 +529,11 @@ export function useCellExecution({
       }
       // Re-execute cells below the one that changed selection
       const idx = cells.findIndex((c) => c.name === cellName)
-      if (idx !== -1 && idx + 1 < cells.length) {
+      if (!adminModeRef.current && idx !== -1 && idx + 1 < cells.length) {
         executeFromCell(idx + 1)
       }
     },
-    [cells, executeFromCell]
+    [cells, executeFromCell, adminModeRef]
   )
 
   // Migrate cell state when a cell is renamed
