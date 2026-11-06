@@ -21,13 +21,13 @@ export function AppShell() {
   const { status, user } = useAuth()
   const { pathname } = useLocation()
   // Mirrors each admin-only page's own `<AuthGuard requireAdmin>` check — an admin-only route
-  // added here without a matching path in ADMIN_ONLY_PATHS would mount Sidebar even though
+  // added without a matching path in ADMIN_ONLY_PATHS (src/lib/admin-mode.tsx) would mount Sidebar even though
   // AuthGuard would go on to block the page.
   const isAdminOnlyRoute = isAdminRoute(pathname)
   const showSidebar = status === 'authenticated' && (!isAdminOnlyRoute || user?.is_admin)
 
   return (
-    <AdminModeProvider pathname={pathname}>
+    <AdminModeProvider pathname={pathname} isAdmin={status === 'authenticated' && !!user?.is_admin}>
     <div className="h-screen bg-app-bg">
       <AdminFrame />
       {showSidebar && (

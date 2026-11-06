@@ -61,7 +61,7 @@ function Toggle() {
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/screen/foo']}>
-      <AdminModeProvider pathname="/screen/foo">
+      <AdminModeProvider pathname="/screen/foo" isAdmin>
         <Toggle />
         <ScreenPage />
       </AdminModeProvider>

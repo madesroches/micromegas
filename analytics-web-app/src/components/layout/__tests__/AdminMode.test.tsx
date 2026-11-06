@@ -26,7 +26,7 @@ function NotebookPage({ enabled = true }: { enabled?: boolean }) {
 function renderHeader(path: string, page?: React.ReactNode, refresh = true) {
   return render(
     <MemoryRouter>
-      <AdminModeProvider pathname={path}>
+      <AdminModeProvider pathname={path} isAdmin={authState.user.is_admin}>
         <Header
           onRefresh={refresh ? vi.fn() : undefined}
           onRefreshIntervalChange={refresh ? vi.fn() : undefined}

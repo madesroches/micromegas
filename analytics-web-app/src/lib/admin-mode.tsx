@@ -41,9 +41,18 @@ export function useAdminMode(): AdminModeValue {
   return useContext(AdminModeContext)
 }
 
-export function AdminModeProvider({ pathname, children }: { pathname: string; children: ReactNode }) {
+export function AdminModeProvider({
+  pathname,
+  isAdmin,
+  children,
+}: {
+  pathname: string
+  isAdmin: boolean
+  children: ReactNode
+}) {
   const [toggle, setToggle] = useState<Toggle | null>(null)
-  const onAdminPage = isAdminRoute(pathname)
+  // A non-admin on an admin route sees only the access-denied card, not an elevated page.
+  const onAdminPage = isAdmin && isAdminRoute(pathname)
 
   const value = useMemo<AdminModeValue>(() => {
     if (onAdminPage) return { kind: 'page', active: true }
