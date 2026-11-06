@@ -241,12 +241,12 @@ Lets cells modify the lakehouse.").
 
 Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
 
-- `tasks/1769_admin_mode_mockups/option-a-in-place-toggle.html`: **chosen**. Three states:
+- `tasks/completed/1769_admin_mode_mockups/option-a-in-place-toggle.html`: **chosen**. Three states:
   - a notebook with the mode off: no admin control on the page, *Enable admin mode* in the open
     identity menu, and a refused cell with the hint;
   - the same notebook with the mode on, with the stripe, frame and pill;
   - an admin page, where the mode is always on.
-- `tasks/1769_admin_mode_mockups/option-b-admin-tab.html` (not chosen): **Open as admin ↗** opens
+- `tasks/completed/1769_admin_mode_mockups/option-b-admin-tab.html` (not chosen): **Open as admin ↗** opens
   a second, fully re-themed browser tab.
 
 ## Implementation Steps
