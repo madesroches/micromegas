@@ -380,5 +380,5 @@ breakage is obvious on first use, so it is checked by hand rather than with a li
 3. After ~60 s, `micromegas-query "SELECT value FROM information_schema.df_settings WHERE name =
    'datafusion.execution.target_partitions'" --begin 10m` → `1`.
 4. `micromegas-query "SELECT msg FROM log_entries WHERE msg LIKE 'datafusion config%'" --begin 10m`
-   → one `(query)` line with `target_partitions: 1` and, after the next maintenance tick, one
-   `(maintenance)` line with `3`.
+   → one `(query)` line with `datafusion.execution.target_partitions=1` and, after the next maintenance
+   tick, one `(maintenance)` line with `datafusion.execution.target_partitions=3`.

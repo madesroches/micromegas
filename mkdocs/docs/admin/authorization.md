@@ -17,7 +17,7 @@ shaped by `MICROMEGAS_DEFAULT_AUDIENCE` and the grant map.
 ## Configuration
 
 The variables below marked with a setting key are the **env fallback** for a deployment
-[setting](#settings): a value stored in the database wins, then the variable (for `retention_days`, the deprecated `--retention-days` flag, which also reads the variable), then the default. `retention_by_stream_tag` has no environment variable.
+[setting](#settings): a value stored in the database wins, then the variable (for `retention_days`, the deprecated `--retention-days` flag, which also reads the variable), then the default. `retention_by_stream_tag`, `datafusion_config_query` and `datafusion_config_maintenance` have no environment variable.
 
 | Variable | Setting key | Default | Description |
 |---|---|---|---|
@@ -44,7 +44,7 @@ whole-table snapshot cache as the grant and group stores. Resolution order, per 
 
 A change reaches every replica within one cache refresh (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`,
 60 s by default), not immediately. **Reset** on the page deletes the stored value, so the key
-reverts to its environment variable, flag or default, where one exists (`retention_by_stream_tag` has no environment variable and reverts to no overrides). Every change is recorded in the
+reverts to its environment variable, flag or default, where one exists (`retention_by_stream_tag`, `datafusion_config_query` and `datafusion_config_maintenance` have no environment variable and revert to no overrides). Every change is recorded in the
 [control-plane audit log](control-plane-audit-log.md) as `set_setting` / `reset_setting`.
 
 `datafusion_config_query` and `datafusion_config_maintenance` hold DataFusion session config overrides for the FlightSQL and maintenance services (see [DataFusion session config](flight-sql.md#datafusion-session-config)). A write is rejected if DataFusion rejects an entry. A stored entry that DataFusion rejects after an upgrade is skipped with a warning instead of failing the whole settings load.
