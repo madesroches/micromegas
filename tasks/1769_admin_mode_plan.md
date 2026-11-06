@@ -1,5 +1,7 @@
 # Admin Mode for Destructive Statements (Issue #1769) Plan
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1769
+
 ## Overview
 
 Notebook cells and admin pages send SQL to the same `/api/query-stream` endpoint, using the
