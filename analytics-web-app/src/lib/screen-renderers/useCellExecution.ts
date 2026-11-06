@@ -159,7 +159,7 @@ export function useCellExecution({
 
   // Execute a single cell without touching the run generation (used by the sequential loop)
   const runCell = useCallback(
-    async (cellIndex: number): Promise<boolean> => {
+    async (cellIndex: number, runAdminMode: boolean = adminModeRef.current): Promise<boolean> => {
       const cell = cells[cellIndex]
       if (!cell) return false
 
@@ -304,7 +304,7 @@ export function useCellExecution({
                   dataSource: cellDataSource,
                   notebook: notebookName,
                   cell: cell.name,
-                  adminMode: adminModeRef.current,
+                  adminMode: runAdminMode,
                 },
                 controller.signal,
                 reportProgress,
@@ -317,7 +317,7 @@ export function useCellExecution({
                 dataSource: cellDataSource,
                 notebookName,
                 cellName: cell.name,
-                adminMode: adminModeRef.current,
+                adminMode: runAdminMode,
               })
             }
           },
@@ -344,7 +344,7 @@ export function useCellExecution({
                   dataSource: resolvedDs,
                   notebook: notebookName,
                   cell: cell.name,
-                  adminMode: adminModeRef.current,
+                  adminMode: runAdminMode,
                 },
                 controller.signal,
                 reportProgress,
@@ -356,7 +356,7 @@ export function useCellExecution({
                 dataSource: resolvedDs,
                 notebookName,
                 cellName: cell.name,
-                adminMode: adminModeRef.current,
+                adminMode: runAdminMode,
               })
             }
           },
@@ -419,6 +419,8 @@ export function useCellExecution({
   const executeFromCell = useCallback(
     async (startIndex: number) => {
       const generation = ++runGenerationRef.current
+      // Fixed for the whole run so toggling admin mode mid-run cannot send later cells to the admin endpoint
+      const runAdminMode = adminModeRef.current
       markLoadingCancelled()
       abortControllerRef.current?.abort()
       // Reset WASM engine when re-executing from the top
@@ -450,7 +452,7 @@ export function useCellExecution({
       })
       for (let i = startIndex; i < cells.length; i++) {
         if (runGenerationRef.current !== generation) break
-        const success = await runCell(i)
+        const success = await runCell(i, runAdminMode)
         // Cancelled or superseded: an aborted cell is not a failure
         if (runGenerationRef.current !== generation) break
         if (!success) {
@@ -476,7 +478,7 @@ export function useCellExecution({
         }
       }
     },
-    [cells, runCell, engine, markLoadingCancelled]
+    [cells, runCell, engine, markLoadingCancelled, adminModeRef]
   )
 
   // Execute all cells once the WASM engine is ready. Waiting for the engine

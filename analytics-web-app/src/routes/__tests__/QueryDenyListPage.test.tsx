@@ -280,6 +280,7 @@ describe('QueryDenyListPage', () => {
       expect((removeCall![0] as { sql: string }).sql).toContain(
         "remove_query_denial('11111111-1111-1111-1111-111111111111')"
       )
+      expect((removeCall![0] as { adminMode?: boolean }).adminMode).toBe(true)
     })
 
     // Dialog closes once the in-band result reports SUCCESS.

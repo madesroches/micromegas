@@ -2175,6 +2175,34 @@ describe('useCellExecution admin mode', () => {
     expect(engine.reset).not.toHaveBeenCalled()
   })
 
+  it('a run started with the mode off keeps it off when the mode is flipped mid-run', async () => {
+    const cells = [
+      ...sqlCells,
+      { type: 'table', name: 'U', sql: 'SELECT 2', layout: { height: 'auto' } } as CellConfig,
+    ]
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    mockStreamQuery.mockImplementationOnce(async function* () {
+      await gate
+      yield* createSuccessResults()
+    })
+    const { result, rerender } = render({ adminMode: false, cells })
+    let run!: Promise<void>
+    act(() => {
+      run = result.current.executeFromCell(0)
+    })
+    await waitFor(() => expect(mockStreamQuery).toHaveBeenCalledTimes(1))
+    rerender({ adminMode: true, cells })
+    await act(async () => {
+      release()
+      await run
+    })
+    expect(mockStreamQuery).toHaveBeenCalledTimes(2)
+    for (const call of mockStreamQuery.mock.calls) {
+      expect(call[0].adminMode).toBe(false)
+    }
+  })
+
   it('a selection change does not execute downstream cells', async () => {
     const cells = [
       ...sqlCells,
