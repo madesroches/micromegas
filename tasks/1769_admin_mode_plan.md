@@ -123,7 +123,8 @@ and two thin handlers:
 | `POST /api/admin/query-stream` (new) | `AdminUser` → `403` for non-admins | not checked |
 
 `mode` is an enum (`QueryMode::Standard | QueryMode::Admin`), not a bool, so each call site states
-what it means. In `Standard` mode the check runs on the SQL **after** `substitute_macros`, which
+what it means. `run_stream_query` and `QueryMode` are `pub` (like the existing
+`stream_query_handler`) so the integration tests in `rust/analytics-web-srv/tests/` can reach them. In `Standard` mode the check runs on the SQL **after** `substitute_macros`, which
 fixes the check-before-substitute gap described in Current State.
 
 - **Forbidden error message.** It names the statement and states the fix: `'regenerate_partitions'
@@ -176,18 +177,17 @@ fixes the check-before-substitute gap described in Current State.
   `runQuery` (`:306`) and `runQueryAs` (`:343`).
   `PerfettoExportCell` / `perfetto-trace.ts` issue app-generated, non-mutating SQL and stay on the
   standard endpoint.
-- A reload, navigating away, or
-  opening another screen resets it: `ScreenPage` resets the state when the route (name / isNew /
-  typeParam) changes, and also when the draft is discarded, because discard remounts
-  `NotebookRenderer` (key `${screen?.name ?? 'new'}:${discardNonce}`) and its mount effect would
-  otherwise re-run every cell with the mode still on.
+- A reload, navigating away, or opening another screen resets it: `ScreenPage` resets the state
+  when the route (name / isNew / typeParam) changes, and also when the draft is discarded, because
+  discard remounts `NotebookRenderer` (key `${screen?.name ?? 'new'}:${discardNonce}`) and its mount
+  effect would otherwise re-run every cell with the mode still on.
 - **Auto-refresh is paused while it is on.** `ScreenPage` passes `adminMode ? 0 :
   refreshIntervalMs` to `useRefreshInterval`, so a mutating cell is never re-run on a timer. The
   stored interval (URL/config) is untouched and resumes when the mode is turned off. `Header`
   reads `AdminModeContext` (`active && kind === 'toggle'`) and passes a `paused` flag to
-  `RefreshIntervalPicker`, which disables the interval dropdown and replaces the interval chip label
-  (`:48-52`) and the "Auto-refreshing every X" title (`:45`) with *paused* (tooltip: "Paused while
-  admin mode is on"); the Refresh button stays active.
+  `RefreshIntervalPicker` (both render sites, `Header.tsx:103` and `:120`), which disables the interval dropdown, appends "· paused" to the interval chip label
+  (`:48-52`, e.g. "30s · paused") and replaces the "Auto-refreshing every X" title (`:45`) with
+  "Paused while admin mode is on"; the Refresh button stays active.
 - **Auto-execute is off while it is on.** Only explicit actions run cells: a cell's Run / Run
   from here, and the header's Refresh button (run all). These triggers that normally run cells by
   themselves become no-ops:
@@ -199,15 +199,19 @@ fixes the check-before-substitute gap described in Current State.
   - picking a variable value on a cell with `autoRunFromHere`
     (`useNotebookAutoRun.triggerAutoRun`);
   - a sort change on a table/log cell (`useCellSortCheck`, which re-runs the cell's SQL through
-    `executeCellByName`).
+    `executeCellByName`);
+  - the mount effect (`useCellExecution.ts:475-480`): while the mode is on it skips the initial
+    run, and once the engine is ready and cells exist it sets `hasExecutedRef = true`. The WASM
+    engine loads asynchronously, and a new empty notebook runs `executeFromCell(0)` when its first
+    cell is added, either of which can happen after the mode was turned on. Consuming the run
+    matters because the effect deps (`[cells.length, engine, executeFromCell]`, `:480`) would
+    otherwise re-fire on the first cell edit, time-range or data-source change after the mode is
+    turned off and run `executeFromCell(0)`. Turning the mode off never replays it; the notebook
+    waits for an explicit Run / Refresh.
 
-  - the mount effect (`useCellExecution.ts:475-480`): while the mode is on it does nothing and
-    leaves `hasExecutedRef` unset. The WASM engine loads asynchronously, and a new empty notebook
-    runs `executeFromCell(0)` when its first cell is added, either of which can happen after the
-    mode was turned on.
-
-  These hooks read the flag through a ref, so turning the mode off restores auto-execution with no
-  re-run. Cells whose inputs changed keep their previous results until the admin runs them; there
+  `scheduleAutoRun` reads the flag inside its 300ms timer callback (`useNotebookAutoRun.ts:64-67`),
+  not only when scheduling, so a run scheduled before the mode was turned on is dropped. These hooks
+  read the flag through a ref, so turning the mode off restores auto-execution with no re-run. Cells whose inputs changed keep their previous results until the admin runs them; there
   is no stale marker.
 
 ### 4. Visual treatment
@@ -249,7 +253,7 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
 
 1. **Server classification:** `admin_statements.rs` with `classify_admin_statement`; register it
    in `lib.rs`; remove `BLOCKED_FUNCTIONS` / `contains_blocked_function`.
-2. **Server endpoints:** in `stream_query.rs`, split out `run_stream_query` with `QueryMode`,
+2. **Server endpoints:** in `stream_query.rs`, split out `run_stream_query` with `QueryMode` (both `pub`),
    run `substitute_macros` and the classification before the empty-data-source check and
    `cache.resolve`, add the `web-admin` client type, and add
    `admin_stream_query_handler` with the `AdminUser` extractor. In `web_server.rs`, mount
@@ -259,14 +263,18 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
 4. **Admin pages:** `QueryDenyListPage` passes `adminMode: true`.
 5. **Admin mode context:** `src/lib/admin-mode.tsx` (`AdminModeContext`, `isAdminRoute`);
    provider and frame in `AppShell.tsx`; stripe, pill and the identity-menu item in `Header.tsx`;
-   `RefreshIntervalPicker.tsx` disables the interval dropdown and shows *paused*.
-6. **Notebook toggle:** `ScreenPage.tsx` (state, registering `kind: 'toggle'`, reset on route change and on discard); `ScreenRendererProps.adminMode`; `NotebookRenderer.tsx` →
+   `RefreshIntervalPicker.tsx` (`paused` passed at both `Header` render sites) disables the interval
+   dropdown and shows *paused*.
+6. **Notebook toggle:** `ScreenPage.tsx` (state, registering `kind: 'toggle'`, reset on route
+   change and on discard); `ScreenRendererProps.adminMode`; `NotebookRenderer.tsx` →
    `useCellExecution.ts` (endpoint, auto-execute gates), `useNotebookAutoRun.ts` and
    `useCellSortCheck.ts` (gates).
 7. **Update the #1768 plan:** in `tasks/1768_view_sets_admin_ui_plan.md` §3, replace "shows the
    admin-mode toggle state and disables Create / Edit / Drop with a prompt to enable it while off"
    with "issues every query with `adminMode: true`", and drop or reword its Decisions entry
    "Writes depend on #1769's admin mode; a client-side toggle alone is not a security boundary.".
+   Also have it add its View Sets route to `ADMIN_ONLY_PATHS` (exact-prefix list,
+   `AppShell.tsx:10-19,27`), otherwise the page gets no red chrome.
 8. **Docs and `CHANGELOG.md`.**
 
 ## Files to Modify
@@ -329,7 +337,7 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
 - No in-page admin-mode banner; the header stripe, frame and pill are the indicator (user call).
 - Auto-refresh is paused while notebook admin mode is on; explicit refresh/run still works (user
   call).
-- Auto-execute (time range, selection, config edit, variable auto-run) is off while notebook admin
+- Auto-execute (time range, selection, config edit, variable auto-run, sort change, on-mount run) is off while notebook admin
   mode is on; only Run, Run from here and Refresh execute (user call).
 
 ## Security
@@ -401,16 +409,20 @@ All coverage is no-DB unit tests.
   execute, an explicit `executeCell` / `executeFromCell` / refresh trigger does, and turning the
   mode off doesn't run anything.
 - `useCellExecution`: with admin mode on, the engine becoming ready or the first cell being added
-  executes nothing.
+  executes nothing; after turning the mode off, a cell edit, time-range change or data-source
+  change doesn't run `executeFromCell(0)` either (the mount effect consumed the initial run).
 - `useNotebookAutoRun`: with admin mode on, `scheduleAutoRun` and `triggerAutoRun` don't execute.
+- `useNotebookAutoRun`: `scheduleAutoRun` called, then admin mode enabled, then timers advanced
+  → no execution.
 - `useCellSortCheck`: with admin mode on, a sort change doesn't re-run the cell's SQL.
 - `ScreenPage`: with admin mode on, `useRefreshInterval` gets `0` and the stored interval is
-  unchanged; turning it off restores the interval. The state resets when the route changes and when the draft is discarded; a saved config never
-  contains it; a `?admin=…` URL param has no effect.
+  unchanged; turning it off restores the interval.
+- `ScreenPage`: the state resets when the route changes and when the draft is discarded; a saved
+  config never contains it; a `?admin=…` URL param has no effect.
 - `Header`: the identity menu offers *Enable admin mode* only to an admin on a notebook (not to a
   non-admin, not on other screen types or pages). It becomes *Disable admin mode* while on. The
-  pill's *Turn off* clears it. While the toggle is on, the refresh picker is passed `paused`:
-  dropdown disabled, chip and title read *paused*.
+  pill's *Turn off* clears it. While the toggle is on, the refresh picker is passed `paused` at both render sites:
+  dropdown disabled, chip label ends in "· paused", title reads *paused*.
 - `AppShell` / `Header`: the chrome appears on admin routes and with the toggle on, and not on
   `/admin` or `/admin/ingestion-keys`.
 
@@ -422,8 +434,8 @@ user is admin:
 1. Create a notebook whose cell is `SELECT * FROM regenerate_partitions('log_stats', now() -
    INTERVAL '1 hour', now(), 3600)`. Expected: the cell errors with the admin-mode hint.
 2. Open the identity menu, choose **Enable admin mode**, and re-run the cell. Expected: red
-   stripe, frame and pill appear, and the cell returns task-progress log rows. The query audit log shows `client='web-admin'` for the
-   re-run.
+   stripe, frame and pill appear, and the cell returns task-progress log rows. The query audit log
+   shows `client='web-admin'` for the re-run.
 3. On Admin → Query Deny List, add a rule with expression `sql LIKE '%retire_partitions%'`.
    Expected: the rule is created (it was refused before). Remove the rule afterwards.
 
