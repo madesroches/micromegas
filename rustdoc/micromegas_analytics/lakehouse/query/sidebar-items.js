@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_session_context","query","query_partitions","query_partitions_context","register_extension_functions","register_functions","register_lakehouse_functions"]};

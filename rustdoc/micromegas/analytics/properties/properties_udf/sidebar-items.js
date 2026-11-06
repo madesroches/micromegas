@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["count_jsonb_properties","extract_properties_as_vec"],"struct":["PropertiesLength","PropertiesToArray"]};

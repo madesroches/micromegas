@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_retire_partition_by_file_udf"],"struct":["RetirePartitionByFile"]};

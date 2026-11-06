@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://micromegas.info/sitemap.xml
+Sitemap: https://micromegas.info/docs/sitemap.xml

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_FLIGHTSQL_LISTEN_ADDR","DEFAULT_INGESTION_LISTEN_ADDR","DEFAULT_WEB_LISTEN_ADDR"],"fn":["local_connect_addr"],"struct":["CommonServerArgs","FlightSqlListenArgs","IngestionListenArgs","WebListenArgs"]};

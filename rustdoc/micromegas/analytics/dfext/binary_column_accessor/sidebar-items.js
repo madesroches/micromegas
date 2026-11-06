@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["binary_column_by_name","create_binary_accessor"],"trait":["BinaryColumnAccessor"]};

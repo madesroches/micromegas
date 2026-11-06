@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["into_hashmap","make_properties"],"struct":["Property"]};

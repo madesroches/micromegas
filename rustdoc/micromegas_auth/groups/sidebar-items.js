@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ADMINS_GROUP"],"fn":["is_valid_group_name"],"struct":["DbGroupsConfig","GroupGraph","GroupsLoader"],"type":["DbGroupsSource"]};
