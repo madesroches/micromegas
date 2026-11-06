@@ -35,7 +35,7 @@ settings-cache refresh with no restart.
   - Construction-time planning sessions in `SqlBatchView::new` (`sql_batch_view.rs:115`),
     `ExportLogView::new` (`export_log_view.rs:118`) and the DDL validator
     (`view_definition.rs:359,383`) build a fresh `LakehouseContext::new(lake, runtime)` just to
-    plan the extract query and derive a schema. They never execute data work.
+    plan the extract query and derive a schema.
   - `StaticTablesConfigurator::from_env` (`static_tables_configurator.rs:57`) builds a one-off
     startup session to list files.
 - **Who holds what.** `LakehouseContext` (`rust/analytics/src/lakehouse/lakehouse_context.rs:30`)
@@ -51,7 +51,7 @@ settings-cache refresh with no restart.
   (DB → env → default, cached by `SnapshotSource` with stale-on-error after the first load,
   `rust/auth/src/db_snapshot.rs:177`).
 - **Wiring.** `SettingsSource` is built in the FlightSQL builder
-  (`rust/public/src/servers/flight_sql_server.rs:299-303`), in `telemetry-maintenance-srv`
+  (`rust/public/src/servers/flight_sql_server.rs:303`), in `telemetry-maintenance-srv`
   (`rust/telemetry-maintenance-srv/src/main.rs:70`) and in the monolith's maintenance branch
   (`rust/monolith/src/main.rs:360`). Both maintenance entry points hand it to
   `daemon(lakehouse, view_registry, settings, ...)` (`rust/public/src/servers/maintenance.rs:435`).
@@ -93,6 +93,9 @@ impl DataFusionConfigOverrides {
     pub fn apply(&self, options: &mut ConfigOptions) -> Result<()>;
     pub fn is_empty(&self) -> bool;
 }
+
+/// Comma-separated `key=value` list.
+impl Display for DataFusionConfigOverrides {}
 
 #[async_trait]
 pub trait DataFusionConfigSource: Send + Sync + Debug {
@@ -173,7 +176,7 @@ In `rust/public/src/settings.rs`:
   skipped with a `warn!` naming the key, rather than failing the whole settings load — which would
   take isolation and self-service down with it. A non-object still fails the load.
   `stored_keys` lists both. `EnvFallbacks` is unchanged.
-- `pub enum ServiceRole { Query, Maintenance }` and
+- `pub enum ServiceRole { Query, Maintenance }` (`Display`: `query` / `maintenance`) and
   `SettingsSource::datafusion_config(&self, role) -> Result<Arc<DataFusionConfigOverrides>>`
   resolving the stored value, else empty overrides.
 - `pub struct SettingsDataFusionConfig { settings: Arc<SettingsSource>, role: ServiceRole,
@@ -197,7 +200,7 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
   -> FlightSqlServiceImpl (per query: with_runtime keeps it)
 ```
 
-- FlightSQL builder (`flight_sql_server.rs`, right after `settings` is created at `:299`): wrap
+- FlightSQL builder (`flight_sql_server.rs`, right after `settings` is created at `:303`): wrap
   `lakehouse` before it is moved into `FlightSqlServiceImpl::new`. Covers standalone
   `flight-sql-srv` and the monolith's flightsql role.
 - `daemon` (`maintenance.rs:435`): wrap `lakehouse` on entry, before it is cloned into the cron
@@ -279,12 +282,6 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
   would touch every `make_session_context` call site (a dozen, mostly planning-only) to pass the
   same value. Cost: a future execution path that builds a fresh `LakehouseContext::new` would
   silently get no overrides; today only construction-time planning paths do that.
-- **Process-global config vs. per-lakehouse.** A global would be simpler but breaks the monolith,
-  where both roles share a process.
-- **Reject merge-pinned keys vs. apply-then-force.** Rejecting would forbid
-  `repartition_file_scans` / `repartition_aggregations` for interactive queries, which are among
-  the most useful knobs on a few-core host. Only the keys that are forced in *every* session are
-  rejected.
 - **Log-on-change vs. process property / effective config on the admin page.** Process properties
   are fixed before the DB is reachable. The admin page runs in `analytics-web-srv`, on a different
   host from either service, so it can't compute host-dependent defaults like `target_partitions`;
@@ -315,7 +312,11 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
   (`with_isolation_config`) disables the DB-backed DataFusion overrides.
 - `mkdocs/docs/admin/monolith.md`: one line saying each role reads its own key.
 - `mkdocs/docs/admin/web-app.md` (~:136-138): add `datafusion_config_query` and
-  `datafusion_config_maintenance` to the list of editable settings.
+  `datafusion_config_maintenance` to the list of editable settings, and extend the editor-kinds
+  sentence ("a toggle, a number, a list of names, or a tag-to-retention row editor") and the
+  key-prefix grouping description to cover the key/value row editor.
+- `mkdocs/docs/admin/authorization.md` (`## Settings`, ~:33): extend "The variables above that
+  have a setting key, plus `retention_by_stream_tag`…" to include the two new keys.
 - `CHANGELOG.md` (Unreleased): new settings entry. **Minor breaking change:** `query_partitions`
   and `query_partitions_context` take `&LakehouseContext` instead of runtime / reader factory /
   object store; `LakehouseContext` gains a field; `DbOverrides` and `SettingKind`
@@ -347,7 +348,8 @@ All no-DB unit tests.
   non-object fails it; `SettingsSource::with_overrides` resolves the stored value, else empty, per role, and
   the two roles resolve independently; `SettingsDataFusionConfig` logs once per distinct value
   (assert on the `datafusion config (<role>)` line via `init_in_memory_tracing` / `InMemorySink`,
-  `#[serial]`).
+  `#[serial]`; the test calls `set_max_level(LevelFilter::Trace)` because the default level is
+  Off, and reads the lines with `collect_logs(sink)` from `rust/tracing/src/test_utils.rs`).
 - `rust/analytics-web-srv/tests/settings_tests.rs`: `build_entries` lists the two keys with kind
   `datafusion_config` and default `{}`; the PUT path rejects an unknown DataFusion key with a
   400 carrying the key name (through the router, like `invalid_value_is_400_before_any_db_access`).
@@ -365,7 +367,7 @@ breakage is obvious on first use, so it is checked by hand rather than with a li
    `{"datafusion.execution.target_partitions": "1"}` and `datafusion_config_maintenance` to
    `{"datafusion.execution.target_partitions": "3"}`.
 3. After ~60 s, `micromegas-query "SELECT value FROM information_schema.df_settings WHERE name =
-   'datafusion.execution.target_partitions'"` → `1`.
+   'datafusion.execution.target_partitions'" --begin 10m` → `1`.
 4. `micromegas-query "SELECT msg FROM log_entries WHERE msg LIKE 'datafusion config%'" --begin 10m`
    → one `(query)` line with `target_partitions: 1` and, after the next maintenance tick, one
    `(maintenance)` line with `3`.
