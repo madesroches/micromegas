@@ -30,7 +30,8 @@ settings-cache refresh with no restart.
     session over a partition list; it is reached only through `query_partitions` (`query.rs:100`),
     whose callers (`jit_partitions.rs` ×7, `partition_source_data.rs:276`) all hold a
     `LakehouseContext` and pass its `runtime()`, `reader_factory()` and `lake().blob_storage`.
-  - The time-bounds session in the merge writer loop (`merge.rs:471-472`).
+  - Scratch sessions in the merge writer loop (`merge.rs:471-472`) and
+    `metadata_partition_spec.rs:258` run min/max over one in-memory batch; intentionally unchanged.
   - Construction-time planning sessions in `SqlBatchView::new` (`sql_batch_view.rs:115`),
     `ExportLogView::new` (`export_log_view.rs:118`) and the DDL validator
     (`view_definition.rs:359,383`) build a fresh `LakehouseContext::new(lake, runtime)` just to
@@ -144,7 +145,6 @@ merge paths mutate the config afterwards — the order the code already has.
 - `query_partitions` / `query_partitions_context`: take `lakehouse: &LakehouseContext` instead of
   `(runtime, reader_factory, object_store)` — every caller already destructures a lakehouse into
   those three — and build from `lakehouse.session_config()`.
-- `merge.rs` time-bounds session (`:471`): build from `lakehouse.session_config()`.
 - `make_merge_session_context` and `plan_sorted_merge` are unchanged; they already apply their
   forced values after `make_session_context`.
 - Construction-time planning sessions (`SqlBatchView::new`, `ExportLogView::new`, the DDL
@@ -171,19 +171,16 @@ In `rust/public/src/settings.rs`:
   instead of `spec.validate`: a stored entry that a different DataFusion version rejects (a key
   removed or renamed by an upgrade, or written by a newer replica during a rolling upgrade) is
   skipped with a `warn!` naming the key, rather than failing the whole settings load — which would
-  take isolation and self-service down with it. The "fail the whole load" rule exists so a bad
-  value can't silently widen exposure; a tuning knob can't. A non-object still fails the load.
+  take isolation and self-service down with it. A non-object still fails the load.
   `stored_keys` lists both. `EnvFallbacks` is unchanged.
 - `pub enum ServiceRole { Query, Maintenance }` and
   `SettingsSource::datafusion_config(&self, role) -> Result<Arc<DataFusionConfigOverrides>>`
   resolving the stored value, else empty overrides.
 - `pub struct SettingsDataFusionConfig { settings: Arc<SettingsSource>, role: ServiceRole,
   last_logged: Mutex<Option<Arc<DataFusionConfigOverrides>>> }` implementing
-  `DataFusionConfigSource`. When the resolved overrides differ (by value) from the last ones
-  logged, it logs `info!("datafusion config ({role}): {overrides}")`. This replaces the issue's
-  "process property at startup", which can't carry a DB value: the first session after startup
-  logs the effective overrides, and every change after that logs again, all queryable from
-  `log_entries` for the specific process.
+  `DataFusionConfigSource`. It logs
+  `info!("datafusion config ({role}): {overrides}")` on the first session and on every change
+  (by value) of the resolved overrides.
 
 Resolution failure (cold start with an unreadable settings table) fails the session build,
 matching how `isolation_config` already fails FlightSQL queries with a retryable error; after the
@@ -205,6 +202,8 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
   `flight-sql-srv` and the monolith's flightsql role.
 - `daemon` (`maintenance.rs:435`): wrap `lakehouse` on entry, before it is cloned into the cron
   tasks. Covers `telemetry-maintenance-srv` and the monolith's maintenance role with one edit.
+- `with_isolation_config` / `SettingsSource::pinned` (`flight_sql_server.rs:64-77`, `:190`) also
+  turns off the DB-backed DataFusion overrides; the rustdoc on those must say so.
 - Admin `check_view_merge` runs inside FlightSQL and therefore plans with the query config.
   The merge-pinned optimizer settings decide whether a merge streams, and those are forced in both
   services, so the check's verdict does not depend on which config it planned with.
@@ -229,14 +228,19 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
 2. **LakehouseContext.** Add the field, `with_datafusion_config`, `session_config()`
    (`lakehouse_context.rs`).
 3. **Session sites.** Switch `make_session_context`, `query_partitions(_context)` (new
-   signature) and the `merge.rs` time-bounds session to `session_config()`; update the
+   signature) to `session_config()`; update the
    `query_partitions` callers in `jit_partitions.rs` and `partition_source_data.rs`.
 4. **Settings.** In `rust/public/src/settings.rs`: the two keys/specs, `SettingKind::
    DataFusionConfig`, `validate`, `DbOverrides` fields + lenient `from_rows` branch +
    `stored_keys`, `ServiceRole`, `SettingsSource::datafusion_config`,
-   `SettingsDataFusionConfig`.
-5. **Wiring.** FlightSQL builder and `daemon` wrap their lakehouse.
-6. **Web app.** `settings-api.ts` kind; `SettingsPage.tsx` view + editor.
+   `SettingsDataFusionConfig`. Update the docs on `SettingSpec::validate` (`settings.rs:132`) and
+   `from_rows` (`settings.rs:260-263`); `from_rows` must skip `validate` for `DataFusionConfig`
+   (it currently calls `spec.validate` unconditionally before the match, ~`:272-273`).
+5. **Wiring.** FlightSQL builder and `daemon` wrap their lakehouse; update the rustdoc on
+   `with_isolation_config` / `SettingsSource::pinned` to say they also disable the DataFusion
+   overrides.
+6. **Web app.** `settings-api.ts` kind, and widen `SettingValue` (`settings-api.ts:10`) with
+   `Record<string, string>`; `SettingsPage.tsx` view + editor.
 7. **Docs and CHANGELOG** (see below).
 8. **Tests** (see Testing Strategy).
 
@@ -246,7 +250,6 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
 - `rust/analytics/src/lakehouse/mod.rs`
 - `rust/analytics/src/lakehouse/lakehouse_context.rs`
 - `rust/analytics/src/lakehouse/query.rs`
-- `rust/analytics/src/lakehouse/merge.rs`
 - `rust/analytics/src/lakehouse/jit_partitions.rs`
 - `rust/analytics/src/lakehouse/partition_source_data.rs`
 - `rust/public/src/settings.rs`
@@ -260,7 +263,8 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
 - `rust/analytics-web-srv/tests/settings_tests.rs`
 - `analytics-web-app/src/routes/__tests__/SettingsPage.test.tsx`
 - `mkdocs/docs/admin/authorization.md`, `mkdocs/docs/admin/flight-sql.md`,
-  `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/monolith.md`
+  `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/monolith.md`,
+  `mkdocs/docs/admin/web-app.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -281,8 +285,6 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
   `repartition_file_scans` / `repartition_aggregations` for interactive queries, which are among
   the most useful knobs on a few-core host. Only the keys that are forced in *every* session are
   rejected.
-- **Lenient loader vs. the registry's fail-whole-load rule.** See the `DbOverrides` bullet above;
-  the write path stays strict, so leniency only matters across a DataFusion version change.
 - **Log-on-change vs. process property / effective config on the admin page.** Process properties
   are fixed before the DB is reachable. The admin page runs in `analytics-web-srv`, on a different
   host from either service, so it can't compute host-dependent defaults like `target_partitions`;
@@ -296,6 +298,7 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
   protocol (`flightsql`) and not `analytics` (ambiguous with `analytics-web-srv`):
   `datafusion_config_query`, `ServiceRole::Query`.
 - User call: no env-var fallback for either setting; the stored value or nothing.
+- Lenient loader; write path stays strict, so leniency only matters across a DataFusion version change.
 
 ## Documentation
 
@@ -308,7 +311,11 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
   line, the candidate-keys table from the issue, and a quota'd-container note pairing
   `datafusion.execution.target_partitions` with `TOKIO_WORKER_THREADS`. One page holds the table
   and the other links to it.
+- `mkdocs/docs/admin/flight-sql.md`: also note that a pinned settings source
+  (`with_isolation_config`) disables the DB-backed DataFusion overrides.
 - `mkdocs/docs/admin/monolith.md`: one line saying each role reads its own key.
+- `mkdocs/docs/admin/web-app.md` (~:136-138): add `datafusion_config_query` and
+  `datafusion_config_maintenance` to the list of editable settings.
 - `CHANGELOG.md` (Unreleased): new settings entry. **Minor breaking change:** `query_partitions`
   and `query_partitions_context` take `&LakehouseContext` instead of runtime / reader factory /
   object store; `LakehouseContext` gains a field; `DbOverrides` and `SettingKind`
@@ -325,8 +332,8 @@ All no-DB unit tests.
     accepts `repartition_file_scans`.
   - `parse_lenient` skips the bad entries above and keeps the good ones; errors on a non-object.
   - `apply` sets the values on a `ConfigOptions`.
-  - Using the offline lakehouse from `merge_scan_partitioning_tests.rs`
-    (`connect_lazy` pool, in-memory store) with a fixed `DataFusionConfigSource` stub:
+  - Copy `make_offline_lakehouse_context` from `merge_scan_partitioning_tests.rs` into
+    `datafusion_config_tests.rs` (`connect_lazy` pool, in-memory store) with a fixed `DataFusionConfigSource` stub:
     `make_session_context` reflects `target_partitions = 1` and `batch_size = 4096`, still has
     `enable_page_index = false` / `collect_spans = true`; a `with_runtime` copy keeps the
     overrides; `query_partitions` reflects them; a source returning `Err` fails
@@ -339,10 +346,11 @@ All no-DB unit tests.
   object containing one unknown key loads the rest and does not fail the parse, while a
   non-object fails it; `SettingsSource::with_overrides` resolves the stored value, else empty, per role, and
   the two roles resolve independently; `SettingsDataFusionConfig` logs once per distinct value
-  (assert via a returned flag or counter on the struct, not log capture).
+  (assert on the `datafusion config (<role>)` line via `init_in_memory_tracing` / `InMemorySink`,
+  `#[serial]`).
 - `rust/analytics-web-srv/tests/settings_tests.rs`: `build_entries` lists the two keys with kind
   `datafusion_config` and default `{}`; the PUT path rejects an unknown DataFusion key with a
-  400 carrying the key name (through the existing `put_setting_inner` seam).
+  400 carrying the key name (through the router, like `invalid_value_is_400_before_any_db_access`).
 - `analytics-web-app/src/routes/__tests__/SettingsPage.test.tsx`: the `datafusion_config` editor
   adds/removes rows and submits `{key: value}`; duplicate or empty keys disable Save; a server
   400 message is shown.
@@ -361,6 +369,3 @@ breakage is obvious on first use, so it is checked by hand rather than with a li
 4. `micromegas-query "SELECT msg FROM log_entries WHERE msg LIKE 'datafusion config%'" --begin 10m`
    → one `(query)` line with `target_partitions: 1` and, after the next maintenance tick, one
    `(maintenance)` line with `3`.
-5. Try storing `{"datafusion.execution.nope": "1"}` and
-   `{"datafusion.sql_parser.collect_spans": "false"}` → both rejected in the dialog with the
-   reason.
