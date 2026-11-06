@@ -71,7 +71,7 @@ extractor (`rust/analytics-web-srv/src/auth/handlers.rs:583`), as `settings.rs` 
   holds `handleRefresh` / `useRefreshInterval` (`:233`).
 - Under `--disable-auth`, `auth_me_no_auth` (`web_server.rs:202,662-670`) returns 200 with
   `is_admin: true`, so the identity menu renders and offers the toggle (`lib/auth.tsx:58-62`,
-  `Header.tsx:152`).
+  `Header.tsx:138`).
 - The global header is `components/layout/Header.tsx`, rendered through `PageLayout`.
 - The admin routes are listed in `router.tsx:55-63`, and `AppShell.tsx` already keeps an
   `ADMIN_ONLY_PATHS` list.
@@ -150,8 +150,8 @@ fixes the check-before-substitute gap described in Current State.
 - `QueryDenyListPage` passes `adminMode: true` on all three of its queries. Any query issued from
   an admin page uses the admin endpoint.
 - The View Sets page from #1768 does the same, so there is no toggle and no disabled state there.
-- The red chrome (§4) is driven by one `isAdminRoute(pathname)` helper in `AppShell`, which is the
-  existing `ADMIN_ONLY_PATHS` match (exact `/admin/<name>` prefixes, not `startsWith('/admin')`).
+- The red chrome (§4) is driven by one `isAdminRoute(pathname)` helper in `src/lib/admin-mode.tsx`,
+  which owns the `ADMIN_ONLY_PATHS` list (moved out of `AppShell.tsx`; `AppShell` imports it) and matches (exact `/admin/<name>` prefixes, not `startsWith('/admin')`).
   `/admin` and `/admin/ingestion-keys` are excluded because they are role-filtered and visible to
   non-admins (`AppShell.tsx:7-9`).
 
@@ -163,7 +163,7 @@ fixes the check-before-substitute gap described in Current State.
   *Audience access* and *Sign out*). It appears only when `user.is_admin` and the current page
   allows the toggle. A notebook `ScreenPage` registers that through `AdminModeContext` (§4); the
   menu stays as it is everywhere else. While the mode is on, the item reads **Disable admin
-  mode**, and the header pill's **Turn off** does the same.
+  mode**.
 - Non-notebook screen types (Table/Log/ProcessList/Metrics renderers) never get admin mode; their
   mutating statements are always refused. The `kind: 'toggle'` registration is gated on
   `screenType === 'notebook'`.
@@ -179,14 +179,14 @@ fixes the check-before-substitute gap described in Current State.
   standard endpoint.
 - A reload, navigating away, or opening another screen resets it: `ScreenPage` resets the state
   when the route (name / isNew / typeParam) changes, and also when the draft is discarded, because
-  discard remounts `NotebookRenderer` (key `${screen?.name ?? 'new'}:${discardNonce}`) and its mount
+  discard remounts the generic renderer element (key `${screen?.name ?? 'new'}:${discardNonce}`, `ScreenPage.tsx:502`) and its mount
   effect would otherwise re-run every cell with the mode still on.
 - **Auto-refresh is paused while it is on.** `ScreenPage` passes `adminMode ? 0 :
   refreshIntervalMs` to `useRefreshInterval`, so a mutating cell is never re-run on a timer. The
   stored interval (URL/config) is untouched and resumes when the mode is turned off. `Header`
   reads `AdminModeContext` (`active && kind === 'toggle'`) and passes a `paused` flag to
   `RefreshIntervalPicker` (both render sites, `Header.tsx:103` and `:120`), which disables the interval dropdown, appends "· paused" to the interval chip label
-  (`:48-52`, e.g. "30s · paused") and replaces the "Auto-refreshing every X" title (`:45`) with
+  (`:49-53`, e.g. "30s · paused") and replaces the "Auto-refreshing every X" title (`:45`) with
   "Paused while admin mode is on"; the Refresh button stays active.
 - **Auto-execute is off while it is on.** Only explicit actions run cells: a cell's Run / Run
   from here, and the header's Refresh button (run all). These triggers that normally run cells by
@@ -219,9 +219,10 @@ fixes the check-before-substitute gap described in Current State.
 A new `AdminModeContext` (provider in `AppShell`) exposes `{ kind: 'none' | 'page' | 'toggle',
 active, setActive? }`:
 
-- Admin routes set `kind: 'page'` (always active, no `setActive`).
+- `AppShell`'s provider derives `kind: 'page'` from `isAdminRoute(pathname)` (always active, no
+  `setActive`).
 - A notebook `ScreenPage` sets `kind: 'toggle'` and supplies `setActive`.
-- Leaving either resets it to `none`.
+- Leaving either resets it to `none`; `ScreenPage` clears its toggle registration on unmount.
 
 `Header` uses it for the menu item and the pill. `Header` and `AppShell` both use it for the
 chrome when `active` is true:
@@ -235,8 +236,6 @@ What the mode allows, and
 that it lasts for this page only, is said once, in the menu item's subtitle ("This page only.
 Lets cells modify the lakehouse.").
 
-Red marks an admin page or admin mode. Reads and writes on admin pages need no extra control.
-
 ## Mockups
 
 Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
@@ -247,7 +246,7 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
   - the same notebook with the mode on, with the stripe, frame and pill;
   - an admin page, where the mode is always on.
 - `tasks/1769_admin_mode_mockups/option-b-admin-tab.html` (not chosen): **Open as admin ↗** opens
-  a second, fully re-themed browser tab. See Trade-offs.
+  a second, fully re-themed browser tab.
 
 ## Implementation Steps
 
@@ -261,7 +260,7 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
 3. **Front-end plumbing:** `adminMode` in `StreamQueryParams`; `queryStreamUrl` in
    `arrow-stream.ts`; `useStreamQuery` passes it through.
 4. **Admin pages:** `QueryDenyListPage` passes `adminMode: true`.
-5. **Admin mode context:** `src/lib/admin-mode.tsx` (`AdminModeContext`, `isAdminRoute`);
+5. **Admin mode context:** `src/lib/admin-mode.tsx` (`AdminModeContext`, `isAdminRoute`, `ADMIN_ONLY_PATHS`);
    provider and frame in `AppShell.tsx`; stripe, pill and the identity-menu item in `Header.tsx`;
    `RefreshIntervalPicker.tsx` (`paused` passed at both `Header` render sites) disables the interval
    dropdown and shows *paused*.
@@ -273,8 +272,7 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
    admin-mode toggle state and disables Create / Edit / Drop with a prompt to enable it while off"
    with "issues every query with `adminMode: true`", and drop or reword its Decisions entry
    "Writes depend on #1769's admin mode; a client-side toggle alone is not a security boundary.".
-   Also have it add its View Sets route to `ADMIN_ONLY_PATHS` (exact-prefix list,
-   `AppShell.tsx:10-19,27`), otherwise the page gets no red chrome.
+   Also have it add its View Sets route to the `ADMIN_ONLY_PATHS` list in `admin-mode.tsx`, otherwise the page gets no red chrome. Reword its stale text: Current State (`:30`, cites `BLOCKED_FUNCTIONS`, which this plan removes), the partition-retirement row (`:135`, "blocked on the web path by design") and Decisions (`:187`, "`retire_partitions*` is blocked for web queries on purpose"); leaving out retire/rebuild is a scope choice, not a web-path block.
 8. **Docs and `CHANGELOG.md`.**
 
 ## Files to Modify
@@ -295,17 +293,11 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
   `src/components/layout/RefreshIntervalPicker.tsx`, plus tests
 - Docs: `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/query-guide/query-audit-log.md`,
   `mkdocs/docs/admin/functions-reference.md`,
-  `mkdocs/docs/admin/materialized-views.md`, `CHANGELOG.md`, `tasks/1768_view_sets_admin_ui_plan.md`
+  `mkdocs/docs/admin/materialized-views.md`,
+  `mkdocs/docs/web-app/notebooks/execution.md`, `CHANGELOG.md`, `tasks/1768_view_sets_admin_ui_plan.md`
 
 ## Trade-offs
 
-- **In-place toggle vs. a separate admin browser tab (option B).** A dedicated tab separates
-  elevated and normal work more strongly, and could survive a reload. The new tab has to learn that
-  it is elevated without a URL flag, because a shared `?admin=1` link would elevate whoever opens
-  it. The remaining ways are an opener `postMessage` handshake, or `sessionStorage` copied across
-  `window.open`, whose behaviour with `noopener` differs between browsers. The in-place toggle gets
-  the same visual separation (red chrome) with React state alone. It is per-visit by construction
-  and cannot be reached from a link.
 - **Endpoint choice vs. a short-lived signed admin-mode credential (cookie or header), as the issue
   proposed.** A credential guards against the elevation being triggered by something the viewer
   didn't do. Here nothing the notebook controls can choose the endpoint, so a token would add
@@ -356,7 +348,10 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
   /api/admin/query-stream` next to `/api/query-stream`.
 - `mkdocs/docs/query-guide/query-audit-log.md`: add `web-admin` to the client column values
   (`:204`) and update the attribution text at `:259-260` and `:277-281`, which says
-  `/api/query-stream` requests are `client="web"`.
+  `/api/query-stream` requests are `client="web"`. Note in it and in `web-app.md` that a deny rule
+  targeting `client = 'web'` no longer covers admin-mode queries (client `web-admin`).
+- `mkdocs/docs/web-app/notebooks/execution.md` (auto-refresh `:39`, auto-run `:41-58`): say auto-refresh
+  and auto-run are paused while notebook admin mode is on.
 - `mkdocs/docs/admin/functions-reference.md` and `materialized-views.md`: one line each saying
   that from the web app these run only from admin pages or in a notebook with admin mode on.
 - `CHANGELOG.md` (Web app): new endpoint, the extended refusal (DDL plus four more functions), the
@@ -385,16 +380,23 @@ All coverage is no-DB unit tests.
   `substitute_macros`. This pins the ordering fix.
 - `Admin` mode does not classify.
 - The refusal happens before data-source resolution: the request has a non-empty `data_source` and
-  a failing cache (`lazy_pool()` + `DataSourceCache::new`, as `routing_tests.rs:420`), which proves
-  no FlightSQL connection was attempted.
+  a failing cache (`unreachable_pool()` from `maps_tests.rs`, 50ms `acquire_timeout`, +
+  `DataSourceCache::new`; not `routing_tests.rs:420` `lazy_pool()`, whose sqlx default 30s timeout
+  would stall), which proves no FlightSQL connection was attempted.
+- Admin mode + mutating SQL + empty `data_source` → `400 DATA_SOURCE_NOT_FOUND`, while `Standard`
+  mode with the same input → `403`.
+- Non-admin 403 / admin-reaches-handler on `/api/admin/query-stream`: see the handler-router test
+  below; it lives in this file.
 
 **Rust** (`tests/routing_tests.rs`):
 
 - `/api/admin/query-stream` is mounted under `--disable-auth` (`disabled_auth_app()`, `:425`).
   `build_protected_routes(&None)` always injects an admin `ValidatedUser`, so the 403 case is not
   tested here.
+- POST to `/api/admin/query-stream` with an empty `data_source` → `400` rather than `404`.
 
-**Rust** (handler-router test, `maps_tests.rs:89-99` pattern, `build_handler_router_with_user`):
+**Rust** (handler-router test in `tests/stream_query_tests.rs`; `build_handler_router_with_user` and
+`non_admin_user()` are copied from `maps_tests.rs:89-99`, as there is no shared `tests/common`):
 
 - `/api/admin/query-stream` returns 403 for `non_admin_user()` and reaches the handler for an
   admin.
@@ -418,7 +420,7 @@ All coverage is no-DB unit tests.
 - `ScreenPage`: with admin mode on, `useRefreshInterval` gets `0` and the stored interval is
   unchanged; turning it off restores the interval.
 - `ScreenPage`: the state resets when the route changes and when the draft is discarded; a saved
-  config never contains it; a `?admin=…` URL param has no effect.
+  config never contains it.
 - `Header`: the identity menu offers *Enable admin mode* only to an admin on a notebook (not to a
   non-admin, not on other screen types or pages). It becomes *Disable admin mode* while on. The
   pill's *Turn off* clears it. While the toggle is on, the refresh picker is passed `paused` at both render sites:
