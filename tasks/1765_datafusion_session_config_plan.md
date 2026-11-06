@@ -221,6 +221,13 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
     `{key: value}` with values sent as strings; client-side validity only requires non-empty,
     unique keys and non-empty values. Everything else is the server's job: a 400 from the PUT
     shows DataFusion's message in the existing error slot.
+  - `inputValid`: add a `datafusion_config` branch next to the view, editor and `pendingValue`
+    items (the default is `true`, and `ValueView` would show "[object Object]" for an unknown kind).
+  - The editor converts each stored value with `String(v)` when it opens: the PUT handler stores
+    the JSON as submitted, so GET can return numbers or booleans (as the `tag_horizons` editor
+    does with `String(h)`), and a `.trim()` validity check would otherwise throw.
+  - Grouping: the `datafusion_config_*` keys deliberately stay in the "Other" group; no
+    `GROUPS` entry is added.
   - A short hint under the editor linking to the docs section that lists the candidate keys.
 
 ## Implementation Steps
@@ -243,7 +250,8 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
    `with_isolation_config` / `SettingsSource::pinned` to say they also disable the DataFusion
    overrides.
 6. **Web app.** `settings-api.ts` kind, and widen `SettingValue` (`settings-api.ts:10`) with
-   `Record<string, string>`; `SettingsPage.tsx` view + editor.
+   `Record<string, string | number | boolean>`; `SettingsPage.tsx` view, editor (`String(v)` on
+   open), `inputValid` branch.
 7. **Docs and CHANGELOG** (see below).
 8. **Tests** (see Testing Strategy).
 
@@ -295,6 +303,8 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
   protocol (`flightsql`) and not `analytics` (ambiguous with `analytics-web-srv`):
   `datafusion_config_query`, `ServiceRole::Query`.
 - User call: no env-var fallback for either setting; the stored value or nothing.
+- AFK: Admin UI widens `SettingValue` with `Record<string, string | number | boolean>`, the editor applies `String(v)` to stored values on open, and `inputValid` gets a `datafusion_config` branch.
+- AFK: `datafusion_config_*` keys deliberately stay in the "Other" group (no `GROUPS` entry); the web-app.md bullet drops any mention of a new group.
 - Lenient loader; write path stays strict, so leniency only matters across a DataFusion version change.
 
 ## Documentation
@@ -313,8 +323,9 @@ FlightSqlServer::build_and_serve           daemon(lakehouse, view_registry, sett
 - `mkdocs/docs/admin/monolith.md`: one line saying each role reads its own key.
 - `mkdocs/docs/admin/web-app.md` (~:136-138): add `datafusion_config_query` and
   `datafusion_config_maintenance` to the list of editable settings, and extend the editor-kinds
-  sentence ("a toggle, a number, a list of names, or a tag-to-retention row editor") and the
-  key-prefix grouping description to cover the key/value row editor.
+  sentence ("a toggle, a number, a list of names, or a tag-to-retention row editor") to cover the
+  key/value row editor; the key-prefix grouping description stays as is (the new keys land in
+  "Other").
 - `mkdocs/docs/admin/authorization.md` (`## Settings`, ~:33): extend "The variables above that
   have a setting key, plus `retention_by_stream_tag`…" to include the two new keys.
 - `CHANGELOG.md` (Unreleased): new settings entry. **Minor breaking change:** `query_partitions`
