@@ -1,0 +1,45 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Option A — View Sets (master/detail)</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"><style>:root{--app-bg:#0a0a0f;--panel-bg:#12121a;--card-bg:#1a1a2e;--border-color:#2a2a3e;--border-hover:#3a3a4e;--text-primary:#e7e9ea;--text-secondary:#9ca3af;--text-muted:#6b7280;--accent-link:#1565c0;--accent-link-hover:#1976d2;--accent-warning:#ffb300;--accent-error:#f87171;--accent-success:#22c55e;--radius:.5rem}
+*{box-sizing:border-box}body{margin:0;background:var(--app-bg);color:var(--text-primary);font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:14px;line-height:1.5}
+.page{padding:24px;max-width:1280px}.breadcrumb{display:flex;gap:6px;color:var(--text-muted);margin-bottom:16px}.breadcrumb a{color:var(--accent-link);text-decoration:none}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:16px}h1{font-size:24px;font-weight:600;margin:0}.subtitle{margin:4px 0 0;color:var(--text-secondary)}
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--accent-link);color:#fff;border:1px solid transparent;border-radius:6px;padding:7px 14px;font:inherit;font-weight:500;cursor:pointer;white-space:nowrap}
+.btn.outline{background:transparent;color:var(--text-primary);border-color:var(--border-color)}.btn.danger{background:transparent;color:var(--accent-error);border-color:var(--border-color)}.btn.sm{padding:4px 10px;font-size:13px}
+.panel{border:1px solid var(--border-color);border-radius:var(--radius);background:var(--panel-bg)}
+table{width:100%;border-collapse:collapse}th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);font-weight:500;padding:10px 14px;border-bottom:1px solid var(--border-color)}
+td{padding:10px 14px;border-bottom:1px solid var(--border-color);vertical-align:middle}tr:last-child td{border-bottom:0}tr.sel td{background:rgba(21,101,192,.15)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}.muted{color:var(--text-muted)}.sec{color:var(--text-secondary)}
+.badge{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--border-color);color:var(--text-secondary)}.badge.ok{color:var(--accent-success)}.badge.warn{color:var(--accent-warning)}.badge.err{color:var(--accent-error)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border-color);padding:0 12px}.tab{padding:10px 12px;color:var(--text-secondary);border-bottom:2px solid transparent}.tab.on{color:var(--text-primary);border-color:var(--accent-link)}
+pre.code{margin:0;padding:14px 16px;background:var(--app-bg);border:1px solid var(--border-color);border-radius:6px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.55}
+.k{color:#c792ea}.s{color:#a5d6a7}.c{color:var(--text-muted)}
+.banner{padding:10px 14px;border-radius:6px;border:1px solid var(--border-color);margin-bottom:12px}.banner.warn{border-color:var(--accent-warning);background:rgba(255,179,0,.08)}.banner.err{border-color:var(--accent-error);background:rgba(248,113,113,.1)}
+select,input[type=text]{background:var(--app-bg);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;padding:6px 10px;font:inherit}
+label{font-size:13px;font-weight:500;color:var(--text-secondary)}.row{display:flex;gap:12px;align-items:center}</style>
+<style>.split{display:grid;grid-template-columns:380px 1fr;gap:16px;align-items:start}.list td{cursor:pointer}.pad{padding:16px}</style></head><body><div class="page">
+<div class="breadcrumb"><a href="#">Admin</a> / <span>View Sets</span></div>
+<div class="header"><div><h1>View Sets</h1><p class="subtitle">Define and inspect the materialized view sets queried through <span class="mono">list_view_sets()</span>.</p></div>
+<div class="row"><button class="btn">+ New view set</button></div></div>
+<div class="split">
+<div><div class="panel pad" style="margin-bottom:12px"><label>Data source</label><br><select style="width:100%;margin-top:4px"><option>production</option><option>staging</option></select></div>
+<div class="panel list"><table><thead><tr><th>Name</th><th>Source</th><th>Health</th></tr></thead><tbody>
+<tr class="sel"><td class="mono">error_counts</td><td><span class="badge">ddl</span></td><td><span class="badge ok">ok</span></td></tr>
+<tr><td class="mono">frame_budget</td><td><span class="badge">ddl</span></td><td><span class="badge warn">sort buffers</span></td></tr>
+<tr><td class="mono">log_stats</td><td><span class="badge">ddl</span></td><td><span class="badge ok">ok</span></td></tr>
+<tr><td class="mono">slow_queries</td><td><span class="badge">ddl</span></td><td><span class="badge err">failed to load</span></td></tr>
+<tr><td class="mono">log_entries</td><td><span class="badge">builtin</span></td><td class="muted">read-only</td></tr>
+<tr><td class="mono">measures</td><td><span class="badge">builtin</span></td><td class="muted">read-only</td></tr>
+<tr><td class="mono">thread_spans</td><td><span class="badge">builtin</span></td><td class="muted">read-only</td></tr>
+</tbody></table></div></div>
+<div class="panel"><div class="pad" style="display:flex;justify-content:space-between;align-items:center"><div><div class="mono" style="font-size:16px;font-weight:600">error_counts</div><div class="muted">updated 2026-10-28 14:02 by ops@example.com · update group 1</div></div>
+<div class="row"><button class="btn outline sm">Edit</button><button class="btn danger sm">Drop…</button></div></div>
+<div class="tabs"><div class="tab on">Definition</div><div class="tab">Schema</div><div class="tab">Partitions</div></div>
+<div class="pad"><div class="banner warn">Merge query does not stream: a <span class="mono">SortExec</span> remains in the merge plan, so merges buffer their whole input.</div>
+<pre class="code"><span class="c">-- Errors per target per minute</span>
+<span class="k">CREATE MATERIALIZED VIEW</span> error_counts <span class="k">WITH</span> (
+  description = <span class="s">'Error counts per target'</span>,
+  view_factory = <span class="s">'sql_batch'</span>,
+  extract_query = <span class="s">$$SELECT date_bin(INTERVAL '1 minute', time) AS time_bin, target, count(*) AS n
+                   FROM {source} WHERE level &lt;= 2 GROUP BY 1, 2$$</span>,
+  merge_partitions_query = <span class="s">$$...$$</span>
+);</pre></div></div>
+</div></div></body></html>

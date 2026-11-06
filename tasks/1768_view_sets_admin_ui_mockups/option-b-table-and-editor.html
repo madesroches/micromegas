@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Option B — View Sets (table + editor page)</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"><style>:root{--app-bg:#0a0a0f;--panel-bg:#12121a;--card-bg:#1a1a2e;--border-color:#2a2a3e;--border-hover:#3a3a4e;--text-primary:#e7e9ea;--text-secondary:#9ca3af;--text-muted:#6b7280;--accent-link:#1565c0;--accent-link-hover:#1976d2;--accent-warning:#ffb300;--accent-error:#f87171;--accent-success:#22c55e;--radius:.5rem}
+*{box-sizing:border-box}body{margin:0;background:var(--app-bg);color:var(--text-primary);font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:14px;line-height:1.5}
+.page{padding:24px;max-width:1280px}.breadcrumb{display:flex;gap:6px;color:var(--text-muted);margin-bottom:16px}.breadcrumb a{color:var(--accent-link);text-decoration:none}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:16px}h1{font-size:24px;font-weight:600;margin:0}.subtitle{margin:4px 0 0;color:var(--text-secondary)}
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--accent-link);color:#fff;border:1px solid transparent;border-radius:6px;padding:7px 14px;font:inherit;font-weight:500;cursor:pointer;white-space:nowrap}
+.btn.outline{background:transparent;color:var(--text-primary);border-color:var(--border-color)}.btn.danger{background:transparent;color:var(--accent-error);border-color:var(--border-color)}.btn.sm{padding:4px 10px;font-size:13px}
+.panel{border:1px solid var(--border-color);border-radius:var(--radius);background:var(--panel-bg)}
+table{width:100%;border-collapse:collapse}th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);font-weight:500;padding:10px 14px;border-bottom:1px solid var(--border-color)}
+td{padding:10px 14px;border-bottom:1px solid var(--border-color);vertical-align:middle}tr:last-child td{border-bottom:0}tr.sel td{background:rgba(21,101,192,.15)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}.muted{color:var(--text-muted)}.sec{color:var(--text-secondary)}
+.badge{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--border-color);color:var(--text-secondary)}.badge.ok{color:var(--accent-success)}.badge.warn{color:var(--accent-warning)}.badge.err{color:var(--accent-error)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border-color);padding:0 12px}.tab{padding:10px 12px;color:var(--text-secondary);border-bottom:2px solid transparent}.tab.on{color:var(--text-primary);border-color:var(--accent-link)}
+pre.code{margin:0;padding:14px 16px;background:var(--app-bg);border:1px solid var(--border-color);border-radius:6px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.55}
+.k{color:#c792ea}.s{color:#a5d6a7}.c{color:var(--text-muted)}
+.banner{padding:10px 14px;border-radius:6px;border:1px solid var(--border-color);margin-bottom:12px}.banner.warn{border-color:var(--accent-warning);background:rgba(255,179,0,.08)}.banner.err{border-color:var(--accent-error);background:rgba(248,113,113,.1)}
+select,input[type=text]{background:var(--app-bg);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;padding:6px 10px;font:inherit}
+label{font-size:13px;font-weight:500;color:var(--text-secondary)}.row{display:flex;gap:12px;align-items:center}</style>
+<style>.pad{padding:16px}.ed{display:grid;grid-template-columns:1fr 340px;gap:16px}textarea{width:100%;min-height:300px;background:var(--app-bg);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:13px}hr{border:0;border-top:1px solid var(--border-color);margin:36px 0}h2{font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em}</style></head><body><div class="page">
+<h2>Page 1 — /admin/view-sets</h2>
+<div class="breadcrumb"><a href="#">Admin</a> / <span>View Sets</span></div>
+<div class="header"><div><h1>View Sets</h1><p class="subtitle">Materialized view sets defined in this deployment.</p></div><div class="row"><select><option>Data source: production</option></select><button class="btn">+ New view set</button></div></div>
+<div class="panel"><table><thead><tr><th>Name</th><th>Description</th><th>Source</th><th>Columns</th><th>Partitions</th><th>Latest data</th><th>Updated</th><th></th></tr></thead><tbody>
+<tr><td class="mono">error_counts</td><td class="sec">Error counts per target</td><td><span class="badge">ddl</span></td><td>4</td><td>312</td><td>2 min ago</td><td class="muted">ops, 8 d ago</td><td><button class="btn outline sm">Open</button></td></tr>
+<tr><td class="mono">frame_budget</td><td class="sec">Per-frame budget overruns</td><td><span class="badge">ddl</span></td><td>7</td><td>96</td><td>2 min ago</td><td class="muted">ops, 3 d ago</td><td><button class="btn outline sm">Open</button></td></tr>
+<tr><td class="mono">slow_queries</td><td class="muted">—</td><td><span class="badge">ddl</span> <span class="badge err">failed to load</span></td><td class="muted">—</td><td>0</td><td class="muted">—</td><td class="muted">ops, 1 h ago</td><td><button class="btn outline sm">Open</button></td></tr>
+<tr><td class="mono">log_entries</td><td class="sec">Log lines, one row per entry</td><td><span class="badge">builtin</span></td><td>9</td><td>5,801</td><td>12 s ago</td><td class="muted">—</td><td><button class="btn outline sm">Open</button></td></tr>
+</tbody></table></div>
+<hr>
+<h2>Page 2 — /admin/view-sets/error_counts/edit</h2>
+<div class="breadcrumb"><a href="#">Admin</a> / <a href="#">View Sets</a> / <span>error_counts</span></div>
+<div class="header"><div><h1 class="mono">error_counts</h1><p class="subtitle">Editing issues <span class="mono">CREATE OR REPLACE MATERIALIZED VIEW</span>.</p></div><div class="row"><button class="btn outline">Check</button><button class="btn">Save…</button></div></div>
+<div class="ed"><div><textarea spellcheck="false">CREATE MATERIALIZED VIEW error_counts WITH (
+  description = 'Error counts per target',
+  view_factory = 'sql_batch',
+  ...
+);</textarea></div>
+<div><div class="banner warn"><b>Merge does not stream</b><br>A SortExec remains in the merge plan.</div><div class="banner"><b>Saving</b><br class="">A content-only change does not rebuild existing partitions.</div><div class="panel pad"><b>Output schema</b><div class="mono sec">time_bin  timestamp<br>target  utf8<br>n  int64</div></div></div></div>
+</div></body></html>
