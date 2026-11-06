@@ -14,9 +14,12 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::parquet::arrow::AsyncArrowWriter;
 use futures::stream::StreamExt;
 use micromegas_analytics::lakehouse::async_parquet_writer::AsyncParquetWriter;
+use micromegas_analytics::lakehouse::datafusion_config::{
+    DataFusionConfigOverrides, DataFusionConfigSource,
+};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::merge::{
-    PartitionMerger, QueryMerger, make_merge_session_context,
+    PartitionMerger, QueryMerger, make_merge_session_context, plan_sorted_merge,
 };
 use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
@@ -27,7 +30,7 @@ use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
-use micromegas_analytics::lakehouse::view::ViewMetadata;
+use micromegas_analytics::lakehouse::view::{ScanSortColumn, ViewMetadata};
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -192,6 +195,80 @@ async fn make_merge_session_context_forces_a_single_reader_scan() {
         "control session (plain make_session_context) should still fan the scan out to more \
          than one partition -- if not, this test would silently no-op"
     );
+}
+
+/// Overrides are applied when the session config is built and the merge paths mutate it
+/// afterwards, so a stored override can never turn a streaming merge into a fanned-out one.
+#[tokio::test]
+async fn merge_pinned_optimizer_settings_beat_overrides() {
+    #[derive(Debug)]
+    struct Overrides;
+    #[async_trait::async_trait]
+    impl DataFusionConfigSource for Overrides {
+        async fn overrides(&self) -> anyhow::Result<Arc<DataFusionConfigOverrides>> {
+            Ok(Arc::new(DataFusionConfigOverrides::parse_strict(
+                &serde_json::json!({
+                    "datafusion.optimizer.repartition_file_scans": true,
+                    "datafusion.optimizer.enable_round_robin_repartition": true,
+                    "datafusion.optimizer.repartition_aggregations": true,
+                    "datafusion.optimizer.repartition_joins": true,
+                    "datafusion.optimizer.prefer_existing_sort": false,
+                }),
+            )?))
+        }
+    }
+    let lakehouse = make_offline_lakehouse_context()
+        .await
+        .with_datafusion_config(Arc::new(Overrides));
+    let t0 = Utc::now();
+    let merge_ctx = make_merge_session_context(
+        lakehouse.clone(),
+        Arc::new(PartitionCache::empty(TimeRange::new(
+            t0,
+            t0 + TimeDelta::hours(1),
+        ))),
+        None,
+        Arc::new(ViewFactory::new(vec![])),
+        Arc::new(NoOpSessionConfigurator),
+        CallerContext::maintenance(),
+    )
+    .await
+    .expect("make_merge_session_context");
+    merge_ctx
+        .register_table(
+            "source",
+            Arc::new(PartitionedTableProvider::new(
+                id_schema(),
+                make_reader_factory(lakehouse.lake().blob_storage.inner()),
+                Arc::new(vec![]),
+            )),
+        )
+        .expect("register_table");
+    assert!(
+        !merge_ctx
+            .state()
+            .config_options()
+            .optimizer
+            .repartition_file_scans
+    );
+    // The planning outcome is irrelevant here; planning is what forces the optimizer settings.
+    let _ = plan_sorted_merge(
+        &merge_ctx,
+        "SELECT * FROM source",
+        &[ScanSortColumn {
+            column: Arc::new("id".to_owned()),
+            descending: false,
+        }],
+        TimeRange::new(t0, t0 + TimeDelta::hours(1)),
+    )
+    .await;
+    let state = merge_ctx.state();
+    let optimizer = &state.config_options().optimizer;
+    assert!(!optimizer.repartition_file_scans);
+    assert!(!optimizer.enable_round_robin_repartition);
+    assert!(!optimizer.repartition_aggregations);
+    assert!(!optimizer.repartition_joins);
+    assert!(optimizer.prefer_existing_sort);
 }
 
 /// Writes a single-row, one-column (`id: Int32`) Parquet file directly into `object_store`

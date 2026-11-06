@@ -67,6 +67,19 @@ function ValueView({ value, kind }: { value: SettingValue; kind: SettingEntry['k
       </span>
     )
   }
+  if (kind === 'datafusion_config') {
+    const entries = Object.entries(value as Record<string, string | number | boolean>)
+    if (entries.length === 0) return <span className="text-theme-text-muted">none</span>
+    return (
+      <span className="flex flex-wrap gap-1">
+        {entries.map(([k, v]) => (
+          <code key={k} className="font-mono text-xs bg-app-bg px-1.5 py-0.5 rounded-sm">
+            {k}: {String(v)}
+          </code>
+        ))}
+      </span>
+    )
+  }
   if (kind === 'days') return <code className="font-mono text-xs">{String(value)} d</code>
   return <code className="font-mono text-xs">{String(value)}</code>
 }
@@ -98,6 +111,24 @@ function horizonRowsToValue(rows: HorizonRow[]): Record<string, number | 'foreve
   ) as Record<string, number | 'forever'>
 }
 
+interface ConfigRow {
+  key: string
+  value: string
+}
+
+function configRowsValid(rows: ConfigRow[]): boolean {
+  const keys = rows.map((r) => r.key.trim())
+  return (
+    keys.every((k) => k !== '') &&
+    new Set(keys).size === keys.length &&
+    rows.every((r) => r.value.trim() !== '')
+  )
+}
+
+function configRowsToValue(rows: ConfigRow[]): Record<string, string> {
+  return Object.fromEntries(rows.map((r) => [r.key.trim(), r.value.trim()]))
+}
+
 function hasEnvFallback(entry: SettingEntry): entry is SettingEntry & { env_var: string } {
   return entry.env_var !== null
 }
@@ -118,6 +149,7 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
   const [names, setNames] = useState<string[]>([])
   const [nameInput, setNameInput] = useState('')
   const [horizonRows, setHorizonRows] = useState<HorizonRow[]>([])
+  const [configRows, setConfigRows] = useState<ConfigRow[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -135,6 +167,13 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
               daysText: h === 'forever' ? '' : String(h),
               forever: h === 'forever',
             }))
+          : []
+      )
+      setConfigRows(
+        entry.kind === 'datafusion_config'
+          ? Object.entries(current as Record<string, string | number | boolean>).map(
+              ([key, v]) => ({ key, value: String(v) })
+            )
           : []
       )
       setNames(entry.kind === 'name_list' ? [...(current as string[])] : [])
@@ -157,6 +196,7 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
     if (entry.kind === 'bool') return boolValue
     if (entry.kind === 'count' || entry.kind === 'days') return Number(countText)
     if (entry.kind === 'tag_horizons') return horizonRowsToValue(horizonRows)
+    if (entry.kind === 'datafusion_config') return configRowsToValue(configRows)
     // A name typed but not yet confirmed with Enter is still part of what the admin sees.
     const trimmed = nameInput.trim()
     return trimmed && !names.includes(trimmed) ? [...names, trimmed] : names
@@ -169,11 +209,16 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
         ? validDays(countText)
         : entry.kind === 'tag_horizons'
           ? horizonRowsValid(horizonRows)
-          : true
+          : entry.kind === 'datafusion_config'
+            ? configRowsValid(configRows)
+            : true
   const canSubmit = !isSubmitting && inputValid
 
   const updateRow = (i: number, patch: Partial<HorizonRow>) =>
     setHorizonRows(horizonRows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+
+  const updateConfigRow = (i: number, patch: Partial<ConfigRow>) =>
+    setConfigRows(configRows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
 
   const handleSubmit = async () => {
     setIsSubmitting(true)
@@ -321,6 +366,52 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
               <p className="text-xs text-accent-warning">
                 Removing or shortening an override lets older blocks be deleted at the next hourly
                 pass. This cannot be undone.
+              </p>
+            </div>
+          )}
+          {entry.kind === 'datafusion_config' && (
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-theme-text-secondary">
+                DataFusion options
+              </div>
+              {configRows.map((row, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    aria-label={`Option ${i + 1}`}
+                    placeholder="datafusion.execution.target_partitions"
+                    className="flex-1 min-w-0 bg-app-bg border border-theme-border rounded-md px-2 py-1.5 text-sm font-mono text-theme-text-primary outline-hidden focus:border-accent-link"
+                    value={row.key}
+                    onChange={(e) => updateConfigRow(i, { key: e.target.value })}
+                  />
+                  <input
+                    type="text"
+                    aria-label={`Value ${i + 1}`}
+                    placeholder="value"
+                    className="w-24 bg-app-bg border border-theme-border rounded-md px-2 py-1.5 text-sm font-mono text-theme-text-primary outline-hidden focus:border-accent-link"
+                    value={row.value}
+                    onChange={(e) => updateConfigRow(i, { value: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove option ${i + 1}`}
+                    onClick={() => setConfigRows(configRows.filter((_, j) => j !== i))}
+                    className="text-theme-text-muted hover:text-red-400"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfigRows([...configRows, { key: '', value: '' }])}
+              >
+                Add option
+              </Button>
+              <p className="text-xs text-theme-text-muted">
+                Keys and values are checked by the server on save. Candidate keys are listed in the
+                admin documentation under &quot;DataFusion session config&quot;.
               </p>
             </div>
           )}

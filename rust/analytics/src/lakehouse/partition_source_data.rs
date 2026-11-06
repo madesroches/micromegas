@@ -272,11 +272,8 @@ pub async fn fetch_partition_source_data(
     let block_partitions = existing_partitions
         .filter("blocks", "global", &blocks_file_schema_hash(), insert_range)
         .partitions;
-    let reader_factory = lakehouse.reader_factory().clone();
     let df = query_partitions(
-        lakehouse.runtime().clone(),
-        reader_factory,
-        lakehouse.lake().blob_storage.inner(),
+        &lakehouse,
         Arc::new(blocks_view_schema()),
         Arc::new(block_partitions),
         &sql,

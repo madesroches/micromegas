@@ -3,11 +3,14 @@
 //! tests that read process env are `#[serial]` and restore it through `EnvGuard`.
 
 use micromegas::settings::{
-    DbOverrides, EnvFallbacks, SETTINGS, SelfServiceSettings, SettingsSource, find_spec,
-    parse_tag_horizons, shadowed,
+    DbOverrides, EnvFallbacks, SETTINGS, SelfServiceSettings, ServiceRole,
+    SettingsDataFusionConfig, SettingsSource, find_spec, parse_tag_horizons, shadowed,
 };
 use micromegas_analytics::delete::RetentionHorizon;
+use micromegas_analytics::lakehouse::datafusion_config::DataFusionConfigSource;
 use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
+use micromegas_tracing::levels::{LevelFilter, set_max_level};
+use micromegas_tracing::test_utils::{collect_logs, init_in_memory_tracing};
 use serde_json::{Value, json};
 use serial_test::serial;
 use std::collections::BTreeMap;
@@ -443,4 +446,128 @@ async fn payload_retention_errors_when_the_store_is_unreachable() {
         std::time::Duration::from_secs(60),
     );
     assert!(settings.payload_retention().await.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// DataFusion config
+// ---------------------------------------------------------------------------
+
+const DF_QUERY: &str = "datafusion_config_query";
+const DF_MAINTENANCE: &str = "datafusion_config_maintenance";
+
+#[test]
+fn datafusion_config_specs_validate_strictly() {
+    for key in [DF_QUERY, DF_MAINTENANCE] {
+        let s = spec(key);
+        assert_eq!(s.kind.as_str(), "datafusion_config");
+        assert_eq!(s.default, "{}");
+        assert!(s.env_var.is_none());
+        assert!(s.validate(&json!({})).is_ok());
+        assert!(
+            s.validate(&json!({"datafusion.execution.target_partitions": 2}))
+                .is_ok()
+        );
+        assert!(s.validate(&json!([])).is_err());
+        assert!(
+            s.validate(&json!({"datafusion.no_such_option": 1}))
+                .is_err()
+        );
+        assert!(
+            s.validate(&json!({"datafusion.sql_parser.collect_spans": false}))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn stored_datafusion_config_skips_a_rejected_entry_but_not_a_non_object() {
+    let parsed = DbOverrides::from_rows(rows(&[(
+        DF_QUERY,
+        json!({
+            "datafusion.execution.target_partitions": 1,
+            "datafusion.removed_by_an_upgrade": 1,
+        }),
+    )]))
+    .expect("an unknown key must not fail the load");
+    assert_eq!(parsed.stored_keys(), vec![DF_QUERY]);
+    assert_eq!(
+        parsed.datafusion_config_query.expect("stored").to_string(),
+        "datafusion.execution.target_partitions=1"
+    );
+    assert!(DbOverrides::from_rows(rows(&[(DF_MAINTENANCE, json!([1]))])).is_err());
+}
+
+fn df_source() -> Arc<SettingsSource> {
+    let db = DbOverrides::from_rows(rows(&[
+        (
+            DF_QUERY,
+            json!({"datafusion.execution.target_partitions": 1}),
+        ),
+        (
+            DF_MAINTENANCE,
+            json!({"datafusion.execution.target_partitions": 3}),
+        ),
+    ]))
+    .expect("parse");
+    Arc::new(SettingsSource::with_overrides(
+        env_with(&[], SelfServiceSettings::default()),
+        db,
+    ))
+}
+
+#[tokio::test]
+async fn datafusion_config_resolves_per_role_else_empty() {
+    let source = df_source();
+    assert_eq!(
+        source
+            .datafusion_config(ServiceRole::Query)
+            .await
+            .unwrap()
+            .to_string(),
+        "datafusion.execution.target_partitions=1"
+    );
+    assert_eq!(
+        source
+            .datafusion_config(ServiceRole::Maintenance)
+            .await
+            .unwrap()
+            .to_string(),
+        "datafusion.execution.target_partitions=3"
+    );
+    let unset = SettingsSource::with_overrides(
+        env_with(&[], SelfServiceSettings::default()),
+        DbOverrides::default(),
+    );
+    assert!(
+        unset
+            .datafusion_config(ServiceRole::Query)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn settings_datafusion_config_logs_once_per_distinct_value() {
+    let guard = init_in_memory_tracing();
+    set_max_level(LevelFilter::Trace);
+    let query = SettingsDataFusionConfig::new(df_source(), ServiceRole::Query);
+    let maintenance = SettingsDataFusionConfig::new(df_source(), ServiceRole::Maintenance);
+    for _ in 0..3 {
+        query.overrides().await.unwrap();
+    }
+    maintenance.overrides().await.unwrap();
+    let lines: Vec<String> = collect_logs(&guard.sink)
+        .into_iter()
+        .map(|l| l.msg)
+        .filter(|m| m.starts_with("datafusion config"))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "datafusion config (query): datafusion.execution.target_partitions=1".to_string(),
+            "datafusion config (maintenance): datafusion.execution.target_partitions=3".to_string(),
+        ]
+    );
 }

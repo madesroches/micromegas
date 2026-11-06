@@ -125,6 +125,26 @@ async fn invalid_value_is_400_before_any_db_access() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+#[serial]
+async fn unknown_datafusion_option_is_400_naming_the_key() {
+    let response = app(true)
+        .oneshot(put(
+            "/api/settings/datafusion_config_query",
+            r#"{"value":{"datafusion.execution.no_such_option":1}}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert!(
+        String::from_utf8_lossy(&body).contains("datafusion.execution.no_such_option"),
+        "{body:?}"
+    );
+}
+
 #[test]
 fn entries_cover_every_registered_setting_with_stored_values_merged() {
     let updated_at = Utc.with_ymd_and_hms(2026, 10, 21, 9, 14, 0).unwrap();
@@ -177,6 +197,17 @@ fn entries_cover_every_registered_setting_with_stored_values_merged() {
     assert_eq!(retention["kind"], "tag_horizons");
     assert!(retention["env_var"].is_null());
     assert_eq!(retention["default"], json!({}));
+    for key in ["datafusion_config_query", "datafusion_config_maintenance"] {
+        let entry = json
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|e| e["key"] == key)
+            .expect("datafusion config entry");
+        assert_eq!(entry["kind"], "datafusion_config");
+        assert_eq!(entry["default"], json!({}));
+        assert!(entry["env_var"].is_null());
+    }
     assert!(views["value"].is_null());
     assert!(views["updated_at"].is_null());
     assert!(views["updated_by"].is_null());

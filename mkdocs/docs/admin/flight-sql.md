@@ -174,6 +174,46 @@ A query that waits longer than the temporary-file expiry of about an hour may fa
 object-not-found error if its partitions were replaced while it waited; a wait that long means the
 service is badly overloaded.
 
+## DataFusion session config
+
+Every DataFusion session starts from DataFusion's defaults, so options such as
+`datafusion.execution.target_partitions` follow the number of cores the host exposes. On a
+container with a CPU quota smaller than that, set the `datafusion_config_query` [setting](authorization.md#settings)
+(Admin -> Settings) to a JSON object of overrides:
+
+```json
+{"datafusion.execution.target_partitions": 2}
+```
+
+Values may be strings, numbers or booleans. Keys you do not list keep DataFusion's defaults, and an
+unset setting leaves the service on pure defaults. The query and maintenance services each have their
+own key (`datafusion_config_query` and `datafusion_config_maintenance`). A change is picked up within
+one settings cache TTL (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, 60 s by default) with no restart.
+
+* `datafusion.execution.parquet.enable_page_index`, `datafusion.sql_parser.collect_spans` and
+  `datafusion.catalog.information_schema` are fixed on every session and are rejected if listed.
+* `datafusion.runtime.*` keys are not accepted; the memory budget stays
+  `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB`.
+* Merges keep their own forced optimizer settings (`repartition_file_scans`, `enable_round_robin_repartition`,
+  `repartition_aggregations`, `repartition_joins`, `prefer_existing_sort`); overrides of those apply to
+  ordinary queries only.
+* The service logs `datafusion config (query): <key>=<value>, ...` the first time it builds a session and
+  whenever the value changes (`maintenance` for the daemon).
+* A FlightSQL server built with `with_isolation_config` pins its settings source, which also turns off
+  the DB-backed overrides.
+
+Candidate keys:
+
+| Key | Effect |
+|---|---|
+| `datafusion.execution.target_partitions` | Parallelism of each plan. Defaults to the visible core count. |
+| `datafusion.execution.planning_concurrency` | Concurrency used while planning. Defaults to the visible core count. |
+| `datafusion.execution.batch_size` | Rows per record batch. |
+| `datafusion.optimizer.repartition_file_min_size` | Minimum file size, in bytes, before a scan is split across partitions. |
+
+On a quota'd container, pair `datafusion.execution.target_partitions` with `TOKIO_WORKER_THREADS` so
+the async runtime does not over-fan either.
+
 ## Health and readiness
 
 The gRPC server does not itself serve HTTP. Pass `--health-listen-addr` to start

@@ -21,7 +21,7 @@ use tokio::task::{JoinError, JoinSet};
 
 use super::cron_task::{CronTask, TaskCallback};
 use super::pg_stats::PgStatsTask;
-use crate::settings::SettingsSource;
+use crate::settings::{ServiceRole, SettingsDataFusionConfig, SettingsSource};
 
 /// Resolves and sorts the view-carrying task's per-tick view list from `registry.current()`: the
 /// base plus every DDL-defined view with an `update_group`, sorted by that group. Computed fresh
@@ -429,7 +429,8 @@ pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc
 ///   each view-carrying task resolves and sorts its own view list from `view_registry.current()`
 ///   fresh on every tick, so a view set created or dropped after the daemon started is picked up
 ///   without a restart.
-/// * `settings` - Source of the payload retention policy, read on every hourly pass.
+/// * `settings` - Source of the payload retention policy, read on every hourly pass, and of the
+///   `datafusion_config_maintenance` overrides applied to every session the daemon builds.
 /// * `shutdown` - Future that completes when the process should begin shutting down.
 /// * `grace` - Maximum time to wait for in-flight tasks after the shutdown signal.
 pub async fn daemon<F>(
@@ -443,6 +444,13 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     use super::shutdown::ShutdownFanout;
+
+    // Wrapped before `lakehouse` is cloned into the cron tasks so every materialization and
+    // merge session applies the maintenance overrides.
+    let lakehouse = lakehouse.with_datafusion_config(Arc::new(SettingsDataFusionConfig::new(
+        settings.clone(),
+        ServiceRole::Maintenance,
+    )));
 
     // Loaded once, synchronously, before the cron tasks are spawned -- failing startup on error,
     // the way `migrate_lakehouse` already does -- so the daemon never materializes with a

@@ -192,6 +192,14 @@ export MICROMEGAS_RETENTION_DAYS=30
 The flag takes precedence over the environment variable, which in turn takes
 precedence over the default; a stored `retention_days` setting beats all three.
 
+## DataFusion session config
+
+Materialization and merge sessions apply the `datafusion_config_maintenance` [setting](authorization.md#settings),
+independently of the query service's `datafusion_config_query`, since the two usually run on different
+hardware. The value shape, fixed keys, pickup delay, the `datafusion config (maintenance): ...` log line
+and the candidate keys are described in [FlightSQL: DataFusion session config](flight-sql.md#datafusion-session-config).
+Merges keep their own forced optimizer settings regardless of the overrides.
+
 ## Metadata Postgres self-observability
 
 Once a minute, the daemon samples the metadata Postgres's standard `pg_stat_*`

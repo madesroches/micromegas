@@ -513,12 +513,9 @@ async fn fetch_bucket_counts(
              ORDER BY bucket;"#
     );
     let filtered = partitions.filter_insert_range(insert_range).partitions;
-    let reader_factory = lakehouse.reader_factory().clone();
     let df = instrument_named!(
         query_partitions(
-            lakehouse.runtime().clone(),
-            reader_factory,
-            lakehouse.lake().blob_storage.inner(),
+            &lakehouse,
             blocks_view.get_file_schema(),
             Arc::new(filtered),
             &sql,
@@ -582,12 +579,9 @@ pub async fn fetch_process_blocks(
 ) -> Result<Vec<Arc<PartitionSourceBlock>>> {
     let filtered = partitions.filter_insert_range(*range).partitions;
     let sql = process_batch_sql(&process.process_id, stream_tag, range);
-    let reader_factory = lakehouse.reader_factory().clone();
     let df = instrument_named!(
         query_partitions(
-            lakehouse.runtime().clone(),
-            reader_factory,
-            lakehouse.lake().blob_storage.inner(),
+            &lakehouse,
             blocks_view.get_file_schema(),
             Arc::new(filtered),
             &sql,
@@ -653,12 +647,9 @@ async fn fetch_stream_metadata_map(
         GROUP BY stream_id;"#
     );
     let filtered = partitions.filter_insert_range(insert_range).partitions;
-    let reader_factory = lakehouse.reader_factory().clone();
     let df = instrument_named!(
         query_partitions(
-            lakehouse.runtime().clone(),
-            reader_factory,
-            lakehouse.lake().blob_storage.inner(),
+            &lakehouse,
             blocks_view.get_file_schema(),
             Arc::new(filtered),
             &sql,
@@ -706,11 +697,8 @@ async fn get_insert_time_range(
         AND begin_time <= '{end_range_iso}'
         AND end_time >= '{begin_range_iso}';"#
     );
-    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        lakehouse.runtime().clone(),
-        reader_factory,
-        lakehouse.lake().blob_storage.inner(),
+        &lakehouse,
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -758,11 +746,8 @@ pub async fn generate_stream_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
-    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        lakehouse.runtime().clone(),
-        reader_factory,
-        lakehouse.lake().blob_storage.inner(),
+        &lakehouse,
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -878,12 +863,9 @@ pub async fn generate_stream_jit_partitions(
                  AND insert_time < '{end_iso}'
                  ORDER BY insert_time, block_id;"#
         );
-        let reader_factory = lakehouse.reader_factory().clone();
         let df = instrument_named!(
             query_partitions(
-                lakehouse.runtime().clone(),
-                reader_factory,
-                lakehouse.lake().blob_storage.inner(),
+                &lakehouse,
                 blocks_view.get_file_schema(),
                 Arc::new(filtered),
                 &sql,
@@ -969,12 +951,9 @@ pub async fn generate_process_jit_partitions(
         AND end_time >= '{begin_range_iso}';"#
     );
 
-    let reader_factory = lakehouse.reader_factory().clone();
     let df = instrument_named!(
         query_partitions(
-            lakehouse.runtime().clone(),
-            reader_factory,
-            lakehouse.lake().blob_storage.inner(),
+            &lakehouse,
             blocks_view.get_file_schema(),
             Arc::new(partitions),
             &sql,
