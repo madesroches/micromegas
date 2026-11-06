@@ -27,8 +27,8 @@ While admin mode is on, the page's chrome changes colour so the elevated state i
 - `BLOCKED_FUNCTIONS` (`:90`) and `contains_blocked_function` (`:97`) do a lower-cased substring
   match on three names: `retire_partitions`, `retire_partition_by_metadata` and
   `retire_partition_by_file`.
-- `stream_query_handler` (`:197`) runs that check on `request.sql` *before* `substitute_macros`
-  (`:264`), so the text that is checked is not the text that runs.
+- `stream_query_handler` (`:187`) runs that check on `request.sql` *before* `substitute_macros`
+  (`:261`), so the text that is checked is not the text that runs.
 - Nothing checks DDL (`CREATE [OR REPLACE] / DROP MATERIALIZED VIEW`), which FlightSQL
   intercepts in `do_get` (`rust/public/src/servers/flight_sql_service_impl.rs:919`).
 - Nothing checks `materialize_partitions`, `regenerate_partitions`, `deny_queries` or
@@ -67,8 +67,11 @@ extractor (`rust/analytics-web-srv/src/auth/handlers.rs:583`), as `settings.rs` 
   issues `list_query_denials` / `deny_queries` / `remove_query_denial` through it.
 - Notebook cells execute in `src/lib/screen-renderers/useCellExecution.ts`, through `executeSql`
   (`:61`) and the two `fetchQueryIPC` calls (`:289,327`).
-- Notebooks auto-run on mount, on refresh, and on the auto-refresh interval
-  (`routes/ScreenPage.tsx:219-233`).
+- Notebooks auto-run on mount and on refresh in `useCellExecution.ts:474-489`; `ScreenPage` only
+  holds `handleRefresh` / `useRefreshInterval` (`:233`).
+- Under `--disable-auth`, `auth_me_no_auth` (`web_server.rs:202,662-670`) returns 200 with
+  `is_admin: true`, so the identity menu renders and offers the toggle (`lib/auth.tsx:58-62`,
+  `Header.tsx:152`).
 - The global header is `components/layout/Header.tsx`, rendered through `PageLayout`.
 - The admin routes are listed in `router.tsx:55-63`, and `AppShell.tsx` already keeps an
   `ADMIN_ONLY_PATHS` list.
@@ -103,10 +106,7 @@ pub fn classify_admin_statement(sql: &str) -> Option<AdminStatement>;
   and an admin page gets the real parse error back from the admin endpoint.
 - **Functions** keep the current lower-cased substring match, extended to the full mutating list.
   It over-blocks, for example a log search for `'%regenerate_partitions%'`, but it never
-  under-blocks. Comments, quoted identifiers and unusual whitespace all still match. An AST walk
-  would be precise but would let through any node type the walker misses (see Trade-offs).
-  Over-blocking is cheap now, because a blocked statement only needs admin mode, which an admin
-  can turn on.
+  under-blocks. Comments, quoted identifiers and unusual whitespace all still match.
 - The read-only admin functions are **not** in the list and stay on `/api/query-stream`.
 - `BLOCKED_FUNCTIONS` and `contains_blocked_function` are removed, and their tests move to the new
   module.
@@ -131,12 +131,6 @@ fixes the check-before-substitute gap described in Current State.
 - **Attribution.** Admin-mode requests use FlightSQL client type `web-admin` instead of `web`, so
   `x-client-type` (and therefore the query audit log) shows which statements came through the
   elevated path. The info log line gains `mode=admin`.
-- **No extra credential.** The issue suggested a short-lived admin-mode token. It isn't needed,
-  because the elevation is *which endpoint the app calls*, and the code that chooses the endpoint
-  depends only on the viewer's own actions (§3). Notebook config, cell SQL, variables and the URL
-  cannot reach it.
-- **Cross-site requests.** The posture is the same as today's `/api/query-stream`:
-  `SameSite=Lax` cookies and a JSON body, which needs a CORS preflight.
 - **`--disable-auth`.** Everyone is admin, so the admin endpoint is open to everyone, as every
   admin route already is in that mode. `/api/query-stream` still refuses admin statements, so the
   notebook protection holds there too.
@@ -166,35 +160,46 @@ fixes the check-before-substitute gap described in Current State.
   allows the toggle. A notebook `ScreenPage` registers that through `AdminModeContext` (§4); the
   menu stays as it is everywhere else. While the mode is on, the item reads **Disable admin
   mode**, and the header pill's **Turn off** does the same.
+- Non-notebook screen types (Table/Log/ProcessList/Metrics renderers) never get admin mode; their
+  mutating statements are always refused. The `kind: 'toggle'` registration is gated on
+  `screenType === 'notebook'`.
 - It passes `adminMode` to the renderer through `ScreenRendererProps`. Only `NotebookRenderer`
   reads it, and it forwards it to `useCellExecution`.
 - `useCellExecution` reads it through `useLatestRef`, the way it reads `viewer`, so toggling never
   re-runs cells on its own. The admin re-runs the cell, or the whole notebook, explicitly. The
   forbidden error says to do so.
 - The flag is set on `executeSql` and both `fetchQueryIPC` calls in `useCellExecution`.
+  `executeSql` (module-level, `:60`) gains an `adminMode` parameter, passed from both call sites,
+  `runQuery` (`:306`) and `runQueryAs` (`:343`).
   `PerfettoExportCell` / `perfetto-trace.ts` issue app-generated, non-mutating SQL and stay on the
   standard endpoint.
 - **It is never persisted.** It is not stored in the notebook config, the URL or any storage. A
   shared link or a saved notebook therefore cannot turn it on. A reload, navigating away, or
-  opening another screen resets it: `ScreenPage` resets the state when `screen?.name` changes.
+  opening another screen resets it: `ScreenPage` resets the state when the route (name / isNew /
+  typeParam) changes, and also when the draft is discarded, because discard remounts
+  `NotebookRenderer` (key `${screen?.name ?? 'new'}:${discardNonce}`) and its mount effect would
+  otherwise re-run every cell with the mode still on.
 - **Auto-refresh is paused while it is on.** `ScreenPage` passes `adminMode ? 0 :
   refreshIntervalMs` to `useRefreshInterval`, so a mutating cell is never re-run on a timer. The
-  stored interval (URL/config) is untouched and resumes when the mode is turned off. The header's
-  interval picker is disabled and shows *paused* (tooltip: "Paused while admin mode is on").
+  stored interval (URL/config) is untouched and resumes when the mode is turned off. In
+  `RefreshIntervalPicker`, only the interval dropdown is disabled and shows *paused* (tooltip:
+  "Paused while admin mode is on"); the Refresh button stays active.
 - **Auto-execute is off while it is on.** Only explicit actions run cells: a cell's Run / Run
   from here, and the header's Refresh button (run all). These triggers that normally run cells by
   themselves become no-ops:
   - a time-range change (`useCellExecution`'s `rawTimeRange` effect);
   - a selection change in a table/chart cell (`updateCellSelection` still records the selection
     but doesn't re-run downstream cells);
-  - editing a cell's config or SQL (`useNotebookAutoRun.scheduleAutoRun`'s 300ms debounce, which
-    would otherwise run a half-typed `DROP` as the admin types it);
+  - editing the config or SQL of a cell with `autoRunFromHere` (`useNotebookAutoRun.scheduleAutoRun`'s
+    300ms debounce, which would otherwise run a half-typed `DROP` as the admin types it);
   - picking a variable value on a cell with `autoRunFromHere`
-    (`useNotebookAutoRun.triggerAutoRun`).
+    (`useNotebookAutoRun.triggerAutoRun`);
+  - a sort change on a table/log cell (`useCellSortCheck`, which re-runs the cell's SQL through
+    `executeCellByName`).
 
-  Both hooks read the flag through a ref, so turning the mode off restores auto-execution with no
+  These hooks read the flag through a ref, so turning the mode off restores auto-execution with no
   re-run. Cells whose inputs changed keep their previous results until the admin runs them; there
-  is no stale marker. The on-mount run is unaffected because the mode always starts off.
+  is no stale marker. The on-mount run sees the mode off because the mode starts off and is reset on discard.
 
 ### 4. Visual treatment
 
@@ -237,22 +242,23 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
 1. **Server classification:** `admin_statements.rs` with `classify_admin_statement`; register it
    in `lib.rs`; remove `BLOCKED_FUNCTIONS` / `contains_blocked_function`.
 2. **Server endpoints:** in `stream_query.rs`, split out `run_stream_query` with `QueryMode`,
-   check after `substitute_macros`, add the `web-admin` client type, and add
+   run `substitute_macros` and the classification before the empty-data-source check and
+   `cache.resolve`, add the `web-admin` client type, and add
    `admin_stream_query_handler` with the `AdminUser` extractor. In `web_server.rs`, mount
    `/api/admin/query-stream` next to `/api/query-stream`.
 3. **Front-end plumbing:** `adminMode` in `StreamQueryParams`; `queryStreamUrl` in
    `arrow-stream.ts`; `useStreamQuery` passes it through.
 4. **Admin pages:** `QueryDenyListPage` passes `adminMode: true`.
 5. **Admin mode context:** `src/lib/admin-mode.tsx` (`AdminModeContext`, `isAdminRoute`);
-   provider and frame in `AppShell.tsx`; stripe, pill and the identity-menu item in `Header.tsx`.
-   Check that the identity menu renders under `--disable-auth`; the manual run in Manual
-   Verification depends on it.
-6. **Notebook toggle:** `ScreenPage.tsx` (state, registering `kind: 'toggle'`, reset on screen
-   change); `ScreenRendererProps.adminMode`; `NotebookRenderer.tsx` →
-   `useCellExecution.ts` (endpoint, auto-execute gates) and `useNotebookAutoRun.ts` (gates).
+   provider and frame in `AppShell.tsx`; stripe, pill and the identity-menu item in `Header.tsx`;
+   `RefreshIntervalPicker.tsx` disables the interval dropdown and shows *paused*.
+6. **Notebook toggle:** `ScreenPage.tsx` (state, registering `kind: 'toggle'`, reset on route change and on discard); `ScreenRendererProps.adminMode`; `NotebookRenderer.tsx` →
+   `useCellExecution.ts` (endpoint, auto-execute gates), `useNotebookAutoRun.ts` and
+   `useCellSortCheck.ts` (gates).
 7. **Update the #1768 plan:** in `tasks/1768_view_sets_admin_ui_plan.md` §3, replace "shows the
-   admin-mode toggle state and disables Create / Edit / Drop" with "issues every query with
-   `adminMode: true`", and drop the toggle from its Decisions.
+   admin-mode toggle state and disables Create / Edit / Drop with a prompt to enable it while off"
+   with "issues every query with `adminMode: true`", and drop or reword its Decisions entry
+   "Writes depend on #1769's admin mode; a client-side toggle alone is not a security boundary.".
 8. **Docs and `CHANGELOG.md`.**
 
 ## Files to Modify
@@ -265,9 +271,12 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
   `src/routes/QueryDenyListPage.tsx`, `src/routes/ScreenPage.tsx`,
   `src/lib/screen-renderers/NotebookRenderer.tsx`, `src/lib/screen-renderers/useCellExecution.ts`,
   `src/lib/screen-renderers/useNotebookAutoRun.ts`,
-  the `ScreenRendererProps` type, `src/components/layout/AppShell.tsx`,
-  `src/components/layout/Header.tsx`, plus tests
-- Docs: `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/functions-reference.md`,
+  `src/lib/screen-renderers/useCellSortCheck.ts`,
+  `src/lib/screen-renderers/index.ts` (`ScreenRendererProps`, `:16-46`),
+  `src/components/layout/AppShell.tsx`, `src/components/layout/Header.tsx`,
+  `src/components/layout/RefreshIntervalPicker.tsx`, plus tests
+- Docs: `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/query-guide/query-audit-log.md`,
+  `mkdocs/docs/admin/functions-reference.md`,
   `mkdocs/docs/admin/materialized-views.md`, `CHANGELOG.md`, `tasks/1768_view_sets_admin_ui_plan.md`
 
 ## Trade-offs
@@ -289,7 +298,7 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
   which this issue isn't about. It can be added later on the admin endpoint without changing the
   front end's endpoint choice.
 - **Substring match vs. AST walk for functions.** The walk is precise, but it can let a call
-  through through any expression or table-factor position the visitor misses. Substring matching
+  through any expression or table-factor position the visitor misses. Substring matching
   can only over-block, and over-blocking now costs a click rather than "use the CLI".
 - **Enforce in FlightSQL (a client-supplied "restricted" header that skips registering mutating
   functions and refuses DDL)** instead of in the web server. It is exact, but it touches the public
@@ -331,8 +340,12 @@ Open in a browser (self-contained; tokens copied from `src/styles/globals.css`):
 
 - `mkdocs/docs/admin/web-app.md`: a new "Admin mode" section covering the two endpoints, implicit
   admin pages, the notebook toggle, what is refused, and the red chrome. Rewrite the Query Deny
-  List paragraph at `:204-210`, since that limitation is gone. Document `POST
+  List text at about `:184-210` (it says the page uses `POST /api/query-stream`, and documents the
+  substring-guard limitation, which is gone). Document `POST
   /api/admin/query-stream` next to `/api/query-stream`.
+- `mkdocs/docs/query-guide/query-audit-log.md`: add `web-admin` to the client column values
+  (`:204`) and update the attribution text at `:259-260` and `:277-281`, which says
+  `/api/query-stream` requests are `client="web"`.
 - `mkdocs/docs/admin/functions-reference.md` and `materialized-views.md`: one line each saying
   that from the web app these run only from admin pages or in a notebook with admin mode on.
 - `CHANGELOG.md` (Web app): new endpoint, the extended refusal (DDL plus four more functions), the
@@ -360,17 +373,15 @@ All coverage is no-DB unit tests.
 - `Standard` mode refuses a statement that only becomes `regenerate_partitions(...)` after
   `substitute_macros`. This pins the ordering fix.
 - `Admin` mode does not classify.
-- The refusal happens before data-source resolution, so a cache that would fail proves no
-  FlightSQL connection was attempted.
+- The refusal happens before data-source resolution: the request has a non-empty `data_source` and
+  a failing cache (`lazy_pool()` + `DataSourceCache::new`, as `routing_tests.rs:420`), which proves
+  no FlightSQL connection was attempted.
 
 **Rust** (`tests/routing_tests.rs`):
 
 - `/api/admin/query-stream` returns 403 for a non-admin `ValidatedUser` and reaches the handler for
   an admin.
 - It is mounted under `--disable-auth`.
-
-These are silent-failure auth checks, so they are automated even though they are easy to try by
-hand.
 
 **Vitest:**
 
@@ -382,31 +393,26 @@ hand.
   execute, an explicit `executeCell` / `executeFromCell` / refresh trigger does, and turning the
   mode off doesn't run anything.
 - `useNotebookAutoRun`: with admin mode on, `scheduleAutoRun` and `triggerAutoRun` don't execute.
+- `useCellSortCheck`: with admin mode on, a sort change doesn't re-run the cell's SQL.
 - `ScreenPage`: with admin mode on, `useRefreshInterval` gets `0` and the stored interval is
-  unchanged; turning it off restores the interval. The state resets when the screen changes; a saved config never contains it; a
-  `?admin=…` URL param has no effect.
+  unchanged; turning it off restores the interval. The state resets when the route changes and when the draft is discarded; a saved config never
+  contains it; a `?admin=…` URL param has no effect.
 - `Header`: the identity menu offers *Enable admin mode* only to an admin on a notebook (not to a
   non-admin, not on other screen types or pages). It becomes *Disable admin mode* while on. The
   pill's *Turn off* clears it.
 - `AppShell` / `Header`: the chrome appears on admin routes and with the toggle on, and not on
   `/admin` or `/admin/ingestion-keys`.
 
-No live-DB test: no bug has occurred in the wild.
-
 ## Manual Verification
 
-Against `local_test_env/ai_scripts/start_services.py --monolith`, with auth disabled so the user is
-admin:
+Against `python3 local_test_env/ai_scripts/start_services.py --monolith --disable-auth`, so the
+user is admin:
 
-1. Create a notebook whose cell is `SELECT * FROM regenerate_partitions('log_stats', 'global', now()
-   - INTERVAL '1 hour', now())`. Expected: the cell errors with the admin-mode hint.
+1. Create a notebook whose cell is `SELECT * FROM regenerate_partitions('log_stats', now() -
+   INTERVAL '1 hour', now(), 3600)`. Expected: the cell errors with the admin-mode hint.
 2. Open the identity menu, choose **Enable admin mode**, and re-run the cell. Expected: red
-   stripe, frame and pill appear, and the cell returns log rows.
+   stripe, frame and pill appear, and the cell returns task-progress log rows.
 3. Reload the page. Expected: admin mode is off and the cell is refused again.
 4. On Admin → Query Deny List, add a rule with expression `sql LIKE '%retire_partitions%'`.
    Expected: the rule is created (it was refused before).
-
-Not automated: these check the browser → web server → FlightSQL wiring and the look of the
-chrome, which a mocked hook cannot show. Any breakage would be obvious the first time someone
-tries it.
 
