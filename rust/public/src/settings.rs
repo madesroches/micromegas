@@ -11,18 +11,23 @@
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use micromegas_analytics::delete::{MAX_RETENTION_DAYS, PayloadRetention, RetentionHorizon};
+use micromegas_analytics::lakehouse::datafusion_config::{
+    DataFusionConfigOverrides, DataFusionConfigSource,
+};
 use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas_auth::db_audience_grants::DbAudienceGrantsConfig;
 use micromegas_auth::db_snapshot::{SnapshotLoader, SnapshotSource};
 use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub const PUBLIC_VIEW_SETS: &str = "public_view_sets";
 pub const RETENTION_DAYS: &str = "retention_days";
 pub const RETENTION_BY_STREAM_TAG: &str = "retention_by_stream_tag";
+pub const DATAFUSION_CONFIG_QUERY: &str = "datafusion_config_query";
+pub const DATAFUSION_CONFIG_MAINTENANCE: &str = "datafusion_config_maintenance";
 pub const SELF_SERVICE_MINT: &str = "self_service_mint";
 pub const SELF_SERVICE_MAX_CLAIMS_PER_CALLER: &str = "self_service_max_claims_per_caller";
 pub const SELF_SERVICE_MAX_KEYS_PER_CALLER: &str = "self_service_max_keys_per_caller";
@@ -45,6 +50,8 @@ pub enum SettingKind {
     Days,
     /// JSON object mapping a stream tag to a `Days` integer or the string `"forever"`.
     TagHorizons,
+    /// JSON object mapping a DataFusion config key to a string, number or boolean value.
+    DataFusionConfig,
 }
 
 impl SettingKind {
@@ -55,6 +62,7 @@ impl SettingKind {
             SettingKind::NameList => "name_list",
             SettingKind::Days => "days",
             SettingKind::TagHorizons => "tag_horizons",
+            SettingKind::DataFusionConfig => "datafusion_config",
         }
     }
 }
@@ -92,6 +100,20 @@ pub const SETTINGS: &[SettingSpec] = &[
         kind: SettingKind::TagHorizons,
         default: "{}",
         description: "Per stream tag override of how long raw payloads are kept: a number of days or \"forever\". A stream with several overridden tags keeps the longest.",
+    },
+    SettingSpec {
+        key: DATAFUSION_CONFIG_QUERY,
+        env_var: None,
+        kind: SettingKind::DataFusionConfig,
+        default: "{}",
+        description: "DataFusion config overrides for every FlightSQL query session, e.g. {\"datafusion.execution.target_partitions\": 2}. Parquet page-index reading, span collection and the information schema are fixed and cannot be overridden; merges keep their own forced optimizer settings.",
+    },
+    SettingSpec {
+        key: DATAFUSION_CONFIG_MAINTENANCE,
+        env_var: None,
+        kind: SettingKind::DataFusionConfig,
+        default: "{}",
+        description: "DataFusion config overrides for the maintenance daemon's materialization and merge sessions, e.g. {\"datafusion.execution.target_partitions\": 2}. Parquet page-index reading, span collection and the information schema are fixed and cannot be overridden; merges keep their own forced optimizer settings.",
     },
     SettingSpec {
         key: SELF_SERVICE_MINT,
@@ -154,6 +176,10 @@ impl SettingSpec {
             }
             SettingKind::TagHorizons => {
                 parse_tag_horizons(self.key, value)?;
+            }
+            SettingKind::DataFusionConfig => {
+                DataFusionConfigOverrides::parse_strict(value)
+                    .with_context(|| format!("{}: invalid DataFusion config", self.key))?;
             }
         }
         Ok(())
@@ -254,13 +280,18 @@ pub struct DbOverrides {
     pub max_grants_per_caller: Option<i64>,
     pub retention_days: Option<u32>,
     pub retention_by_stream_tag: Option<BTreeMap<String, RetentionHorizon>>,
+    pub datafusion_config_query: Option<Arc<DataFusionConfigOverrides>>,
+    pub datafusion_config_maintenance: Option<Arc<DataFusionConfigOverrides>>,
 }
 
 impl DbOverrides {
     /// Builds the typed set from `(key, value)` rows. Keys missing from [`SETTINGS`] are ignored,
     /// because during a rolling upgrade a newer replica may have written keys an older one does
     /// not know. A known key that fails validation fails the whole parse rather than falling back
-    /// to env for that key, which could silently widen exposure.
+    /// to env for that key, which could silently widen exposure. The DataFusion config keys are
+    /// the exception: an entry DataFusion rejects (removed or renamed by an upgrade) is skipped
+    /// with a warning, since failing the load would take isolation and self-service down too.
+    /// Only a non-object value fails the parse.
     pub fn from_rows<I>(rows: I) -> Result<Self>
     where
         I: IntoIterator<Item = (String, serde_json::Value)>,
@@ -270,8 +301,10 @@ impl DbOverrides {
             let Some(spec) = find_spec(&key) else {
                 continue;
             };
-            spec.validate(&value)
-                .with_context(|| format!("invalid stored value for settings.{key}"))?;
+            if spec.kind != SettingKind::DataFusionConfig {
+                spec.validate(&value)
+                    .with_context(|| format!("invalid stored value for settings.{key}"))?;
+            }
             match spec.key {
                 PUBLIC_VIEW_SETS => {
                     out.isolation = Some(Arc::new(IsolationConfig {
@@ -285,6 +318,15 @@ impl DbOverrides {
                 RETENTION_DAYS => out.retention_days = Some(days(spec.key, &value)?),
                 RETENTION_BY_STREAM_TAG => {
                     out.retention_by_stream_tag = Some(parse_tag_horizons(spec.key, &value)?);
+                }
+                DATAFUSION_CONFIG_QUERY | DATAFUSION_CONFIG_MAINTENANCE => {
+                    let parsed = DataFusionConfigOverrides::parse_lenient(&value)
+                        .with_context(|| format!("invalid stored value for settings.{key}"))?;
+                    if spec.key == DATAFUSION_CONFIG_QUERY {
+                        out.datafusion_config_query = Some(Arc::new(parsed));
+                    } else {
+                        out.datafusion_config_maintenance = Some(Arc::new(parsed));
+                    }
                 }
                 other => bail!("settings key {other:?} is registered but not handled"),
             }
@@ -315,6 +357,12 @@ impl DbOverrides {
         }
         if self.retention_by_stream_tag.is_some() {
             keys.push(RETENTION_BY_STREAM_TAG);
+        }
+        if self.datafusion_config_query.is_some() {
+            keys.push(DATAFUSION_CONFIG_QUERY);
+        }
+        if self.datafusion_config_maintenance.is_some() {
+            keys.push(DATAFUSION_CONFIG_MAINTENANCE);
         }
         keys
     }
@@ -473,7 +521,8 @@ impl SettingsSource {
     }
 
     /// An explicit isolation config that ignores both env and DB, for `with_isolation_config`
-    /// and tests. The self-service half is the built-in defaults.
+    /// and tests. The self-service half is the built-in defaults, and the DataFusion config
+    /// overrides are empty.
     pub fn pinned(isolation: Arc<IsolationConfig>) -> Self {
         Self::env_only(EnvFallbacks {
             isolation,
@@ -532,6 +581,19 @@ impl SettingsSource {
         })
     }
 
+    /// The DataFusion config overrides for `role`: the stored value, else none.
+    pub async fn datafusion_config(
+        &self,
+        role: ServiceRole,
+    ) -> Result<Arc<DataFusionConfigOverrides>> {
+        let o = self.overrides().await?;
+        let stored = match role {
+            ServiceRole::Query => &o.datafusion_config_query,
+            ServiceRole::Maintenance => &o.datafusion_config_maintenance,
+        };
+        Ok(stored.clone().unwrap_or_default())
+    }
+
     /// Best-effort startup diagnostic: warns about each env var that is set but ignored because
     /// the setting has a stored value.
     pub async fn warn_on_shadowed_env(&self) {
@@ -564,4 +626,67 @@ pub fn shadowed(
         .iter()
         .filter(|s| stored_keys.contains(&s.key) && s.env_var.is_some_and(&env_is_set))
         .collect()
+}
+
+/// Which service a [`SettingsDataFusionConfig`] serves; each reads its own setting key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceRole {
+    Query,
+    Maintenance,
+}
+
+impl std::fmt::Display for ServiceRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServiceRole::Query => write!(f, "query"),
+            ServiceRole::Maintenance => write!(f, "maintenance"),
+        }
+    }
+}
+
+/// [`DataFusionConfigSource`] backed by the DB settings for one service role.
+pub struct SettingsDataFusionConfig {
+    settings: Arc<SettingsSource>,
+    role: ServiceRole,
+    last_logged: Mutex<Option<Arc<DataFusionConfigOverrides>>>,
+}
+
+impl SettingsDataFusionConfig {
+    pub fn new(settings: Arc<SettingsSource>, role: ServiceRole) -> Self {
+        Self {
+            settings,
+            role,
+            last_logged: Mutex::new(None),
+        }
+    }
+}
+
+impl std::fmt::Debug for SettingsDataFusionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsDataFusionConfig")
+            .field("role", &self.role)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl DataFusionConfigSource for SettingsDataFusionConfig {
+    async fn overrides(&self) -> Result<Arc<DataFusionConfigOverrides>> {
+        let current = self.settings.datafusion_config(self.role).await?;
+        // Process properties are fixed before the DB is reachable, so the applied config is
+        // reported through the log instead, once per distinct value.
+        let changed = {
+            let mut last = self.last_logged.lock().expect("last_logged lock");
+            if last.as_deref() == Some(&*current) {
+                false
+            } else {
+                *last = Some(current.clone());
+                true
+            }
+        };
+        if changed {
+            info!("datafusion config ({}): {current}", self.role);
+        }
+        Ok(current)
+    }
 }

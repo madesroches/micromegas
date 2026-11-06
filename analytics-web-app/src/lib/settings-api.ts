@@ -5,9 +5,14 @@
  */
 import { authenticatedFetch, getApiBase } from './api'
 
-export type SettingKind = 'bool' | 'count' | 'name_list' | 'days' | 'tag_horizons'
+export type SettingKind = 'bool' | 'count' | 'name_list' | 'days' | 'tag_horizons' | 'datafusion_config'
 
-export type SettingValue = boolean | number | string[] | Record<string, number | 'forever'>
+export type SettingValue =
+  | boolean
+  | number
+  | string[]
+  | Record<string, number | 'forever'>
+  | Record<string, string | number | boolean>
 
 export interface SettingEntry {
   key: string

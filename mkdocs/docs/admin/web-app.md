@@ -134,11 +134,11 @@ key is revoked.
 ## Settings
 
 **Admin → Settings** (`/admin/settings`) edits the deployment-wide [settings](authorization.md#settings)
-stored in the database: `public_view_sets`, the four `self_service_*` settings, `retention_days` and
-`retention_by_stream_tag`. Rows are grouped by key prefix, each showing the stored value, a source
+stored in the database: `public_view_sets`, the four `self_service_*` settings, `retention_days`,
+`retention_by_stream_tag`, `datafusion_config_query` and `datafusion_config_maintenance`. Rows are grouped by key prefix, each showing the stored value, a source
 pill (**Database** for a stored value, **Env / default** otherwise, or **Default** for a setting with
 no environment variable), and who last changed it. **Edit** opens a dialog that fits the setting (a
-toggle, a number, a list of names, or a tag-to-retention row editor); **Reset** deletes the stored
+toggle, a number, a list of names, a tag-to-retention row editor, or an option-to-value row editor); **Reset** deletes the stored
 value so the key reverts to its environment variable or default (`retention_by_stream_tag` has no
 environment variable, so it reverts to no overrides). A change reaches every replica within one cache
 refresh, not immediately. The page cannot see each service's environment, so it shows the variable

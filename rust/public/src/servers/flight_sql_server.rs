@@ -1,5 +1,7 @@
 use crate::config::DEFAULT_FLIGHTSQL_LISTEN_ADDR;
-use crate::settings::{EnvFallbacks, SettingsSource, settings_cache_ttl};
+use crate::settings::{
+    EnvFallbacks, ServiceRole, SettingsDataFusionConfig, SettingsSource, settings_cache_ttl,
+};
 use anyhow::{Context, Result};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
@@ -186,7 +188,8 @@ impl FlightSqlServerBuilder {
     /// Set an explicit `IsolationConfig` -- the data-isolation config consumed by the row-level
     /// filter (`OwnershipRewrite`). Mirrors `with_read_policy`: wins regardless of how auth is
     /// configured, pinning the settings source so neither the `public_view_sets` setting nor its
-    /// `MICROMEGAS_PUBLIC_VIEW_SETS` env fallback is consulted.
+    /// `MICROMEGAS_PUBLIC_VIEW_SETS` env fallback is consulted. A pinned source also turns off the
+    /// DB-backed `datafusion_config_query` overrides: sessions run on DataFusion's defaults.
     pub fn with_isolation_config(mut self, config: Arc<IsolationConfig>) -> Self {
         self.isolation_config = Some(config);
         self
@@ -308,6 +311,10 @@ impl FlightSqlServerBuilder {
         if warn_on_shadowed_env {
             settings.warn_on_shadowed_env().await;
         }
+        let lakehouse = lakehouse.with_datafusion_config(Arc::new(SettingsDataFusionConfig::new(
+            settings.clone(),
+            ServiceRole::Query,
+        )));
 
         let session_configurator: Arc<dyn SessionConfigurator> =
             if let Some(cfg) = self.session_configurator {

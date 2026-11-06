@@ -45,7 +45,7 @@ use datafusion::{
     arrow::{array::RecordBatch, datatypes::SchemaRef},
     common::TableReference,
     datasource::DefaultTableSource,
-    execution::{context::SessionContext, object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
+    execution::{context::SessionContext, object_store::ObjectStoreUrl},
     logical_expr::{ScalarUDF, TableSource, async_udf::AsyncScalarUDF},
     prelude::*,
 };
@@ -75,16 +75,21 @@ async fn register_table(
 /// query_partitions_context returns a context to run queries using the partitions as the "source" table
 #[span_fn]
 pub async fn query_partitions_context(
-    runtime: Arc<RuntimeEnv>,
-    reader_factory: Arc<ReaderFactory>,
-    object_store: Arc<dyn object_store::ObjectStore>,
+    lakehouse: &LakehouseContext,
     schema: SchemaRef,
     partitions: Arc<Vec<Partition>>,
 ) -> Result<SessionContext> {
-    let table = PartitionedTableProvider::new(schema, reader_factory, partitions);
+    let table =
+        PartitionedTableProvider::new(schema, lakehouse.reader_factory().clone(), partitions);
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
-    ctx.register_object_store(object_store_url.as_ref(), object_store);
+    let ctx = SessionContext::new_with_config_rt(
+        lakehouse.session_config().await?,
+        lakehouse.runtime().clone(),
+    );
+    ctx.register_object_store(
+        object_store_url.as_ref(),
+        lakehouse.lake().blob_storage.inner(),
+    );
     ctx.register_table(
         TableReference::Bare {
             table: "source".into(),
@@ -98,15 +103,12 @@ pub async fn query_partitions_context(
 // query_partitions returns a dataframe, leaving the option of streaming the results
 #[span_fn]
 pub async fn query_partitions(
-    runtime: Arc<RuntimeEnv>,
-    reader_factory: Arc<ReaderFactory>,
-    object_store: Arc<dyn object_store::ObjectStore>,
+    lakehouse: &LakehouseContext,
     schema: SchemaRef,
     partitions: Arc<Vec<Partition>>,
     sql: &str,
 ) -> Result<DataFrame> {
-    let ctx =
-        query_partitions_context(runtime, reader_factory, object_store, schema, partitions).await?;
+    let ctx = query_partitions_context(lakehouse, schema, partitions).await?;
     Ok(ctx.sql(sql).await?)
 }
 
@@ -310,7 +312,9 @@ pub async fn make_session_context(
     // Disable page index reading for backward compatibility with legacy Parquet files
     // Legacy files may have incomplete ColumnIndex metadata (missing null_pages field)
     // which causes errors in DataFusion 51+ with Arrow 57.0 when reading page indexes
-    let config = SessionConfig::default()
+    let config = lakehouse
+        .session_config()
+        .await?
         .set_bool("datafusion.execution.parquet.enable_page_index", false)
         // Populate `Diagnostic`/`Span` on plan-time errors (unknown column, ambiguous
         // reference, type mismatch, ...) so a caller-facing message can point at a

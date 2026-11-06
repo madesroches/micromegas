@@ -51,6 +51,8 @@ function entries(stored: Record<string, unknown> = {}) {
     ),
     base('retention_days', 'days', 90, 'MICROMEGAS_RETENTION_DAYS'),
     base('retention_by_stream_tag', 'tag_horizons', {}, null),
+    base('datafusion_config_query', 'datafusion_config', {}, null),
+    base('datafusion_config_maintenance', 'datafusion_config', {}, null),
   ]
 }
 
@@ -97,7 +99,7 @@ describe('SettingsPage', () => {
     await screen.findByText('self_service_mint')
     expect(screen.getAllByText('Database')).toHaveLength(1)
     expect(screen.getAllByText('Env / default')).toHaveLength(3)
-    expect(screen.getAllByText('Default')).toHaveLength(1)
+    expect(screen.getAllByText('Default')).toHaveLength(3)
     expect(screen.getByLabelText('Reset self_service_mint')).toBeInTheDocument()
     expect(screen.queryByLabelText('Reset public_view_sets')).not.toBeInTheDocument()
   })
@@ -177,8 +179,8 @@ describe('SettingsPage', () => {
     renderPage()
 
     await screen.findByText('retention_by_stream_tag')
-    expect(screen.getByText(/no env fallback/)).toBeInTheDocument()
-    expect(screen.getByText('Default')).toBeInTheDocument()
+    expect(screen.getAllByText(/no env fallback/)).toHaveLength(3)
+    expect(screen.getAllByText('Default')).toHaveLength(3)
   })
 
   it('rejects 0 days in the days editor', async () => {
@@ -228,5 +230,63 @@ describe('SettingsPage', () => {
     fireEvent.change(screen.getByLabelText('Tag 2'), { target: { value: ' debug ' } })
     fireEvent.change(screen.getByLabelText('Days 2'), { target: { value: '5' } })
     expect(screen.getByText('Save')).toBeDisabled()
+  })
+
+  it('submits DataFusion config from rows, stringifying stored numbers on open', async () => {
+    const { writes } = installFetchMock({
+      datafusion_config_query: { 'datafusion.execution.target_partitions': 2 },
+    })
+    renderPage()
+
+    fireEvent.click(await screen.findByLabelText('Edit datafusion_config_query'))
+    expect(screen.getByLabelText('Value 1')).toHaveValue('2')
+    fireEvent.click(screen.getByText('Add option'))
+    fireEvent.change(screen.getByLabelText('Option 2'), {
+      target: { value: 'datafusion.execution.batch_size' },
+    })
+    fireEvent.change(screen.getByLabelText('Value 2'), { target: { value: '4096' } })
+    fireEvent.click(screen.getByLabelText('Remove option 1'))
+    fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(writes).toHaveLength(1))
+    expect(writes[0].body).toEqual({ value: { 'datafusion.execution.batch_size': '4096' } })
+  })
+
+  it('blocks Save on empty or duplicate DataFusion keys and empty values', async () => {
+    installFetchMock()
+    renderPage()
+
+    fireEvent.click(await screen.findByLabelText('Edit datafusion_config_maintenance'))
+    fireEvent.click(screen.getByText('Add option'))
+    fireEvent.change(screen.getByLabelText('Value 1'), { target: { value: '1' } })
+    expect(screen.getByText('Save')).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Option 1'), { target: { value: 'a.b' } })
+    expect(screen.getByText('Save')).not.toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Value 1'), { target: { value: '' } })
+    expect(screen.getByText('Save')).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Value 1'), { target: { value: '1' } })
+    fireEvent.click(screen.getByText('Add option'))
+    fireEvent.change(screen.getByLabelText('Option 2'), { target: { value: ' a.b ' } })
+    fireEvent.change(screen.getByLabelText('Value 2'), { target: { value: '2' } })
+    expect(screen.getByText('Save')).toBeDisabled()
+  })
+
+  it('shows the server message when DataFusion config is rejected', async () => {
+    const { fetchMock } = installFetchMock()
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) =>
+      init?.method === 'PUT'
+        ? jsonResponse(400, { code: 'INVALID', message: 'invalid DataFusion option nope.nope' })
+        : base(input, init)
+    )
+    renderPage()
+
+    fireEvent.click(await screen.findByLabelText('Edit datafusion_config_query'))
+    fireEvent.click(screen.getByText('Add option'))
+    fireEvent.change(screen.getByLabelText('Option 1'), { target: { value: 'nope.nope' } })
+    fireEvent.change(screen.getByLabelText('Value 1'), { target: { value: '1' } })
+    fireEvent.click(screen.getByText('Save'))
+
+    expect(await screen.findByText(/invalid DataFusion option nope.nope/)).toBeInTheDocument()
   })
 })

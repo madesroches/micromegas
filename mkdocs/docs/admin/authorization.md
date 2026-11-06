@@ -32,7 +32,7 @@ The variables below marked with a setting key are the **env fallback** for a dep
 
 ## Settings
 
-The variables above that have a setting key, plus `retention_by_stream_tag` (a setting with no environment variable), can be changed at runtime from
+The variables above that have a setting key, plus `retention_by_stream_tag`, `datafusion_config_query` and `datafusion_config_maintenance` (settings with no environment variable), can be changed at runtime from
 **Admin → Settings** in the web app, with no restart. A stored value lives in the
 `settings` table of the telemetry database and is read by every service through the same
 whole-table snapshot cache as the grant and group stores. Resolution order, per key:
@@ -46,6 +46,8 @@ A change reaches every replica within one cache refresh (`MICROMEGAS_AUTH_CACHE_
 60 s by default), not immediately. **Reset** on the page deletes the stored value, so the key
 reverts to its environment variable, flag or default, where one exists (`retention_by_stream_tag` has no environment variable and reverts to no overrides). Every change is recorded in the
 [control-plane audit log](control-plane-audit-log.md) as `set_setting` / `reset_setting`.
+
+`datafusion_config_query` and `datafusion_config_maintenance` hold DataFusion session config overrides for the FlightSQL and maintenance services (see [DataFusion session config](flight-sql.md#datafusion-session-config)). A write is rejected if DataFusion rejects an entry. A stored entry that DataFusion rejects after an upgrade is skipped with a warning instead of failing the whole settings load.
 
 If an environment variable is set for a key that also has a stored value, the service logs
 `<VAR> is set but ignored: settings.<key> is stored` at startup, since the variable has no effect. A stored `retention_days` that shadows an explicit `--retention-days` flag is not reported.

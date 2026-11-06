@@ -30,6 +30,8 @@ pub mod catalog;
 /// Admin UDTF that plans a view definition's merge and reports whether it streams
 pub mod check_view_merge_table_function;
 pub mod dataframe_time_bounds;
+/// Admin-managed DataFusion session config overrides
+pub mod datafusion_config;
 /// Admin UDTF that validates and inserts a query-deny-list rule
 pub mod deny_queries_table_function;
 /// Export mechanism that doubles as audit trail

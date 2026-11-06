@@ -1,6 +1,7 @@
 use super::audience_guard::{
     AudienceIndex, DEFAULT_AUDIENCE_CACHE_ENTRIES, DEFAULT_AUDIENCE_CACHE_TTL,
 };
+use super::datafusion_config::{DataFusionConfigSource, NoDataFusionOverrides};
 use super::metadata_cache::MetadataCache;
 use super::migration::migrate_lakehouse;
 use super::query_deny_list::QueryDenyList;
@@ -10,6 +11,7 @@ use crate::audience::default_audience_from_env;
 use anyhow::Context;
 use anyhow::Result;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::prelude::SessionConfig;
 use micromegas_ingestion::data_lake_config::DataLakeConfig;
 use micromegas_ingestion::data_lake_connection::{
     DataLakeConnection, WritablePolicy, connect_to_data_lake,
@@ -48,6 +50,9 @@ pub struct LakehouseContext {
     /// which path reached it. It lives here rather than on `IsolationConfig` because the
     /// maintenance daemon needs it and never builds one of those.
     default_audience: Arc<str>,
+    /// Where every session built from this context gets its DataFusion config overrides.
+    /// Per-service (query vs. maintenance), so it lives on the context each service holds.
+    datafusion_config: Arc<dyn DataFusionConfigSource>,
 }
 
 impl LakehouseContext {
@@ -118,6 +123,7 @@ impl LakehouseContext {
             audience_index,
             query_denials,
             default_audience,
+            datafusion_config: Arc::new(NoDataFusionOverrides),
         })
     }
 
@@ -150,6 +156,7 @@ impl LakehouseContext {
             audience_index,
             query_denials,
             default_audience,
+            datafusion_config: Arc::new(NoDataFusionOverrides),
         }
     }
 
@@ -183,6 +190,26 @@ impl LakehouseContext {
             runtime,
             ..self.clone()
         })
+    }
+
+    /// Clones this context with a different DataFusion config source, sharing caches and the
+    /// reader factory like [`Self::with_runtime`]. Lets the monolith's roles run different
+    /// configs off one context.
+    pub fn with_datafusion_config(&self, source: Arc<dyn DataFusionConfigSource>) -> Arc<Self> {
+        Arc::new(Self {
+            datafusion_config: source,
+            ..self.clone()
+        })
+    }
+
+    /// The base `SessionConfig` for every session: DataFusion's defaults plus this context's
+    /// overrides. Fails if the source cannot be resolved, so a misconfigured deployment does
+    /// not silently run on defaults.
+    pub async fn session_config(&self) -> Result<SessionConfig> {
+        let overrides = self.datafusion_config.overrides().await?;
+        let mut config = SessionConfig::default();
+        overrides.apply(config.options_mut())?;
+        Ok(config)
     }
 
     /// Returns the shared `ReaderFactory`.

@@ -153,6 +153,8 @@ micromegas-monolith --roles web,flightsql
 
 Valid role names: `ingestion`, `flightsql`, `maintenance`, `web`.
 
+The `flightsql` role reads the `datafusion_config_query` setting and the `maintenance` role reads `datafusion_config_maintenance`, so the two can run different [DataFusion session config](flight-sql.md#datafusion-session-config) from one process.
+
 ## Compared to the split deployment
 
 | | Monolith | Split services |
