@@ -1,0 +1,91 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Option A — In-place admin mode toggle</title>
+<style>
+:root{--app-bg:#0a0a0f;--header-bg:#12121a;--panel-bg:#12121a;--card-bg:#1a1a2e;--border-color:#2a2a3e;--border-hover:#3a3a4e;--text-primary:#e7e9ea;--text-secondary:#9ca3af;--text-muted:#6b7280;--accent-link:#1565c0;--accent-warning:#ffb300;--accent-error:#f87171;--accent-error-bright:#dc2626;--accent-success:#22c55e;--radius:.5rem;--admin:#dc2626;--admin-bg:rgba(220,38,38,.10)}
+*{box-sizing:border-box}body{margin:0;background:#050508;color:var(--text-primary);font-family:ui-sans-serif,system-ui,sans-serif;font-size:14px;line-height:1.5}
+.caption{max-width:1200px;margin:28px auto 8px;padding:0 4px;color:var(--text-secondary)}.caption b{color:var(--text-primary)}
+.frame{max-width:1200px;margin:0 auto 12px;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;background:var(--app-bg)}
+.frame.admin{border:2px solid var(--admin)}
+.stripe{height:4px;background:repeating-linear-gradient(135deg,var(--admin) 0 12px,#7f1d1d 12px 24px)}
+header{display:flex;align-items:center;justify-content:space-between;height:56px;padding:0 20px;background:var(--header-bg);border-bottom:1px solid var(--border-color)}
+.logo{font-weight:600;letter-spacing:.02em}.logo span{color:#bf360c}
+.hright{display:flex;align-items:center;gap:12px}.tr{background:var(--border-color);border-radius:6px;padding:5px 10px;color:var(--text-primary);font-size:13px}
+.avatar{width:28px;height:28px;border-radius:50%;background:var(--accent-link);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
+.pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--admin);background:var(--admin-bg);color:#fecaca;border-radius:999px;padding:3px 4px 3px 12px;font-size:12px;font-weight:600;letter-spacing:.06em}
+.pill button{background:var(--admin);color:#fff;border:0;border-radius:999px;padding:2px 10px;font:inherit;font-size:11px;letter-spacing:0;cursor:pointer}
+.page{padding:20px 24px}
+.title{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}h1{font-size:22px;font-weight:600;margin:0}
+.icon{width:34px;height:34px;border-radius:6px;background:var(--card-bg);display:flex;align-items:center;justify-content:center;color:var(--accent-link)}
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--accent-link);color:#fff;border:1px solid transparent;border-radius:6px;padding:4px 10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer}
+.btn.outline{background:transparent;border-color:var(--border-color);color:var(--text-primary)}.btn.ghost{background:transparent;color:var(--text-secondary)}
+.btn.admin{background:transparent;border-color:var(--admin);color:#fecaca}
+.banner{display:flex;gap:10px;align-items:flex-start;padding:10px 14px;border-radius:6px;border:1px solid var(--admin);background:var(--admin-bg);margin-bottom:14px;color:#fecaca}
+.banner b{color:#fff}
+.cell{border:1px solid var(--border-color);border-radius:var(--radius);background:var(--panel-bg);margin-bottom:10px}
+.cellh{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--card-bg);border-radius:8px 8px 0 0;font-size:13px}
+.cellh .name{font-family:ui-monospace,Menlo,monospace}.cellb{padding:12px}
+pre{margin:0 0 10px;padding:10px 12px;background:var(--app-bg);border:1px solid var(--border-color);border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.k{color:#1976d2}.s{color:#c3e88d}
+.err{padding:8px 12px;border:1px solid var(--accent-error);background:rgba(248,113,113,.1);border-radius:6px;color:var(--accent-error)}
+.err .hint{color:var(--text-secondary);margin-top:4px}.err a{color:#90caf9}
+.ok{color:var(--accent-success);font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--text-muted);font-weight:500;padding:6px 10px;border-bottom:1px solid var(--border-color)}td{padding:6px 10px;border-bottom:1px solid var(--border-color)}
+.mono{font-family:ui-monospace,Menlo,monospace}.muted{color:var(--text-muted)}
+.bc{color:var(--text-muted);margin-bottom:10px}.bc a{color:var(--accent-link)}
+.menu{position:absolute;right:16px;top:52px;width:240px;background:var(--panel-bg);border:1px solid var(--border-color);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:5;padding:4px 0}
+.mhead{padding:8px 16px;border-bottom:1px solid var(--border-color);font-size:13px}
+.mitem{padding:8px 16px;font-size:13px}.mitem:hover{background:var(--border-color)}
+.madmin{color:#fecaca;border-top:1px solid var(--border-color);border-bottom:1px solid var(--border-color)}.msub{color:var(--text-muted);font-size:11px;margin-left:22px}
+</style></head><body>
+
+<div class="caption"><b>1. Notebook, admin mode off (default).</b> Nothing on the page mentions admin mode. Admins find <i>Enable admin mode</i> in the identity menu (shown open here), and only on a notebook. The destructive cell is refused by <span class="mono">/api/query-stream</span>, and the error says where to opt in. The read-only cells run normally.</div>
+<div class="frame" style="overflow:visible">
+  <header style="position:relative"><div class="logo">micro<span>megas</span></div><div class="hright"><span class="tr">Last 24 hours</span><span class="tr">⟳</span><div class="avatar">AD</div><span class="muted">▾</span></div>
+    <div class="menu">
+      <div class="mhead"><div>Alex Doe</div><div class="muted" style="font-size:12px">alex@example.com</div></div>
+      <div class="mitem">👥&nbsp; Audience access</div>
+      <div class="mitem madmin">⚠&nbsp; Enable admin mode<div class="msub">This page only. Lets cells modify the lakehouse.</div></div>
+      <div class="mitem">⇥&nbsp; Sign out</div>
+    </div>
+  </header>
+  <div class="page">
+    <div class="title"><div class="icon">▤</div><h1>partition-maintenance</h1>
+      <button class="btn ghost">Save As</button><button class="btn" disabled style="opacity:.5">Save</button>
+    </div>
+    <div class="cell"><div class="cellh"><span class="name">partitions</span><span class="ok">✓ 42 rows</span></div>
+      <div class="cellb"><pre><span class="k">SELECT</span> view_set_name, <span class="k">count</span>(*) <span class="k">FROM</span> list_partitions() <span class="k">GROUP BY</span> 1</pre></div></div>
+    <div class="cell"><div class="cellh"><span class="name">rebuild_log_stats</span><span style="color:var(--accent-error)">✕ error</span></div>
+      <div class="cellb"><pre><span class="k">SELECT</span> * <span class="k">FROM</span> regenerate_partitions(<span class="s">'log_stats'</span>, <span class="s">'global'</span>, <span class="k">now</span>() - <span class="k">INTERVAL</span> <span class="s">'1 day'</span>, <span class="k">now</span>())</pre>
+      <div class="err">'regenerate_partitions' modifies the lakehouse and is not run from notebooks by default.
+        <div class="hint">Admins can enable admin mode for this page from the user menu, then re-run the cell.</div></div></div></div>
+  </div>
+</div>
+
+<div class="caption"><b>2. Notebook, admin mode on.</b> The chrome changes for as long as the mode is on: hatched red stripe, red frame, and an <i>ADMIN MODE</i> pill in the global header that turns it off. No in-page banner. Auto-refresh is paused (the interval picker shows <i>paused</i>) so mutating cells never re-run on a timer, and auto-execute is off: changing the time range, a selection, a variable or a cell's SQL runs nothing. Only Run, Run from here and Refresh execute. Turning it on does not run anything; the admin re-runs the cell. Leaving the page, opening another screen or reloading turns it off.</div>
+<div class="frame admin">
+  <div class="stripe"></div>
+  <header><div class="logo">micro<span>megas</span></div><div class="hright"><span class="pill">ADMIN MODE <button>Turn off</button></span><span class="tr">Last 24 hours</span><span class="tr" style="opacity:.55" title="Paused while admin mode is on">⟳ 30s · paused</span><div class="avatar">AD</div></div></header>
+  <div class="page">
+    <div class="title"><div class="icon">▤</div><h1>partition-maintenance</h1>
+      <button class="btn ghost">Save As</button><button class="btn" disabled style="opacity:.5">Save</button>
+    </div>
+    <div class="cell"><div class="cellh"><span class="name">partitions</span><span class="ok">✓ 42 rows</span></div>
+      <div class="cellb"><pre><span class="k">SELECT</span> view_set_name, <span class="k">count</span>(*) <span class="k">FROM</span> list_partitions() <span class="k">GROUP BY</span> 1</pre></div></div>
+    <div class="cell"><div class="cellh"><span class="name">rebuild_log_stats</span><span class="ok">✓ 24 rows</span></div>
+      <div class="cellb"><pre><span class="k">SELECT</span> * <span class="k">FROM</span> regenerate_partitions(<span class="s">'log_stats'</span>, <span class="s">'global'</span>, <span class="k">now</span>() - <span class="k">INTERVAL</span> <span class="s">'1 day'</span>, <span class="k">now</span>())</pre>
+      <table><tr><th>time</th><th>msg</th></tr><tr><td class="mono">2026-11-06 13:00</td><td>materialized log_stats [12:00, 13:00)</td></tr><tr><td class="mono">2026-11-06 14:00</td><td>materialized log_stats [13:00, 14:00)</td></tr></table></div></div>
+  </div>
+</div>
+
+<div class="caption"><b>3. Admin page (Query Deny List, View Sets).</b> Admin mode is implied and cannot be turned off, so the stripe and frame are always shown, with no toggle. Red chrome always means the same thing: statements issued from this page can modify the lakehouse.</div>
+<div class="frame admin">
+  <div class="stripe"></div>
+  <header><div class="logo">micro<span>megas</span></div><div class="hright"><span class="pill" style="padding-right:12px">ADMIN</span><div class="avatar">AD</div></div></header>
+  <div class="page">
+    <div class="bc"><a href="#">Admin</a> / Query Deny List</div>
+    <div class="title"><h1>Query Deny List</h1><button class="btn">+ Deny queries</button></div>
+    <table><tr><th>rule</th><th>match</th><th>reason</th><th>created by</th></tr>
+      <tr><td class="mono">7f3c…</td><td class="mono">sql LIKE '%thread_spans%'</td><td>runaway dashboard</td><td>ops@example.com</td></tr></table>
+  </div>
+</div>
+</body></html>
