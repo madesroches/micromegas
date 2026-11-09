@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useAuth } from '@/lib/auth'
-import { RefreshCw, ChevronDown, LogOut, ZoomIn, ZoomOut, Users } from 'lucide-react'
+import { RefreshCw, ChevronDown, LogOut, ZoomIn, ZoomOut, Users, ShieldAlert } from 'lucide-react'
 import { AppLink } from '@/components/AppLink'
+import { ADMIN_COLOR, ADMIN_STRIPE_STYLE, useAdminMode } from '@/lib/admin-mode'
 import { getConfig } from '@/lib/config'
 import { navigateTo } from '@/lib/navigation'
 import { zoomTimeRange } from '@/lib/time-range'
@@ -29,6 +30,9 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
   const { user, logout, status } = useAuth()
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const adminMode = useAdminMode()
+  const refreshPaused = adminMode.active && adminMode.kind === 'toggle'
+  const canToggleAdminMode = !!user?.is_admin && adminMode.kind === 'toggle' && !!adminMode.setActive
 
   const handleLogout = async () => {
     setIsLoggingOut(true)
@@ -54,11 +58,37 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
     // Fixed h-16 (64px) instead of padding-driven height: AppShell's fixed
     // Sidebar wrapper is offset with `top-16` to sit just below this header
     // (see AppShell.tsx), so the two must be kept in sync.
-    <header className="flex items-center justify-between px-3 sm:px-6 h-16 bg-app-header border-b border-theme-border">
+    <header className="relative flex items-center justify-between px-3 sm:px-6 h-16 bg-app-header border-b border-theme-border">
+      {adminMode.active && (
+        <div
+          data-testid="admin-mode-stripe"
+          className="absolute top-0 left-0 right-0 h-1"
+          style={ADMIN_STRIPE_STYLE}
+        />
+      )}
       <div className="flex items-center gap-3 sm:gap-6">
         <AppLink href="/" className="hover:opacity-80 transition-opacity">
           <MicromegasLogo size="sm" />
         </AppLink>
+        {adminMode.active && (
+          <div className="flex items-center gap-2">
+            <span
+              className="px-2 py-0.5 rounded text-xs font-bold tracking-wide text-white"
+              style={{ backgroundColor: ADMIN_COLOR }}
+            >
+              {adminMode.kind === 'toggle' ? 'ADMIN MODE' : 'ADMIN'}
+            </span>
+            {adminMode.kind === 'toggle' && adminMode.setActive && (
+              <button
+                onClick={() => adminMode.setActive?.(false)}
+                className="px-2 py-0.5 rounded text-xs border text-theme-text-primary hover:bg-theme-border"
+                style={{ borderColor: ADMIN_COLOR }}
+              >
+                Turn off
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2 sm:gap-4">
@@ -105,6 +135,7 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
                 onIntervalChange={onRefreshIntervalChange}
                 onRefresh={onRefresh}
                 isExecuting={isExecuting}
+                paused={refreshPaused}
               />
             ) : onRefresh ? (
               <button
@@ -122,6 +153,7 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
             onIntervalChange={onRefreshIntervalChange}
             onRefresh={onRefresh}
             isExecuting={isExecuting}
+            paused={refreshPaused}
             className="rounded-l-md"
           />
         ) : onRefresh ? (
@@ -171,6 +203,23 @@ export function Header({ onRefresh, timeRangeControl, processId, refreshInterval
                       <Users className="h-4 w-4 mr-2" />
                       Audience access
                     </AppLink>
+                    {canToggleAdminMode && (
+                      <button
+                        onClick={() => {
+                          adminMode.setActive?.(!adminMode.active)
+                          setIsUserMenuOpen(false)
+                        }}
+                        className="w-full flex items-start px-4 py-2 text-sm text-theme-text-primary hover:bg-theme-border text-left"
+                      >
+                        <ShieldAlert className="h-4 w-4 mr-2 mt-0.5 shrink-0" style={{ color: ADMIN_COLOR }} />
+                        <span>
+                          {adminMode.active ? 'Disable admin mode' : 'Enable admin mode'}
+                          <span className="block text-xs text-theme-text-muted">
+                            This page only. Lets cells modify the lakehouse.
+                          </span>
+                        </span>
+                      </button>
+                    )}
                     <button
                       onClick={handleLogout}
                       disabled={isLoggingOut}

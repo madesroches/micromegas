@@ -36,7 +36,7 @@ While a cell is running, its Run button becomes a Stop button. Clicking it abort
 
 Queries against the local WASM engine cannot be interrupted. They finish in the background, but their results are discarded.
 
-If auto-refresh is enabled, the notebook runs again on the next refresh tick.
+If auto-refresh is enabled, the notebook runs again on the next refresh tick. Auto-refresh is paused while [admin mode](../../admin/web-app.md#admin-mode) is on.
 
 ## Auto-Run
 
@@ -54,6 +54,8 @@ Each runnable query cell has an `autoRunFromHere` toggle. When enabled, changes 
 | Variable value selection | Only cells *after* the variable cell | **Immediate** — the variable's own query is not re-run since the user already chose a value |
 | Time range change | All cells from the first cell | **Immediate** |
 | Refresh button | All cells from the first cell | **Immediate** |
+
+While [admin mode](../../admin/web-app.md#admin-mode) is on, auto-run is off as well: time range changes, selections, variable choices, sort changes and cell edits do not execute anything, and only Run, Run from here and Refresh do.
 
 A re-entrance guard prevents recursive auto-run — if execution is already in progress from an auto-run trigger, additional triggers are ignored rather than creating parallel executions.
 

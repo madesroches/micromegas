@@ -27,7 +27,7 @@ transaction under an advisory lock, and checked for dependents (`check_dependent
 `execute` + `do_get`, so a DDL statement sent through `/api/query-stream` reaches the DDL branch.
 `substitute_macros` (`rust/analytics-web-srv/src/stream_query.rs:126`) only rewrites `$key` for
 keys present in `params`; with empty params the DDL text passes through untouched.
-`BLOCKED_FUNCTIONS` (`:90`) blocks `retire_partitions*` from web queries and does not touch DDL.
+`/api/query-stream` refuses view DDL and the lakehouse-modifying admin functions; the admin-only `/api/admin/query-stream` accepts them.
 
 **Read path (exists).**
 - `list_view_set_definitions()` (admin-gated) → `(view_set_name, definition_sql, update_group,
@@ -91,8 +91,8 @@ with tabs **Definition**, **Schema**, **Partitions**.
 ### 3. Create / edit / drop
 
 All three are single DDL statements, sent through the admin-mode endpoint defined by #1769
-(not `/api/query-stream`, which will reject DDL). The page shows the admin-mode toggle state and
-disables Create / Edit / Drop with a prompt to enable it while off.
+(not `/api/query-stream`, which will reject DDL). The page issues every query with `adminMode: true`, and adds
+its route to `ADMIN_ONLY_PATHS` in `src/lib/admin-mode.tsx` so it gets the red admin chrome.
 
 - **Create**: dialog with a name and a SQL editor pre-filled with a skeleton statement
   (`CREATE MATERIALIZED VIEW <name> WITH (...)` listing the required options). Sent as plain
@@ -132,7 +132,7 @@ disables Create / Edit / Drop with a prompt to enable it while off.
 | Question | Resolution |
 |---|---|
 | Which properties are editable? | The whole stored statement, as text, except the name. No structured form: the statement carries several SQL queries and options, and the DDL parser is the validator. Built-ins are read-only. |
-| Existing partitions on edit/delete? | Same as the DDL's documented behavior; the UI states it in the confirm dialog. It does not offer partition retirement (blocked on the web path by design). |
+| Existing partitions on edit/delete? | Same as the DDL's documented behavior; the UI states it in the confirm dialog. It does not offer partition retirement (out of scope by choice). |
 | How are backend errors surfaced? | Server message verbatim in an `ErrorBanner`; edits are never discarded on error. |
 
 ## Mockups
@@ -181,10 +181,9 @@ Open in a browser (self-contained, app tokens copied from `src/styles/globals.cs
 
 ## Decisions
 
-- Writes depend on #1769's admin mode; a client-side toggle alone is not a security boundary.
 - Delivery is phased: read-only page first, writes after #1769.
 
-- No partition retire/rebuild action: `retire_partitions*` is blocked for web queries on purpose.
+- No partition retire/rebuild action: leaving out retire/rebuild is a scope choice.
 - Layout: option A (master/detail), data source selector in the left column.
 - Rename is out of scope.
 - Streaming warning is fetched for the selected view only, never per list row.

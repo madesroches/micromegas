@@ -1,80 +1,170 @@
 //! Unit tests for stream_query module
 
+use analytics_web_srv::auth::{AuthToken, ValidatedUser};
+use analytics_web_srv::data_source_cache::DataSourceCache;
 use analytics_web_srv::stream_query::{
-    contains_blocked_function, encode_batch, encode_schema, sanitize_origin_label,
-    substitute_macros,
+    QueryMode, StreamQueryRequest, admin_stream_query_handler, encode_batch, encode_schema,
+    run_stream_query, sanitize_origin_label, substitute_macros,
 };
 use arrow_ipc::writer::{DictionaryTracker, IpcWriteOptions};
+use axum::{
+    Extension, Router,
+    body::Body,
+    http::{Request, StatusCode},
+    routing::post,
+};
 use datafusion::arrow::array::{
     Int32Array, RecordBatch, StringArray, TimestampNanosecondArray, UInt64Array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+use tower::ServiceExt;
 
 // =============================================================================
-// contains_blocked_function tests
+// Handler-level tests
 // =============================================================================
 
-#[test]
-fn test_blocked_function_retire_partitions() {
-    let sql = "SELECT * FROM retire_partitions()";
-    assert_eq!(
-        contains_blocked_function(sql),
-        Some("retire_partitions"),
-        "retire_partitions should be blocked"
+fn unreachable_pool() -> sqlx::PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(50))
+        .connect_lazy("postgres://localhost/unused")
+        .expect("lazy pool creation is infallible")
+}
+
+fn admin_user() -> ValidatedUser {
+    ValidatedUser {
+        subject: "admin".to_string(),
+        email: None,
+        issuer: "local".to_string(),
+        is_admin: true,
+    }
+}
+
+fn non_admin_user() -> ValidatedUser {
+    ValidatedUser {
+        subject: "reader".to_string(),
+        email: Some("reader@example.com".to_string()),
+        issuer: "local".to_string(),
+        is_admin: false,
+    }
+}
+
+fn cache() -> DataSourceCache {
+    DataSourceCache::new(unreachable_pool(), Duration::from_secs(60))
+}
+
+fn request(sql: &str, params: HashMap<String, String>, data_source: &str) -> StreamQueryRequest {
+    StreamQueryRequest {
+        sql: sql.to_string(),
+        params,
+        begin: None,
+        end: None,
+        data_source: data_source.to_string(),
+        notebook: None,
+        cell: None,
+    }
+}
+
+async fn run(req: StreamQueryRequest, mode: QueryMode) -> (StatusCode, serde_json::Value) {
+    let response = run_stream_query(AuthToken(String::new()), cache(), req, mode).await;
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("reading response body");
+    (status, serde_json::from_slice(&body).unwrap_or_default())
+}
+
+#[tokio::test]
+async fn standard_mode_refuses_statement_built_by_macro_substitution() {
+    let mut params = HashMap::new();
+    params.insert("fn".to_string(), "regenerate_partitions".to_string());
+    let (status, body) = run(
+        request("SELECT * FROM $fn('log_stats')", params, "default"),
+        QueryMode::Standard,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "FORBIDDEN");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("message")
+            .contains("regenerate_partitions")
     );
 }
 
-#[test]
-fn test_blocked_function_retire_partition_by_metadata() {
-    let sql = "SELECT retire_partition_by_metadata('test')";
-    assert_eq!(
-        contains_blocked_function(sql),
-        Some("retire_partition_by_metadata"),
-        "retire_partition_by_metadata should be blocked"
-    );
+#[tokio::test]
+async fn standard_mode_refuses_before_resolving_data_source() {
+    // The cache cannot reach a database; a 403 proves no resolution was attempted.
+    let (status, _) = run(
+        request("DROP MATERIALIZED VIEW v", HashMap::new(), "default"),
+        QueryMode::Standard,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
-#[test]
-fn test_blocked_function_retire_partition_by_file() {
-    let sql = "CALL retire_partition_by_file('some/path')";
-    assert_eq!(
-        contains_blocked_function(sql),
-        Some("retire_partition_by_file"),
-        "retire_partition_by_file should be blocked"
-    );
+#[tokio::test]
+async fn admin_mode_does_not_classify() {
+    let (status, body) = run(
+        request(
+            "SELECT * FROM regenerate_partitions('a')",
+            HashMap::new(),
+            "",
+        ),
+        QueryMode::Admin,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "DATA_SOURCE_NOT_FOUND");
+
+    let (status, _) = run(
+        request(
+            "SELECT * FROM regenerate_partitions('a')",
+            HashMap::new(),
+            "",
+        ),
+        QueryMode::Standard,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
-#[test]
-fn test_blocked_function_case_insensitive() {
-    let sql = "SELECT * FROM RETIRE_PARTITIONS()";
-    assert_eq!(
-        contains_blocked_function(sql),
-        Some("retire_partitions"),
-        "Blocked function check should be case insensitive"
-    );
+fn admin_router(user: ValidatedUser) -> Router {
+    Router::new()
+        .route("/api/admin/query-stream", post(admin_stream_query_handler))
+        .layer(Extension(cache()))
+        .layer(Extension(AuthToken(String::new())))
+        .layer(Extension(user))
 }
 
-#[test]
-fn test_allowed_query_select() {
-    let sql = "SELECT * FROM log_entries LIMIT 10";
-    assert_eq!(
-        contains_blocked_function(sql),
-        None,
-        "Normal SELECT should be allowed"
-    );
+async fn post_admin(user: ValidatedUser) -> StatusCode {
+    let body = serde_json::json!({"sql": "SELECT 1", "data_source": ""}).to_string();
+    admin_router(user)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/query-stream")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .expect("building request"),
+        )
+        .await
+        .expect("router response")
+        .status()
 }
 
-#[test]
-fn test_allowed_query_with_partition_word() {
-    // Contains "partition" but not a blocked function
-    let sql = "SELECT * FROM list_partitions()";
-    assert_eq!(
-        contains_blocked_function(sql),
-        None,
-        "list_partitions should be allowed"
-    );
+#[tokio::test]
+async fn admin_endpoint_rejects_non_admin() {
+    assert_eq!(post_admin(non_admin_user()).await, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_endpoint_reaches_handler_for_admin() {
+    // Empty data source yields 400 from the handler itself.
+    assert_eq!(post_admin(admin_user()).await, StatusCode::BAD_REQUEST);
 }
 
 // =============================================================================

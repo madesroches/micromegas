@@ -178,6 +178,12 @@ describe('QueryDenyListPage', () => {
       expect(sql).toContain('test reason')
     })
 
+    // Every query from this page, including the list reload, goes to the admin endpoint.
+    expect(mockStreamQuery.mock.calls.length).toBeGreaterThan(1)
+    for (const call of mockStreamQuery.mock.calls) {
+      expect((call[0] as { adminMode?: boolean }).adminMode).toBe(true)
+    }
+
     // Dialog closes and the list is reloaded once the rule is created.
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Deny query' })).not.toBeInTheDocument()
@@ -274,6 +280,7 @@ describe('QueryDenyListPage', () => {
       expect((removeCall![0] as { sql: string }).sql).toContain(
         "remove_query_denial('11111111-1111-1111-1111-111111111111')"
       )
+      expect((removeCall![0] as { adminMode?: boolean }).adminMode).toBe(true)
     })
 
     // Dialog closes once the in-band result reports SUCCESS.

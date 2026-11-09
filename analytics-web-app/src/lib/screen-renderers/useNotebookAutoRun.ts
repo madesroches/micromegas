@@ -4,6 +4,8 @@ interface UseNotebookAutoRunParams {
   executeFromCellByName: (name: string) => Promise<void>
   /** Execute cells after the named cell (skips the cell itself) */
   executeAfterCellByName: (name: string) => Promise<void>
+  /** While true nothing runs automatically; only explicit Run / Refresh executes */
+  adminMode?: boolean
 }
 
 interface UseNotebookAutoRunResult {
@@ -31,6 +33,7 @@ interface UseNotebookAutoRunResult {
 export function useNotebookAutoRun({
   executeFromCellByName,
   executeAfterCellByName,
+  adminMode = false,
 }: UseNotebookAutoRunParams): UseNotebookAutoRunResult {
   // Guard ref prevents re-entrance when auto-run itself sets variables
   const autoRunningRef = useRef(false)
@@ -41,7 +44,10 @@ export function useNotebookAutoRun({
   // Ref for executeAfterCellByName (used by triggerAutoRun for value changes)
   const executeAfterCellByNameRef = useRef(executeAfterCellByName)
 
+  const adminModeRef = useRef(adminMode)
+
   useLayoutEffect(() => {
+    adminModeRef.current = adminMode
     executeFromCellByNameRef.current = executeFromCellByName
     executeAfterCellByNameRef.current = executeAfterCellByName
   })
@@ -63,6 +69,8 @@ export function useNotebookAutoRun({
       if (existing) clearTimeout(existing)
       timers.set(cellName, setTimeout(() => {
         timers.delete(cellName)
+        // Checked when the timer fires so a run scheduled before the mode was turned on is dropped.
+        if (adminModeRef.current) return
         executeFromCellByNameRef.current(cellName)
       }, 300))
     },
@@ -71,7 +79,7 @@ export function useNotebookAutoRun({
 
   const triggerAutoRun = useCallback(
     (cellName: string, autoRunFromHere?: boolean) => {
-      if (!autoRunFromHere || autoRunningRef.current) return
+      if (!autoRunFromHere || autoRunningRef.current || adminModeRef.current) return
       autoRunningRef.current = true
       // Skip re-executing the variable cell itself — its value was already set
       // by the user interaction; only execute downstream cells.

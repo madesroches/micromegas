@@ -16,6 +16,8 @@ any other definition.
 
 ## Creating and dropping a view
 
+From the web app, `CREATE` and `DROP MATERIALIZED VIEW` run only in a notebook with [admin mode](web-app.md#admin-mode) on.
+
 ```sql
 CREATE [OR REPLACE] MATERIALIZED VIEW <name> WITH (
   extract_query = $$

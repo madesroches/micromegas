@@ -377,6 +377,10 @@ pub fn build_protected_routes(
             post(stream_query::stream_query_handler),
         )
         .route(
+            &format!("{base_path}/api/admin/query-stream"),
+            post(stream_query::admin_stream_query_handler),
+        )
+        .route(
             &format!("{base_path}/api/screen-types"),
             get(screens::list_screen_types),
         )

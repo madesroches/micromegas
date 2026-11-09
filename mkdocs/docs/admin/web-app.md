@@ -185,8 +185,8 @@ GLBs missing the camera log a console error and fall back to the default seed fr
 **Admin → Query Deny List** (`/admin/query-deny-list`) is a front end for the three SQL functions
 described in [Admin Functions → Query Deny List](functions-reference.md#query-deny-list) —
 `list_query_denials()`, `deny_queries(match_expr, reason)`, `remove_query_denial(rule_id)` —
-issued through the same `useStreamQuery` → `POST /api/query-stream` path every other SQL-driven
-page in this app uses, against whichever data source the admin has selected. There is no
+issued through `POST /api/admin/query-stream` (see [Admin mode](#admin-mode)), against
+whichever data source the admin has selected. There is no
 dedicated REST route and no second copy of the rule store: the screen manages the deny list of
 the deployment it's pointed at.
 
@@ -201,13 +201,42 @@ Like every admin route, this one is gated by `AuthGuard requireAdmin` client-sid
 `flight-sql-srv`'s own admin check server-side — the client-side guard is UX only; a non-admin
 who hand-typed the SQL would get "function not found" regardless.
 
-**One interaction with the existing web-query guard.** `analytics-web-srv`'s `BLOCKED_FUNCTIONS`
-substring check (`stream_query.rs`) rejects any web query merely *mentioning* `retire_partitions`,
-`retire_partition_by_metadata`, or `retire_partition_by_file` — including inside a deny
-expression's own string literal, e.g. `deny_queries('sql LIKE ''%retire_partitions%''', '...')`.
-That guard is deliberately left as-is (narrowing it to call position would open a comment-based
-bypass), so a deny rule that needs to mention one of those names has to be created from
-`micromegas-query` or a notebook instead of this screen.
+Because the page uses the admin endpoint, a rule's expression may mention any function name,
+for example `deny_queries('sql LIKE ''%retire_partitions%''', '...')`. A deny rule that targets
+`client = 'web'` does not cover queries sent in admin mode, which report client `web-admin`.
+
+## Admin mode
+
+The web server has two query endpoints. `POST /api/query-stream` runs queries with the viewing
+user's token but refuses every statement that modifies the lakehouse: view DDL (`CREATE [OR
+REPLACE] / DROP MATERIALIZED VIEW`, including text that looks like DDL but does not parse) and the
+functions `retire_partitions`, `retire_partition_by_metadata`, `retire_partition_by_file`,
+`materialize_partitions`, `regenerate_partitions`, `deny_queries` and `remove_query_denial`. The
+check runs on the SQL after notebook variables are substituted and matches the function names as
+case-insensitive text, so it also refuses a query that only mentions one of them in a string
+literal or a comment. Read-only admin functions (`list_query_denials`, `list_view_set_definitions`,
+`check_view_merge`) are not affected. `POST /api/admin/query-stream` accepts the same requests
+without that check and is restricted to admins.
+
+The page decides which endpoint it uses, never the content of a notebook:
+
+- **Admin pages** (`/admin/*` pages that are admin-only) always use the admin endpoint.
+- **Notebooks** use the standard endpoint. An admin can choose **Enable admin mode** in the user
+  menu to send that notebook's queries to the admin endpoint for the current page visit. The mode
+  is never saved, and a reload, navigating away or discarding the draft turns it off. Other screen
+  types never get admin mode.
+
+While admin mode is on, nothing runs by itself: auto-refresh is paused, and time range changes,
+selections, variable changes, sorting and editing a cell do not re-run anything. Only a cell's
+Run, Run from here and the header Refresh button execute. Turning the mode on does not re-run
+cells.
+
+The page chrome changes to make this visible: a hatched red stripe above the header, a red frame
+around the page, and an `ADMIN` pill (`ADMIN MODE`, with a **Turn off** button, in a notebook).
+
+Queries sent through the admin endpoint report client type `web-admin` instead of `web` in the
+[query audit log](../query-guide/query-audit-log.md). With `--disable-auth` everyone is an admin,
+so the admin endpoint is open to everyone, but `/api/query-stream` still refuses these statements.
 
 ## Audience Access
 
@@ -310,7 +339,8 @@ The same container image works for any base path - no rebuild needed.
 Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
 - `GET /api/health` — Health check (public)
 - `GET /api/ready` — Readiness check (public)
-- `POST /api/query-stream` — Execute SQL query (streaming NDJSON)
+- `POST /api/query-stream` — Execute SQL query (streaming NDJSON); refuses statements that modify the lakehouse
+- `POST /api/admin/query-stream` — Same, admin only, accepts statements that modify the lakehouse (see [Admin mode](#admin-mode))
 - `GET /api/screen-types` — List screen types
 - `GET /api/screen-types/{type_name}/default` — Default config for a screen type
 - `GET /api/screens`, `POST /api/screens` — List / create screens

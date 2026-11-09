@@ -297,6 +297,7 @@ export function NotebookRenderer({
   onExecutingChange,
   onErrorChange,
   screenName,
+  adminMode = false,
 }: ScreenRendererProps) {
   const [, setSearchParams] = useSearchParams()
 
@@ -363,6 +364,7 @@ export function NotebookRenderer({
     engine,
     notebookName: screenName,
     viewer,
+    adminMode,
   })
 
   // Report execution state to parent
@@ -407,7 +409,7 @@ export function NotebookRenderer({
   )
 
   // Auto-run management
-  const { scheduleAutoRun, triggerAutoRun } = useNotebookAutoRun({ executeFromCellByName, executeAfterCellByName })
+  const { scheduleAutoRun, triggerAutoRun } = useNotebookAutoRun({ executeFromCellByName, executeAfterCellByName, adminMode })
 
   // Handle time range selection from charts (drag-to-zoom)
   const handleTimeRangeSelect = useCallback((from: Date, to: Date) => {
@@ -415,7 +417,7 @@ export function NotebookRenderer({
   }, [onTimeRangeChange])
 
   // Re-execute table cells when sort options change
-  useCellSortCheck({ executionCells, executeCellByName })
+  useCellSortCheck({ executionCells, executeCellByName, adminMode })
 
   // UI state
   const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null)

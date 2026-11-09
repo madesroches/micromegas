@@ -179,7 +179,7 @@ function QueryDenyListPageContent() {
   const loadRules = useCallback(() => {
     if (!dataSource) return
     setListError(null)
-    listQuery.execute({ sql: buildListQueryDenialsSql(), dataSource })
+    listQuery.execute({ sql: buildListQueryDenialsSql(), dataSource, adminMode: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataSource])
 
@@ -216,6 +216,7 @@ function QueryDenyListPageContent() {
       await denyQuery.execute({
         sql: buildDenyQueriesSql(matchExpr, reason),
         dataSource,
+        adminMode: true,
       })
     },
     [denyQuery, dataSource]
@@ -253,6 +254,7 @@ function QueryDenyListPageContent() {
     await removeQuery.execute({
       sql: buildRemoveQueryDenialSql(removeTarget.ruleId),
       dataSource,
+      adminMode: true,
     })
   }, [removeTarget, removeQuery, dataSource])
 

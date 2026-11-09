@@ -1,5 +1,6 @@
 //! Analytics web server library
 
+pub mod admin_statements;
 pub mod analytics_keys;
 pub mod app_db;
 pub mod audience_grants;

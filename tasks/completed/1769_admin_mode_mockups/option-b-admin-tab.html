@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Option B — Separate admin tab</title>
+<style>
+:root{--app-bg:#0a0a0f;--header-bg:#12121a;--panel-bg:#12121a;--card-bg:#1a1a2e;--border-color:#2a2a3e;--text-primary:#e7e9ea;--text-secondary:#9ca3af;--text-muted:#6b7280;--accent-link:#1565c0;--accent-error:#f87171;--accent-success:#22c55e;--radius:.5rem;--admin:#dc2626}
+*{box-sizing:border-box}body{margin:0;background:#050508;color:var(--text-primary);font-family:ui-sans-serif,system-ui,sans-serif;font-size:14px;line-height:1.5}
+.caption{max-width:1200px;margin:28px auto 8px;padding:0 4px;color:var(--text-secondary)}.caption b{color:var(--text-primary)}
+.tabs{max-width:1200px;margin:0 auto;display:flex;gap:2px}
+.btab{padding:6px 14px;border-radius:8px 8px 0 0;background:#1f1f2a;color:var(--text-secondary);font-size:12px}
+.btab.on{background:#2a2a38;color:var(--text-primary)}.btab.adm{background:#450a0a;color:#fecaca}
+.frame{max-width:1200px;margin:0 auto 12px;border:1px solid var(--border-color);border-radius:0 8px 8px 8px;overflow:hidden;background:var(--app-bg)}
+.frame.admin{--app-bg:#140608;--header-bg:#3b0a0a;--panel-bg:#1c0a0d;--card-bg:#2a0f14;--border-color:#5c1a1a;border:2px solid var(--admin);background:var(--app-bg)}
+header{display:flex;align-items:center;justify-content:space-between;height:56px;padding:0 20px;background:var(--header-bg);border-bottom:1px solid var(--border-color)}
+.logo{font-weight:600}.logo span{color:#bf360c}.tag{margin-left:10px;font-size:11px;font-weight:700;letter-spacing:.08em;color:#fff;background:var(--admin);padding:2px 8px;border-radius:4px}
+.hright{display:flex;gap:12px;align-items:center}.tr{background:var(--border-color);border-radius:6px;padding:5px 10px;font-size:13px}
+.avatar{width:28px;height:28px;border-radius:50%;background:var(--accent-link);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
+.page{padding:20px 24px}.title{display:flex;align-items:center;gap:12px;margin-bottom:16px}h1{font-size:22px;font-weight:600;margin:0}
+.btn{background:var(--accent-link);color:#fff;border:1px solid transparent;border-radius:6px;padding:4px 10px;font:inherit;font-size:13px}
+.btn.ghost{background:transparent;color:var(--text-secondary)}.btn.admin{background:transparent;border-color:var(--admin);color:#fecaca}
+.cell{border:1px solid var(--border-color);border-radius:var(--radius);background:var(--panel-bg);margin-bottom:10px}
+.cellh{display:flex;justify-content:space-between;padding:8px 12px;background:var(--card-bg);border-radius:8px 8px 0 0;font-size:13px;font-family:ui-monospace,Menlo,monospace}
+.cellb{padding:12px}pre{margin:0;padding:10px 12px;background:var(--app-bg);border:1px solid var(--border-color);border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.k{color:#1976d2}.s{color:#c3e88d}.err{margin-top:10px;padding:8px 12px;border:1px solid var(--accent-error);background:rgba(248,113,113,.1);border-radius:6px;color:var(--accent-error)}
+.ok{color:var(--accent-success)}.mono{font-family:ui-monospace,Menlo,monospace}
+</style></head><body>
+
+<div class="caption"><b>1. Regular tab.</b> The notebook never runs destructive statements here. Admins get <i>Open as admin ↗</i>, which opens a second browser tab.</div>
+<div class="tabs"><div class="btab on">partition-maintenance — micromegas</div><div class="btab adm">[ADMIN] partition-maintenance</div></div>
+<div class="frame">
+  <header><div class="logo">micro<span>megas</span></div><div class="hright"><span class="tr">Last 24 hours</span><div class="avatar">AD</div></div></header>
+  <div class="page"><div class="title"><h1>partition-maintenance</h1><button class="btn ghost">Save As</button><button class="btn admin">Open as admin ↗</button></div>
+    <div class="cell"><div class="cellh"><span>rebuild_log_stats</span><span style="color:var(--accent-error)">✕ error</span></div>
+      <div class="cellb"><pre><span class="k">SELECT</span> * <span class="k">FROM</span> regenerate_partitions(<span class="s">'log_stats'</span>, ...)</pre>
+      <div class="err">'regenerate_partitions' modifies the lakehouse. Open this notebook as admin to run it.</div></div></div>
+  </div>
+</div>
+
+<div class="caption"><b>2. Admin tab.</b> The whole theme is swapped (red-tinted surfaces, red header, <i>[ADMIN]</i> in the tab title) for the lifetime of the tab, and reloading keeps it in admin mode. The regular tab is unaffected. <b>Problem:</b> the new tab has to learn that it is in admin mode without a URL flag, because a shared <span class="mono">?admin=1</span> link would turn it on for whoever opens it. That leaves a <span class="mono">postMessage</span> handshake with the opener or per-tab <span class="mono">sessionStorage</span> seeded across <span class="mono">window.open</span>, and browsers handle both differently.</div>
+<div class="tabs"><div class="btab">partition-maintenance — micromegas</div><div class="btab adm on" style="background:#7f1d1d;color:#fff">[ADMIN] partition-maintenance</div></div>
+<div class="frame admin">
+  <header><div><span class="logo">micro<span>megas</span></span><span class="tag">ADMIN</span></div><div class="hright"><span class="tr">Last 24 hours</span><div class="avatar">AD</div></div></header>
+  <div class="page"><div class="title"><h1>partition-maintenance</h1></div>
+    <div class="cell"><div class="cellh"><span>rebuild_log_stats</span><span class="ok">✓ 24 rows</span></div>
+      <div class="cellb"><pre><span class="k">SELECT</span> * <span class="k">FROM</span> regenerate_partitions(<span class="s">'log_stats'</span>, ...)</pre></div></div>
+  </div>
+</div>
+</body></html>

@@ -104,6 +104,8 @@ GROUP BY view_set_name;
 
 ### `retire_partitions(view_set, view_instance, start_time, end_time)`
 
+From the web app, the functions that modify the lakehouse (this one, `materialize_partitions`, `regenerate_partitions`, the `retire_partition_by_*` functions, `deny_queries` and `remove_query_denial`) run only from admin pages or in a notebook with [admin mode](web-app.md#admin-mode) on.
+
 !!! note "Requires admin"
     Only callable by an authenticated admin -- see [Authorization](authorization.md#admin-gated-lakehouse-functions). Otherwise callers, including API keys, get "function not found".
 

@@ -135,6 +135,17 @@ describe('AppShell (via router.tsx)', () => {
 
     await screen.findByText('maps-page')
     expect(sidebarMounts.count).toBe(0)
+    expect(screen.queryByTestId('admin-mode-frame')).toBeNull()
+  })
+
+  it('shows the admin frame on an admin route for an admin user', async () => {
+    authState.status = 'authenticated'
+    authState.user = { sub: 'u1', is_admin: true }
+
+    renderAt('/admin/maps')
+
+    await screen.findByText('maps-page')
+    expect(screen.getByTestId('admin-mode-frame')).toBeTruthy()
   })
 
   it('does not mount Sidebar on /admin/settings for a non-admin user', async () => {
