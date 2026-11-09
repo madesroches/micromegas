@@ -249,8 +249,8 @@ pub enum SessionRange {
     other variants, so built-in views behave exactly as they do now.
 - `TableScanRewrite` is installed only for `Query`.
 - Changing the parameter type makes the compiler enumerate every call site, about 20 in the
-  sources and tests. Each picks its variant from the table above. FlightSQL picks `Query` or
-  `Unbounded`. Callers that pass `NullPartitionProvider` only to plan switch to `NoPartitions`.
+  sources and tests. Each picks its variant from the table above. FlightSQL `do_get` picks `Query` or
+  `Unbounded`, and its prepared-statement path (plan only) uses `NoPartitions`. Callers that pass `NullPartitionProvider` only to plan switch to `NoPartitions`.
 - Merge sessions (`QueryMerger::execute_merge_query` via `make_merge_session_context`, and
   `view_merge_check.rs`) already pass `Some(insert_range)`; it maps to
   `SessionRange::Query(insert_range)`, keeping today's behavior.
@@ -347,7 +347,7 @@ step 8.
     - `materialized_view.rs`: store the range, and handle `NoPartitions` and `Unbounded` in
       `scan`;
     - every `make_session_context` / `MaterializedView::new` caller picks its variant, including
-      `flight_sql_service_impl.rs` (`Query` or `Unbounded`), `view_definition.rs` and
+      `flight_sql_service_impl.rs` (`do_get`: `Query` or `Unbounded`; prepared-statement creation: `NoPartitions`), `view_definition.rs` and
       `SqlBatchView::new` (`NoPartitions`), and `make_batch_partition_spec` and
       `export_log_view.rs`'s `make_batch_partition_spec` (`Snapshot`); `merge.rs` /
       `make_merge_session_context` and `view_merge_check.rs` map `Some(insert_range)` to `Query`;
@@ -434,8 +434,9 @@ step 8.
 
 ## Decisions
 
-- Converting a view between daemon-updated and on-demand with `CREATE OR REPLACE` is neither
-  rejected nor specially handled. Units grow to contain daemon-written rows, and the daemon's
+- Converting a view between daemon-updated and on-demand with `CREATE OR REPLACE` is
+  refused in the on-demand direction by the existing `check_dependents_survive` while a
+  daemon-updated view reads the view; otherwise neither direction is specially handled. Units grow to contain daemon-written rows, and the daemon's
   freshness check sums JIT rows inside its own buckets, so either direction converges. The issue
   leaves the conversion out of scope, and nothing here needs to block it.
 - Rejecting `source_partition_delta` / `merge_partition_delta` on on-demand views is a v1 stopgap.
@@ -544,7 +545,7 @@ fake cannot reach. A break shows up immediately as empty results or daemon log l
    success.
 3. `micromegas-query "SELECT count(*) FROM od_log_counts" --begin 24h`, then
    `micromegas-query "SELECT begin_insert_time, end_insert_time, num_rows, updated FROM list_partitions() WHERE view_set_name = 'od_log_counts' ORDER BY begin_insert_time" --begin 24h`.
-   Expected: non-zero count; 1-hour partitions, minute-sized ones at the newest edge.
+   Expected: non-zero count; 1-hour partitions, 5-minute and 1-minute partitions at the newest edge.
 4. Generate more telemetry and run step 3 again. Expected: only the newest-edge partitions have
    a new `updated` time.
 5. Query `--begin 7d`. Expected: 6-hour partitions replace the closed 1-hour ones (promotion).
