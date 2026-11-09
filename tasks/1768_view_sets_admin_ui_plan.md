@@ -1,5 +1,7 @@
 # Admin Web UX for View Sets (Issue #1768) Plan
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1768
+
 ## Overview
 
 **Prerequisite: issue #1769 (server-enforced admin mode).** Notebook cells reach the same
