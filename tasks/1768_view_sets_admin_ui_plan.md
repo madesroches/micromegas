@@ -72,7 +72,10 @@ Left: the data source selector (`DataSourceField`) above the table of view sets 
 with tabs **Definition**, **Schema**, **Partitions**.
 
 - **Health** is deliberately cheap, computed from data already loaded: `ddl` row absent from
-  `list_view_sets()` → `failed to load`; otherwise `ok`; `builtin` → `read-only`. The streaming
+  `list_view_sets()` → `failed to load`; otherwise `ok`; `builtin` → `read-only`. Health reflects
+  the replica that answered `list_view_sets()`: other replicas reload definitions only every
+  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` (default 60s), so after a create the label can read
+  `failed to load` until then; the page tooltip/docs say so. The streaming
   warning is **not** a list column: it costs a plan per view, so it is fetched only for the
   selected view, on the Definition tab.
 - **Definition**: `definition_sql` in a read-only highlighted block (a new `readOnly` prop on
@@ -103,8 +106,9 @@ it gets the red admin chrome.
 - **Edit**: the Definition tab switches to an editor on `definition_sql`. The name is not
   editable (a rename is create + drop, outside this scope). Save sends the text with its header
   rewritten to `CREATE OR REPLACE MATERIALIZED VIEW` by a small `toReplaceStatement(sql)`
-  helper (strips leading comments, rewrites the header, mirrors the CLI's `with_or_replace`
-  (`views.py:105-110`), including leaving an unterminated `/*` untouched). The user never has to remember `OR REPLACE`.
+  helper (skips leading comments, then rewrites the header only if it begins exactly at that index
+  (anchored), so an unterminated `/*` leaves the text untouched even if it contains a
+  `CREATE ... MATERIALIZED VIEW`; this is stricter than the CLI's unanchored `with_or_replace`). The user never has to remember `OR REPLACE`.
 - **Save confirmation** (`ConfirmDialog`) states the documented consequences: a schema change
   invalidates old partitions; a content-only change does **not** rebuild them and requires a
   retire-and-rebuild by other means (link to the materialized-views redefinition docs via a URL
@@ -172,6 +176,8 @@ Open in a browser (self-contained, app tokens copied from `src/styles/globals.cs
 - No partition retire/rebuild action: leaving out retire/rebuild is a scope choice.
 - Layout: option A (master/detail).
 - Rename is out of scope.
+- AFK: Health caveat (A): kept the `failed to load` label and documented that it reflects the answering replica and can lag up to the refresh interval, rather than renaming it.
+- AFK: `toReplaceStatement` (B): rewrite is anchored at the comment-skip index; dropped the claim of mirroring the CLI for the unterminated `/*` case; test kept.
 - No structured form: the editor edits the raw statement; the DDL parser validates it.
 
 ## Documentation
