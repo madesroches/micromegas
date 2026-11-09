@@ -33,7 +33,9 @@ vi.mock('@/hooks/useDefaultDataSource', () => ({
 }))
 
 vi.mock('@/components/DataSourceSelector', () => ({
-  DataSourceField: () => null,
+  DataSourceField: ({ onChange }: { onChange: (v: string) => void }) => (
+    <button onClick={() => onChange('other-ds')}>switch data source</button>
+  ),
 }))
 
 const { mockStreamQuery } = vi.hoisted(() => ({ mockStreamQuery: vi.fn() }))
@@ -166,6 +168,32 @@ describe('ViewSetsPage', () => {
         )
       ).toBe(true)
     )
+  })
+
+  it('closes the editor and drops its text when the data source changes', async () => {
+    renderPage()
+    await selectLogStats()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'stale text from ds' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'switch data source' }))
+
+    await screen.findByText('log_stats')
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByText('stale text from ds')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
+  })
+
+  it('shows unknown health when the loaded view sets query fails', async () => {
+    mockStreamQuery.mockImplementation(({ sql }: { sql: string }) => {
+      if (sql.includes('list_view_set_definitions')) return tableStream(definitionsTable)
+      if (sql.includes('list_view_sets')) throw new Error('boom')
+      return tableStream(statusTable)
+    })
+    renderPage()
+    await screen.findByText('log_stats')
+    expect(screen.getByText('unknown')).toBeInTheDocument()
+    expect(screen.queryByText('failed to load')).toBeNull()
   })
 
   it('refuses to save a statement that names a different view set', async () => {

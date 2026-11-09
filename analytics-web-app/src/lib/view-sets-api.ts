@@ -9,7 +9,7 @@ import type { Table } from 'apache-arrow'
 import { timestampToDate } from './arrow-utils'
 import { escapeSqlLiteral } from './sql-literal'
 
-export type ViewSetHealth = 'ok' | 'failed to load' | 'read-only'
+export type ViewSetHealth = 'ok' | 'failed to load' | 'read-only' | 'unknown'
 
 export interface ViewSetDefinition {
   name: string
@@ -250,13 +250,20 @@ export function parseSortOrder(sortOrder: string | null): string[] {
  */
 export function mergeViewSetRows(
   definitions: ViewSetDefinition[],
-  loaded: LoadedViewSet[]
+  loaded: LoadedViewSet[],
+  loadedAvailable = true
 ): ViewSetRow[] {
   const loadedByName = new Map(loaded.map((l) => [l.name, l]))
   return definitions.map((def) => {
     const live = loadedByName.get(def.name)
     const health: ViewSetHealth =
-      def.source === 'builtin' ? 'read-only' : live ? 'ok' : 'failed to load'
+      def.source === 'builtin'
+        ? 'read-only'
+        : !loadedAvailable
+          ? 'unknown'
+          : live
+            ? 'ok'
+            : 'failed to load'
     return {
       name: def.name,
       source: def.source,

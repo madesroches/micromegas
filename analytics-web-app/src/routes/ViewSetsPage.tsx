@@ -41,11 +41,13 @@ type Mutation = 'create' | 'save' | 'drop'
 
 const HEALTH_TOOLTIP =
   'Reflects the replica that answered the query. Other replicas reload definitions on a timer, ' +
-  'so a new or changed view set can read "failed to load" for up to a minute.'
+  'so a new or changed view set can read "failed to load" for up to the definition refresh ' +
+  'interval (60 seconds by default).'
 
 const HEALTH_STYLES: Record<ViewSetRow['health'], string> = {
   ok: 'bg-green-500/15 text-green-500',
   'failed to load': 'bg-accent-error/15 text-accent-error',
+  unknown: 'bg-app-card text-theme-text-muted',
   'read-only': 'bg-app-card text-theme-text-muted',
 }
 
@@ -412,6 +414,7 @@ function ViewSetsPageContent() {
   const [definitions, setDefinitions] = useState<ViewSetDefinition[]>([])
   const [loaded, setLoaded] = useState<LoadedViewSet[]>([])
   const [listError, setListError] = useState<string | null>(null)
+  const [loadedError, setLoadedError] = useState(false)
   const [selectedName, setSelectedName] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('definition')
 
@@ -430,6 +433,17 @@ function ViewSetsPageContent() {
     drop: null,
   })
 
+  const [prevDataSource, setPrevDataSource] = useState(dataSource)
+  if (dataSource !== prevDataSource) {
+    setPrevDataSource(dataSource)
+    setSelectedName(null)
+    setIsEditing(false)
+    setEditText('')
+    setConfirmSave(false)
+    setDropTarget(null)
+    setErrors((e) => ({ ...e, save: null, drop: null }))
+  }
+
   const definitionsQuery = useStreamQuery()
   const loadedQuery = useStreamQuery()
   const statsQuery = useStreamQuery()
@@ -438,6 +452,7 @@ function ViewSetsPageContent() {
   const loadLists = useCallback(() => {
     if (!dataSource) return
     setListError(null)
+    setLoadedError(false)
     setDefinitions([])
     setLoaded([])
     definitionsQuery.execute({ sql: buildListViewSetDefinitionsSql(), dataSource, adminMode: true })
@@ -471,6 +486,7 @@ function ViewSetsPageContent() {
     void (() => {
       if (!loadedQuery.isComplete) return
       if (loadedQuery.error) {
+        setLoadedError(true)
         setListError(loadedQuery.error.message)
       } else {
         const table = loadedQuery.getTable()
@@ -510,8 +526,8 @@ function ViewSetsPageContent() {
 
   const listsLoading = definitionsQuery.isStreaming || loadedQuery.isStreaming
   const rows = useMemo(
-    () => (listsLoading ? [] : mergeViewSetRows(definitions, loaded)),
-    [listsLoading, definitions, loaded]
+    () => (listsLoading ? [] : mergeViewSetRows(definitions, loaded, !loadedError)),
+    [listsLoading, definitions, loaded, loadedError]
   )
   const selected = rows.find((r) => r.name === selectedName) ?? null
   const selectedStats = stats.find((s) => s.viewSetName === selectedName) ?? null
