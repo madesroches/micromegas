@@ -143,6 +143,13 @@ export function toReplaceStatement(sql: string): string {
   return sql.slice(0, start) + 'CREATE OR REPLACE' + match[2] + sql.slice(start + match[0].length)
 }
 
+/** True when the statement header already says `CREATE OR REPLACE`. */
+export function hasOrReplace(sql: string): boolean {
+  const start = skipLeadingTrivia(sql)
+  if (start === null) return false
+  return CREATE_HEADER.exec(sql.slice(start))?.[1] != null
+}
+
 const VIEW_NAME = /^(?:CREATE(?:\s+OR\s+REPLACE)?\s+MATERIALIZED\s+VIEW)\s+([a-z_][a-z0-9_]*)/i
 
 /** Name the statement's header gives the view set; null if there is none. */

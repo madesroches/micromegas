@@ -29,6 +29,7 @@ import {
   mergeViewSetRows,
   toReplaceStatement,
   extractViewSetName,
+  hasOrReplace,
   type LoadedViewSet,
   type MergeCheck,
   type PartitionStats,
@@ -655,6 +656,14 @@ function ViewSetsPageContent() {
           isOpen={showCreate}
           onClose={() => setShowCreate(false)}
           onSubmit={(ddl) => {
+            if (hasOrReplace(ddl)) {
+              setErrors((e) => ({
+                ...e,
+                create:
+                  'CREATE OR REPLACE would overwrite an existing view set. Use a plain CREATE, or edit the existing view set to change it.',
+              }))
+              return
+            }
             createdNameRef.current = extractViewSetName(ddl)
             void runMutation('create', ddl)
           }}

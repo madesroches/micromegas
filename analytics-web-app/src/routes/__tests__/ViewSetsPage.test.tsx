@@ -430,4 +430,104 @@ describe('ViewSetsPage', () => {
     await screen.findByText(/bad ddl/)
     expect(screen.getByRole('heading', { name: 'Create View Set' })).toBeInTheDocument()
   })
+
+  it('refuses CREATE OR REPLACE in the create dialog without sending it', async () => {
+    renderPage()
+    await screen.findByText('log_stats')
+    fireEvent.click(screen.getByRole('button', { name: /Create View Set/i }))
+    await screen.findByRole('heading', { name: 'Create View Set' })
+    const editor = screen.getByRole('textbox')
+    fireEvent.change(editor, {
+      target: {
+        value: '-- c\nCREATE OR REPLACE MATERIALIZED VIEW log_stats WITH (update_group = 1)',
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await screen.findByText(/would overwrite an existing view set/)
+    expect(mockStreamQuery.mock.calls.some((c) => /CREATE/i.test(sqlOf(c)))).toBe(false)
+  })
+
+  describe('Partitions tab', () => {
+    const statsTable = tableFromArrays({
+      view_set_name: ['log_stats'],
+      partition_count: [3],
+      file_size: [2048],
+      num_rows: [1234],
+    })
+
+    async function openPartitions() {
+      renderPage()
+      await selectLogStats()
+      fireEvent.click(screen.getByRole('button', { name: 'partitions' }))
+    }
+
+    it('shows the stats of the selected view set', async () => {
+      mockStreamQuery.mockImplementation((params: { sql: string }) =>
+        params.sql.includes('FROM list_partitions()')
+          ? tableStream(statsTable)
+          : defaultImpl(params),
+      )
+      await openPartitions()
+      await screen.findByText('Rows')
+      expect(screen.getByText('1,234')).toBeInTheDocument()
+      expect(screen.getByText('3')).toBeInTheDocument()
+      expect(screen.getByText('2.0 KB')).toBeInTheDocument()
+    })
+
+    it('says so when the view set has no partitions', async () => {
+      mockStreamQuery.mockImplementation((params: { sql: string }) =>
+        params.sql.includes('FROM list_partitions()')
+          ? tableStream(
+              tableFromArrays({
+                view_set_name: ['other'],
+                partition_count: [1],
+                file_size: [1],
+                num_rows: [1],
+              }),
+            )
+          : defaultImpl(params),
+      )
+      await openPartitions()
+      await screen.findByText('This view set has no partitions.')
+    })
+
+    it('shows the error and retries', async () => {
+      mockStreamQuery.mockImplementation((params: { sql: string }) =>
+        params.sql.includes('FROM list_partitions()')
+          ? createMockGenerator([
+              {
+                type: 'error',
+                error: { code: 'INTERNAL', message: 'stats boom', retryable: false },
+              },
+            ])
+          : defaultImpl(params),
+      )
+      await openPartitions()
+      await screen.findByText(/stats boom/)
+      const statsCalls = () =>
+        mockStreamQuery.mock.calls.filter((c) => sqlOf(c).includes('FROM list_partitions()')).length
+      const before = statsCalls()
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+      await waitFor(() => expect(statsCalls()).toBeGreaterThan(before))
+    })
+  })
+
+  it('explains the schema tab of a view set that failed to load', async () => {
+    mockStreamQuery.mockImplementation((params: { sql: string }) =>
+      params.sql.includes('list_view_sets') && !params.sql.includes('definitions')
+        ? tableStream(
+            tableFromArrays({
+              view_set_name: ['log_entries'],
+              description: [null],
+              columns: ['time: Int64'],
+              sort_order: [null],
+            }),
+          )
+        : defaultImpl(params),
+    )
+    renderPage()
+    await selectLogStats()
+    fireEvent.click(screen.getByRole('button', { name: 'schema' }))
+    await screen.findByText(/not loaded on the answering replica/)
+  })
 })
