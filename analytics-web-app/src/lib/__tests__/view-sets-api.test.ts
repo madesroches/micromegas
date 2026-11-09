@@ -9,6 +9,7 @@ import {
   decodeMergeCheck,
   decodePartitionStats,
   decodeViewSetDefinitions,
+  extractViewSetName,
   mergeViewSetRows,
   parseColumns,
   parseSortOrder,
@@ -70,6 +71,19 @@ describe('toReplaceStatement', () => {
 
   it('leaves other statements untouched', () => {
     expect(toReplaceStatement('SELECT 1')).toBe('SELECT 1')
+  })
+})
+
+describe('extractViewSetName', () => {
+  it('reads plain, OR REPLACE and quoted names after leading comments', () => {
+    expect(extractViewSetName('CREATE MATERIALIZED VIEW v WITH (a = 1)')).toBe('v')
+    expect(extractViewSetName('-- c\n/* x */ create or replace materialized view v(a)')).toBe('v')
+    expect(extractViewSetName('CREATE MATERIALIZED VIEW "a ""b""" WITH (a = 1)')).toBe('a "b"')
+  })
+
+  it('returns null when there is no CREATE MATERIALIZED VIEW header', () => {
+    expect(extractViewSetName('SELECT 1')).toBeNull()
+    expect(extractViewSetName('/* CREATE MATERIALIZED VIEW v')).toBeNull()
   })
 })
 

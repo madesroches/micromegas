@@ -28,6 +28,7 @@ import {
   decodeViewSetDefinitions,
   mergeViewSetRows,
   toReplaceStatement,
+  extractViewSetName,
   type LoadedViewSet,
   type MergeCheck,
   type PartitionStats,
@@ -437,6 +438,8 @@ function ViewSetsPageContent() {
   const loadLists = useCallback(() => {
     if (!dataSource) return
     setListError(null)
+    setDefinitions([])
+    setLoaded([])
     definitionsQuery.execute({ sql: buildListViewSetDefinitionsSql(), dataSource, adminMode: true })
     loadedQuery.execute({ sql: buildListViewSetsSql(), dataSource, adminMode: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -505,7 +508,11 @@ function ViewSetsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsQuery.isComplete, statsQuery.error])
 
-  const rows = useMemo(() => mergeViewSetRows(definitions, loaded), [definitions, loaded])
+  const listsLoading = definitionsQuery.isStreaming || loadedQuery.isStreaming
+  const rows = useMemo(
+    () => (listsLoading ? [] : mergeViewSetRows(definitions, loaded)),
+    [listsLoading, definitions, loaded]
+  )
   const selected = rows.find((r) => r.name === selectedName) ?? null
   const selectedStats = stats.find((s) => s.viewSetName === selectedName) ?? null
 
@@ -629,7 +636,7 @@ function ViewSetsPageContent() {
         <div className="flex gap-6 flex-1 min-h-0">
           <div className="w-80 shrink-0 flex flex-col gap-3">
             <DataSourceField value={dataSource} onChange={setDataSource} />
-            {(definitionsQuery.isStreaming || loadedQuery.isStreaming) && rows.length === 0 ? (
+            {listsLoading ? (
               <Spinner label="Loading view sets..." />
             ) : rows.length === 0 ? (
               <div className="flex flex-col items-center text-center py-8">
@@ -721,6 +728,13 @@ function ViewSetsPageContent() {
                     }}
                     onCancelEdit={() => setIsEditing(false)}
                     onSave={() => {
+                      if (extractViewSetName(editText) !== selected.name) {
+                        setErrors((e) => ({
+                          ...e,
+                          save: `The statement must define "${selected.name}"; renaming a view set is not supported.`,
+                        }))
+                        return
+                      }
                       setErrors((e) => ({ ...e, save: null }))
                       setConfirmSave(true)
                     }}

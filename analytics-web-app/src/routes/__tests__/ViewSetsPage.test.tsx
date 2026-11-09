@@ -168,6 +168,20 @@ describe('ViewSetsPage', () => {
     )
   })
 
+  it('refuses to save a statement that names a different view set', async () => {
+    renderPage()
+    await selectLogStats()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: DEFINITION.replace('log_stats', 'other') },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await screen.findByText(/must define "log_stats"/)
+    expect(screen.queryByText(/does not rebuild anything/i)).toBeNull()
+    expect(mockStreamQuery.mock.calls.some((c) => sqlOf(c).startsWith('CREATE'))).toBe(false)
+  })
+
   it('refetches the lists after a successful save', async () => {
     renderPage()
     await selectLogStats()

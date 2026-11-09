@@ -148,6 +148,18 @@ export function toReplaceStatement(sql: string): string {
   )
 }
 
+const VIEW_NAME = /^(?:CREATE(?:\s+OR\s+REPLACE)?\s+MATERIALIZED\s+VIEW)\s+("(?:[^"]|"")*"|[^\s("]+)/i
+
+/** Name the statement's header gives the view set, with quotes removed; null if there is none. */
+export function extractViewSetName(sql: string): string | null {
+  const start = skipLeadingTrivia(sql)
+  if (start === null) return null
+  const match = VIEW_NAME.exec(sql.slice(start))
+  if (!match) return null
+  const raw = match[1]
+  return raw.startsWith('"') ? raw.slice(1, -1).replace(/""/g, '"') : raw
+}
+
 function optString(value: unknown): string | null {
   return value == null ? null : String(value)
 }
