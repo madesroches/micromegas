@@ -4,18 +4,12 @@
 
 ## Overview
 
-**Prerequisite: issue #1769 (server-enforced admin mode).** Notebook cells reach the same
-`/api/query-stream` endpoint as admin pages, so an admin opening a notebook containing
-`DROP MATERIALIZED VIEW` would execute it. The write half of this plan (create/edit/drop) must not
-ship until #1769 lands and the writes go through its admin-mode endpoint. The read-only half
-(list, definition, schema, partitions, Check) is safe on `/api/query-stream` and can ship first.
-
 Add **Admin → View Sets** to the analytics web app: a page where an admin can list every view set,
 read its definition, schema and partition status, and create, edit or drop SQL-defined
 (`source = 'ddl'`) view sets, without hand-writing DDL into `micromegas-query` or running
 `micromegas-views`. It is a front end over SQL the server already exposes. **No server change and
 no new REST route**, following the Query Deny List page, which issues its admin UDTFs through the
-`/api/query-stream` path.
+`/api/admin/query-stream` path (`adminMode: true`).
 
 ## Current State
 
@@ -24,10 +18,11 @@ intercepted in FlightSQL `do_get` (`rust/public/src/servers/flight_sql_service_i
 admin-gated, validated (`build_sql_batch_view` + `validate_view_definition`), applied in one
 transaction under an advisory lock, and checked for dependents (`check_dependents_survive`).
 `execute_view_ddl` (`:1101`) returns one `(view_set_name, status)` row (`created`, `replaced`,
-`dropped`, `not_found`). DDL is rejected when *prepared* (`:1673`), but the web server's
-`FlightSQLClient::query_stream` (`rust/public/src/client/flightsql_client.rs:82`) uses
-`execute` + `do_get`, so a DDL statement sent through `/api/query-stream` reaches the DDL branch.
-`substitute_macros` (`rust/analytics-web-srv/src/stream_query.rs:126`) only rewrites `$key` for
+`dropped`, `not_found`); `not_found` is a row only for `DROP ... IF EXISTS`, while a plain `DROP`
+of a missing name returns a `not_found` error. DDL is rejected when *prepared* (`:1673`), but the
+web server's `FlightSQLClient::query_stream` (`rust/public/src/client/flightsql_client.rs:82`) uses
+`execute` + `do_get`, so a DDL statement sent through `/api/admin/query-stream` reaches the DDL
+branch. `substitute_macros` (`rust/analytics-web-srv/src/stream_query.rs:111`) only rewrites `$key` for
 keys present in `params`; with empty params the DDL text passes through untouched.
 `/api/query-stream` refuses view DDL and the lakehouse-modifying admin functions; the admin-only `/api/admin/query-stream` accepts them.
 
@@ -67,10 +62,10 @@ repo-managed deployments; the page serves ad-hoc inspection and quick edits.
 `/admin/view-sets` → `ViewSetsPage` (lazy, in `router.tsx`), an `AdminPage` card
 (`adminOnly: true`, icon `Layers`). Data source chosen with the same `DataSourceField` +
 `useDataSourceState` as the deny list, but placed in the left column (§2) rather than the page
-header. A non-admin who reaches the URL sees an "admin required"
-state derived from `useAuth().user.is_admin` rather than the raw planner error ("function not
-found") that `list_view_set_definitions()` yields for non-admins. The server remains the
-authority, since the functions and DDL are admin-gated there.
+header. The page is wrapped in `<AuthGuard requireAdmin>` like the deny list, so a non-admin sees
+AuthGuard's "Access Denied" card rather than the raw planner error ("function not found") that
+`list_view_set_definitions()` yields for non-admins. The server remains the authority, since the
+functions and DDL are admin-gated there.
 
 ### 2. Layout: master/detail (see Mockups)
 
@@ -86,15 +81,19 @@ with tabs **Definition**, **Schema**, **Partitions**.
   `check_view_merge(definition_sql)` result as a warning banner when `streams = false`
   (`sort_exec_line` shown). Built-ins have no stored definition; the tab says so.
 - **Schema**: decode `list_view_sets().columns`/`sort_order` into a column table, plus the
-  `description` rendered as markdown (it is a markdown usage guide).
-- **Partitions**: one aggregate row per view set: count, total `file_size`, total `num_rows`, min
-  `begin_insert_time`, max `end_insert_time`, and the latest `updated`.
+  `description` rendered as markdown (it is a markdown usage guide). `columns` is a Utf8 of
+  `name: DataType` lines joined by `\n`: split on `\n`, then on the first `": "`. `sort_order` is a
+  nullable Utf8 (not a List): split on `", "`.
+- **Partitions**: one aggregate row per view set, computed server-side by
+  `SELECT view_set_name, count(*), sum(file_size), sum(num_rows), min(begin_insert_time),
+  max(end_insert_time), max(updated) FROM list_partitions() GROUP BY view_set_name`.
 
 ### 3. Create / edit / drop
 
-All three are single DDL statements, sent through the admin-mode endpoint defined by #1769
-(not `/api/query-stream`, which will reject DDL). The page issues every query with `adminMode: true`, and adds
-its route to `ADMIN_ONLY_PATHS` in `src/lib/admin-mode.tsx` so it gets the red admin chrome.
+All three are single DDL statements, sent through `/api/admin/query-stream` (via
+`adminMode: true`; `/api/query-stream` refuses DDL). The page issues every query with
+`adminMode: true`, and adds `/admin/view-sets` to `ADMIN_ONLY_PATHS` in `src/lib/admin-mode.tsx` so
+it gets the red admin chrome.
 
 - **Create**: dialog with a name and a SQL editor pre-filled with a skeleton statement
   (`CREATE MATERIALIZED VIEW <name> WITH (...)` listing the required options). Sent as plain
@@ -103,14 +102,14 @@ its route to `ADMIN_ONLY_PATHS` in `src/lib/admin-mode.tsx` so it gets the red a
 - **Edit**: the Definition tab switches to an editor on `definition_sql`. The name is not
   editable (a rename is create + drop, outside this scope). Save sends the text with its header
   rewritten to `CREATE OR REPLACE MATERIALIZED VIEW` by a small `toReplaceStatement(sql)`
-  helper (strips leading comments, rewrites the header, mirrors the CLI's `canonical_ddl`
-  semantics). The user never has to remember `OR REPLACE`.
+  helper (strips leading comments, rewrites the header, mirrors the CLI's `with_or_replace`
+  (`views.py:105-110`), including leaving an unterminated `/*` untouched). The user never has to remember `OR REPLACE`.
 - **Save confirmation** (`ConfirmDialog`) states the documented consequences: a schema change
   invalidates old partitions; a content-only change does **not** rebuild them and requires a
   retire-and-rebuild by other means (link to docs).
 - **Drop**: `ConfirmDialog` naming the view set and noting partitions are retired. Sent as
-  `DROP MATERIALIZED VIEW <name>` (no `IF EXISTS`: a stale page should get `not_found`, not a
-  silent success).
+  `DROP MATERIALIZED VIEW <name>` (no `IF EXISTS`: a stale page should get a `not_found` error
+  shown in the `ErrorBanner`, not a silent success).
 - **Validation**: *Check* calls `check_view_merge('<ddl>')` and shows the streaming verdict.
   Everything else (parse errors, bad queries, dependents) is validated by the server on Save and
   shown verbatim in an `ErrorBanner` that keeps the dialog/editor open with the user's text
@@ -134,7 +133,7 @@ its route to `ADMIN_ONLY_PATHS` in `src/lib/admin-mode.tsx` so it gets the red a
 | Question | Resolution |
 |---|---|
 | Which properties are editable? | The whole stored statement, as text, except the name. No structured form: the statement carries several SQL queries and options, and the DDL parser is the validator. Built-ins are read-only. |
-| Existing partitions on edit/delete? | Same as the DDL's documented behavior; the UI states it in the confirm dialog. It does not offer partition retirement (out of scope by choice). |
+| Existing partitions on edit/delete? | Same as the DDL's documented behavior; the UI states it in the confirm dialog. It does not offer partition retirement. |
 | How are backend errors surfaced? | Server message verbatim in an `ErrorBanner`; edits are never discarded on error. |
 
 ## Mockups
@@ -145,12 +144,8 @@ Open in a browser (self-contained, app tokens copied from `src/styles/globals.cs
   Definition/Schema/Partitions tabs right. One page, no extra routes, quick to hop between view
   sets; the editor is cramped on narrow screens. **Chosen**, with the data source selector in the
   left column above the list (the mockup shows this). Its list shows a
-  "sort buffers" badge as an illustration; per §2 that verdict is detail-only, so drop the badge
-  when implementing.
-- `tasks/1768_view_sets_admin_ui_mockups/option-b-table-and-editor.html` (not chosen): full-width table
-  (with description and partition count) and a separate full-page editor route with a side panel
-  for checks. Roomier editor and bookmarkable edit URLs; costs two routes, more navigation, and
-  more partition aggregates loaded up front.
+  "sort buffers" badge as an illustration; drop the badge when implementing.
+- `tasks/1768_view_sets_admin_ui_mockups/option-b-table-and-editor.html` (not chosen)
 
 ## Implementation Steps
 
@@ -158,9 +153,11 @@ Open in a browser (self-contained, app tokens copied from `src/styles/globals.cs
    test import.
 2. `src/lib/view-sets-api.ts` with builders, decoders, `toReplaceStatement`, `mergeViewSetRows`;
    unit tests alongside the existing `src/lib/__tests__/` files.
-3. `ViewSetsPage.tsx`: list + detail tabs, read-only first (admin gate, loading/error states).
+3. `ViewSetsPage.tsx`: list + detail tabs (`AuthGuard requireAdmin`, loading/error states).
 4. Create dialog, edit mode, drop confirm, Check button; refetch after mutations.
-5. Route in `router.tsx`, card in `AdminPage.tsx`.
+5. Route in `router.tsx`, card in `AdminPage.tsx`, `/admin/view-sets` in `ADMIN_ONLY_PATHS`
+   (`src/lib/admin-mode.tsx`), and 'View Sets' in `adminOnlyTitles` in
+   `src/routes/__tests__/AdminPage.test.tsx` ("ten cards" becomes eleven).
 6. Docs and `CHANGELOG.md`.
 
 ## Files to Modify
@@ -168,8 +165,11 @@ Open in a browser (self-contained, app tokens copied from `src/styles/globals.cs
 - New: `analytics-web-app/src/lib/sql-literal.ts`, `src/lib/view-sets-api.ts`,
   `src/routes/ViewSetsPage.tsx`, tests under `src/lib/__tests__/` and `src/routes/__tests__/`
 - Edit: `src/lib/query-deny-list-api.ts`, `src/router.tsx`, `src/routes/AdminPage.tsx`,
-  `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/materialized-views.md` (pointer),
-  `CHANGELOG.md`
+  `src/lib/admin-mode.tsx`, `src/routes/__tests__/AdminPage.test.tsx`,
+  `mkdocs/docs/admin/web-app.md` (admin-hub card count/list, ~lines 107/110),
+  `mkdocs/docs/admin/materialized-views.md` (pointer), `mkdocs/docs/admin/views-as-code.md`
+  (pointer), `CHANGELOG.md`
+- Paths without a prefix are under `analytics-web-app/`.
 
 ## Trade-offs
 
@@ -179,12 +179,10 @@ Open in a browser (self-contained, app tokens copied from `src/styles/globals.cs
   code and matches the deny list.
 - **Raw SQL editor vs. structured form.** A form can only cover the option subset it models and
   must regenerate DDL; the raw statement round-trips exactly (`definition_sql` is verbatim).
-- **Master/detail vs. table + editor page.** See Mockups.
 
 ## Decisions
 
-- Delivery is phased: read-only page first, writes after #1769.
-
+- No `.sql` download: `micromegas-views pull <name>` already writes a definition in the CLI file layout.
 - No partition retire/rebuild action: leaving out retire/rebuild is a scope choice.
 - Layout: option A (master/detail), data source selector in the left column.
 - Rename is out of scope.
@@ -202,13 +200,16 @@ Open in a browser (self-contained, app tokens copied from `src/styles/globals.cs
 All automated coverage is no-DB unit tests (vitest), per the repo testing rules:
 
 - `view-sets-api`: every SQL builder (quote escaping with DDL containing `'` and `$$`), Arrow
-  decoders (nullable `definition_sql`, `description`), `toReplaceStatement` (plain `CREATE`,
-  already `OR REPLACE`, leading `--` and `/* */` comments, lowercase keywords),
+  decoders (nullable `definition_sql`, `description`; `columns` split on `\n` then first `": "`;
+  null and multi-item `sort_order` split on `", "`), `toReplaceStatement` (plain `CREATE`,
+  already `OR REPLACE`, leading `--` and `/* */` comments, unterminated `/*` left untouched,
+  lowercase keywords),
   `mergeViewSetRows` (ddl present/absent from loaded sets → `failed to load`; builtin;
   missing partition stats).
-- `ViewSetsPage`: non-admin sees the gate and issues no query; error from a mutation keeps the
-  editor text; confirm dialogs gate Save and Drop; refetch after a successful mutation. Uses the
-  mocked stream-query hook as the existing page tests do.
+- `ViewSetsPage`: non-admin sees AuthGuard's "Access Denied" card and issues no query; error from
+  a mutation keeps the editor text and shows the server message; confirm dialogs gate Save and
+  Drop, and the Save dialog shows the content-only warning; refetch after a successful mutation.
+  Mocks `streamQuery` from `@/lib/arrow-stream`, as `QueryDenyListPage.test.tsx` does.
 - No live-DB test: no bug has occurred, and the DDL semantics are already covered server-side.
 
 ## Manual Verification
@@ -218,14 +219,9 @@ is admin:
 
 1. Open `/admin/view-sets`; confirm built-ins show read-only and `log_stats` shows as `ddl`.
 2. Create a view set from the skeleton; confirm it appears and `list_view_sets()` agrees.
-3. Edit it to change only a filter; confirm the confirm dialog's content-only warning, then save.
+3. Edit it to change only a filter and save; confirm the change round-trips end to end.
 4. Drop it; confirm it disappears. Try dropping a view another definition reads; confirm the
    server's refusal shows in the banner.
 
 Not automated: it checks the browser → web server → FlightSQL wiring (that DDL really passes
-the `query-stream` path), which a unit test against a mocked hook cannot show.
-
-## Open Questions
-
-1. Should the page also offer "download as `.sql`" to feed `micromegas-views pull`'s file layout,
-   or is that out of scope for a first version?
+the `/api/admin/query-stream` path), which a unit test against a mocked hook cannot show.
