@@ -10,6 +10,7 @@
  */
 import type { Table } from 'apache-arrow'
 import { timestampToDate } from './arrow-utils'
+import { escapeSqlLiteral } from './sql-literal'
 
 export interface QueryDenyRule {
   ruleId: string
@@ -18,16 +19,6 @@ export interface QueryDenyRule {
   reason: string
   matchExpr: string
   lastHitAt: Date | null
-}
-
-/**
- * Doubles a single quote inside a SQL string literal -- the same escaping rule
- * `substitute_macros` already follows server-side (`analytics-web-srv/src/stream_query.rs`).
- * Apply this at the one place a value is embedded into a SQL statement; never build one of the
- * statements below any other way.
- */
-export function escapeSqlLiteral(value: string): string {
-  return value.replace(/'/g, "''")
 }
 
 /** `SELECT * FROM list_query_denials()`, with an explicit column list matching {@link decodeQueryDenyRules}. */

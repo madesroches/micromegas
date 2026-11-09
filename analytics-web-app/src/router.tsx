@@ -19,6 +19,7 @@ const MapsPage = lazy(() => import('@/routes/MapsPage'))
 const IngestionApiKeysPage = lazy(() => import('@/routes/IngestionApiKeysPage'))
 const AnalyticsApiKeysPage = lazy(() => import('@/routes/AnalyticsApiKeysPage'))
 const QueryDenyListPage = lazy(() => import('@/routes/QueryDenyListPage'))
+const ViewSetsPage = lazy(() => import('@/routes/ViewSetsPage'))
 const AudienceAccessPage = lazy(() => import('@/routes/AudienceAccessPage'))
 const GroupsPage = lazy(() => import('@/routes/GroupsPage'))
 const SettingsPage = lazy(() => import('@/routes/SettingsPage'))
@@ -59,6 +60,7 @@ export function AppRouter() {
           <Route path="/admin/ingestion-keys" element={<IngestionApiKeysPage />} />
           <Route path="/admin/analytics-keys" element={<AnalyticsApiKeysPage />} />
           <Route path="/admin/query-deny-list" element={<QueryDenyListPage />} />
+          <Route path="/admin/view-sets" element={<ViewSetsPage />} />
           <Route path="/admin/groups" element={<GroupsPage />} />
           <Route path="/admin/settings" element={<SettingsPage />} />
         </Route>

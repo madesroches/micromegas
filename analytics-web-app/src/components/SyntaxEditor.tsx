@@ -12,6 +12,7 @@ interface SyntaxEditorProps {
   className?: string
   minHeight?: string
   onRunShortcut?: () => void
+  readOnly?: boolean
 }
 
 // SQL syntax highlighting - returns HTML string
@@ -131,6 +132,7 @@ export function SyntaxEditor({
   className = '',
   minHeight = '150px',
   onRunShortcut,
+  readOnly = false,
 }: SyntaxEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const preRef = useRef<HTMLPreElement>(null)
@@ -196,12 +198,13 @@ export function SyntaxEditor({
           className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-hidden"
           style={isSql ? { whiteSpace: 'pre' } : undefined}
           placeholder={placeholder}
+          readOnly={readOnly}
           spellCheck={false}
           wrap={isSql ? 'off' : 'soft'}
         />
       </div>
       {/* SQL toolbar */}
-      {isSql && (
+      {isSql && !readOnly && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-t border-theme-border bg-app-card shrink-0">
           <button
             type="button"
