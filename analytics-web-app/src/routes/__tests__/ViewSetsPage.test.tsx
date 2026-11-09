@@ -19,7 +19,18 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/hooks/usePageTitle', () => ({ usePageTitle: () => undefined }))
 
 vi.mock('@/components/layout', () => ({
-  PageLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PageLayout: ({
+    children,
+    onRefresh,
+  }: {
+    children: React.ReactNode
+    onRefresh?: () => void
+  }) => (
+    <div>
+      <button onClick={onRefresh}>refresh page</button>
+      {children}
+    </div>
+  ),
 }))
 
 vi.mock('@/hooks/useDefaultDataSource', () => ({
@@ -128,6 +139,17 @@ describe('ViewSetsPage', () => {
     renderPage()
     await screen.findByText(/Access Denied/i)
     expect(mockStreamQuery).not.toHaveBeenCalled()
+  })
+
+  it('reloads partition stats on Refresh while the Partitions tab is open', async () => {
+    renderPage()
+    await selectLogStats()
+    fireEvent.click(screen.getByRole('button', { name: 'partitions' }))
+    const statsCalls = () =>
+      mockStreamQuery.mock.calls.filter((c) => sqlOf(c).includes('FROM list_partitions()')).length
+    await waitFor(() => expect(statsCalls()).toBe(1))
+    fireEvent.click(screen.getByText('refresh page'))
+    await waitFor(() => expect(statsCalls()).toBe(2))
   })
 
   it('lists view sets with their health, all through the admin endpoint', async () => {

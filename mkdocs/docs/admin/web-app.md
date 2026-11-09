@@ -216,7 +216,8 @@ There is no dedicated REST route.
 
 The left column holds the data source selector and a table of view sets with a `ddl` or `builtin`
 badge and a health label: `ok`, `read-only` for built-ins, or `failed to load` for a SQL-defined
-view set whose stored definition is not loaded. Health reflects the replica that answered the
+view set whose stored definition is not loaded. Health reads `unknown` when the loaded view sets
+cannot be listed. Health reflects the replica that answered the
 query. Other replicas reload definitions every `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`
 (default 60 seconds), so right after a create or an edit the label can read `failed to load` for
 up to that long.

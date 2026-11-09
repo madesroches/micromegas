@@ -510,6 +510,11 @@ function ViewSetsPageContent() {
     })()
   }, [tab, loadStats])
 
+  const refresh = () => {
+    loadLists()
+    if (tab === 'partitions') loadStats()
+  }
+
   useEffect(() => {
     // IIFE keeps the setState out of the effect's top level -- see react-hooks/set-state-in-effect
     void (() => {
@@ -565,6 +570,7 @@ function ViewSetsPageContent() {
         setSelectedName(null)
       }
       loadLists()
+      if (tab === 'partitions') loadStats()
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, mutationQuery.isComplete, mutationQuery.error])
@@ -576,7 +582,7 @@ function ViewSetsPageContent() {
   }
 
   return (
-    <PageLayout onRefresh={loadLists}>
+    <PageLayout onRefresh={refresh}>
       <div className="p-6 flex flex-col h-full">
         <div className="flex items-center gap-1.5 text-sm text-theme-text-muted mb-4">
           <AppLink href="/admin" className="text-accent-link hover:underline">
