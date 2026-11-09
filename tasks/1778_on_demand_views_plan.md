@@ -7,8 +7,7 @@ Issue: [#1778](https://github.com/madesroches/micromegas/issues/1778)
 A DDL view defined without `update_group` becomes an **on-demand view**. The maintenance daemon
 never touches it. A query fills and refreshes the partitions covering its own time range, so
 nothing is materialized for ranges nobody reads. This is how the built-in per-process JIT views
-already work. It also builds the engine #1495's `cached_range` will reuse: a JIT driver keyed on
-a per-bucket source count, with no dependency on `blocks`.
+already work.
 
 ## Current State
 
@@ -135,30 +134,26 @@ pub async fn update_on_demand_view(
   `Snapshot`, whose caller already refreshed the on-demand sources.
 - Otherwise it calls the entry point above with `Arc::new(self.clone())` as the view, because
   promotion hands the view to `create_merged_partition`. `SqlBatchView` derives `Clone` (all
-  fields are `Arc` or `Copy`), so this needs no new state.
+  fields are `Clone`), so this needs no new state.
 
 **The probe is `View::make_batch_partition_spec`.** It already runs the authored count over a
-range, and it returns a spec that can write that exact range. The driver touches nothing
-block-specific. #1495 plugs in by implementing `make_batch_partition_spec` on its anonymous view
-type, with a count derived from source partitions' `num_rows`. No new trait.
+range, and it returns a spec that can write that exact range. 
 
 Steps, for one `jit_update`:
 
 1. **Range.**
    - `rung = select_rung(query_range)`.
    - `insert_range = align_outward(query_range, rung)`, with `end` clamped to
-     `align_outward(now)` at `LADDER[0]`. This avoids materializing empty future buckets.
-   - The query range is used as the insert range. That is how every DDL view keys partitions
-     (`{begin}`/`{end}` are insert times), and the read side already selects partitions by event
-     time. Rows inserted long after their event time are discussed under Trade-offs.
+     the end of the current minute (`now.duration_trunc(LADDER[0]) + LADDER[0]`). This avoids materializing empty future buckets.
 2. **Plan.** Call `plan_dense_buckets(insert_range, rung, LADDER[0], now, grace)`. This is a new
    `partition_ladder` function that shares `plan_bucket`'s recursion through a count closure;
    `plan_buckets` keeps its signature. Every bucket is assumed non-empty, and there is no
    object-count descent. Closed buckets are emitted at `rung`. Only the open edge descends,
    down to one minute, as in #1496. Any sub-bucket whose `begin >= insert_range.end` (the clamped
    now) is dropped, so the open edge stops at the current minute. `grace` comes from
-   `JitPartitionConfig::default()` (90s), the same rule the built-in JIT views follow.
-3. **Rows.** `fetch_freshness_candidates(view_meta, insert_range)` gets this view's rows.
+   `JitPartitionConfig::default()` (90s), the same rule the built-in JIT views follow. If no
+   bucket is planned (e.g. a query range entirely in the future), return `Ok(())`.
+3. **Rows.** `fetch_freshness_candidates(pool, view_meta, insert_range)` gets this view's rows.
 4. **Units (pure).** Call `plan_units(&planned, &rows) -> Vec<Unit>`. Each planned bucket grows
    until it contains every row that intersects it. Rows are half-open (`begin < unit.end &&
    end > unit.begin`), because SQL partitions touch at bucket edges. Units that come to overlap
@@ -174,8 +169,9 @@ Steps, for one `jit_update`:
    `Containment` always retires everything a write replaces, and no `Overlap` mode is needed.
 5. **Upstream and snapshot.** Units can extend past `insert_range`, so the sources must cover
    their hull: `source_range` = hull of all unit ranges (a superset of `insert_range`).
-   - If `source_range` grew, refetch the rows over it and re-run `plan_units` once (units are
-     contained by construction, so the hull does not grow again).
+   - If `source_range` grew, refetch the rows over it and re-run `plan_units`, repeating until
+     the hull is stable (old-schema rows after a `CREATE OR REPLACE` may overlap new-schema
+     rows, since the no-overlap constraint is per `file_schema_hash`).
    - For each on-demand source, call `source.jit_update(lakehouse, Some(source_range))`.
    - `PartitionCache::fetch_overlapping_insert_range(pool, source_range)` gets every view's
      partitions. This is the source provider for the probes and extracts, the same shape the
@@ -189,7 +185,8 @@ Steps, for one `jit_update`:
 7. **Write stale units.** Call `spec.write(lake, null_logger)`. On `PartitionOverlapConflict`,
    which means a concurrent reader wrote an overlapping coarser or finer unit first:
    1. Refetch the rows over the unit's range.
-   2. Recompute the unit (it may grow).
+   2. Recompute the unit (it may grow). If it is not contained in `source_range`, refresh the
+      on-demand sources over the grown range and refetch the `PartitionCache` over it.
    3. Probe and judge again: `Covered` drops the write; `Stale` retries once.
 
    A second conflict is an error. This mirrors `write_spec_with_conflict_retry`'s
@@ -221,7 +218,7 @@ them should fail:
 | What the session is | Today | Should an on-demand view… |
 |---|---|---|
 | A user query with no range | `None` | fail |
-| An internal session over a partition snapshot its caller prepared: daemon and on-demand extract and count sessions (`make_batch_partition_spec`), merges, `export_log_view` | `None` + `PartitionCache` | read the snapshot; its caller already refreshed upstream (§2) |
+| An internal session over a partition snapshot its caller prepared: daemon and on-demand extract and count sessions (`make_batch_partition_spec`), `export_log_view`'s `make_batch_partition_spec` | `None` + `PartitionCache` | read the snapshot; its caller already refreshed upstream (§2) |
 | Planning only, never reading data: validation contexts, `SqlBatchView::new`'s schema discovery | `None` + `NullPartitionProvider` | yield nothing, run no JIT |
 
 The read scope can't separate them: unauthenticated user queries also get `ReadScope::All`. So
@@ -254,7 +251,18 @@ pub enum SessionRange {
 - Changing the parameter type makes the compiler enumerate every call site, about 20 in the
   sources and tests. Each picks its variant from the table above. FlightSQL picks `Query` or
   `Unbounded`. Callers that pass `NullPartitionProvider` only to plan switch to `NoPartitions`.
+- Merge sessions (`QueryMerger::execute_merge_query` via `make_merge_session_context`, and
+  `view_merge_check.rs`) already pass `Some(insert_range)`; it maps to
+  `SessionRange::Query(insert_range)`, keeping today's behavior.
+- `SessionRange` (not `Option`) threads through `register_functions`,
+  `register_lakehouse_functions` (`query.rs`), `ViewInstanceTableFunction`,
+  `ParseBlockTableFunction`, `ProcessSpansTableFunction`, and the pub `query()`. The
+  OwnershipRewrite `processes`/`streams` sources (`query.rs`) and `metadata.rs`'s internal live
+  reads use `Unbounded`. `ExportLogView::new` (planning only) uses `NoPartitions`; only its
+  `make_batch_partition_spec` uses `Snapshot`.
 - `materialize_partitions` and `regenerate_partitions` reject on-demand views (see Decisions).
+  The rejection sits in the spawned `*_impl` after the view lookup and before
+  `fetch_overlapping_insert_range`, and surfaces as an error row in the output log stream.
 
 ### 4. Promotion with aligned ranges
 
@@ -285,10 +293,7 @@ step 8.
   this rule" sentence. The same applies to the `'global'` sentence in
   `MaterializedView::instance_is_audience_guarded`'s doc.
 - DDL stays admin-gated (`authorize_view_ddl`). Unchanged.
-- Admission: no change in v1. JIT already runs inside `create_physical_plan`, before both the
-  estimate and the gate, for every JIT view. The estimate then reflects the partitions that
-  exist after materialization, which is what the read actually scans. Gating the
-  materialization itself would need JIT moved out of `scan()` for all views.
+- Admission: unchanged (see Decisions).
 
 ### 6. Read-only connections and retention
 
@@ -320,9 +325,14 @@ step 8.
    - `inspect_scan` and `walk_plan_for_scans` collect on-demand sources (global
      `MaterializedView`, `get_update_group() == None`).
    - `validate_view_definition` rejects a daemon view with any on-demand source and returns the
-     source list.
+     source list. The `def.update_group <= max_group` ordering check (~line 524) is skipped when
+     `update_group` is `None`.
+   - Rewrite the doc comments describing the single-pass, group-ordered fold:
+     `validate_view_definition` doc (view_definition.rs:400-403).
 8. `view_registry.rs`: `build_factory` becomes a fixpoint over pending rows and attaches
-   `with_on_demand_sources`.
+   `with_on_demand_sources`. `skip()` (warn/meter) reports only rows still failing after the
+   fixpoint settles. Rewrite the single-pass, group-ordered docs: `build_factory` (:116-122),
+   `digest_of` (:41-43), `reload()` (:302).
 9. `sql_batch_view.rs`: add `on_demand_sources: Vec<Arc<dyn View>>`,
    `with_on_demand_sources`, and `is_on_demand`; derive `Clone` on `SqlBatchView` (the driver
    passes `Arc::new(self.clone())`).
@@ -338,8 +348,10 @@ step 8.
       `scan`;
     - every `make_session_context` / `MaterializedView::new` caller picks its variant, including
       `flight_sql_service_impl.rs` (`Query` or `Unbounded`), `view_definition.rs` and
-      `SqlBatchView::new` (`NoPartitions`), and `make_batch_partition_spec`, `merge.rs` and
-      `export_log_view.rs` (`Snapshot`);
+      `SqlBatchView::new` (`NoPartitions`), and `make_batch_partition_spec` and
+      `export_log_view.rs`'s `make_batch_partition_spec` (`Snapshot`); `merge.rs` /
+      `make_merge_session_context` and `view_merge_check.rs` map `Some(insert_range)` to `Query`;
+    - thread `SessionRange` through the functions listed in Design §3a;
     - `materialize_partitions_table_function.rs` and
       `regenerate_partitions_table_function.rs`: reject on-demand views.
 11. `partition_ladder.rs`: factor `plan_bucket` over a count closure and add
@@ -387,7 +399,7 @@ step 8.
 - `rust/public/src/servers/flight_sql_service_impl.rs`
 - Tests: `view_ddl_parse_tests.rs`, `view_definition_validation_tests.rs`,
   `view_registry_tests.rs`, `partition_ladder_tests.rs`, `jit_promotion_tests.rs`, new
-  `on_demand_jit_tests.rs`, new `session_range_tests.rs`, plus the `ViewDefinition` constructors the compiler flags.
+  `on_demand_jit_tests.rs`, new `session_range_tests.rs`, `lakehouse_admin_gate_test.rs`, plus the `ViewDefinition` constructors the compiler flags.
 - `mkdocs/docs/admin/materialized-views.md`, `mkdocs/docs/admin/views-as-code.md`,
   `mkdocs/docs/admin/functions-reference.md`, `CHANGELOG.md`
 
@@ -418,8 +430,7 @@ step 8.
 - **Query range used as the insert range.** On-demand views share the DDL keying, so source rows
   inserted after `query_range.end` are not read for that query, even if their event time is
   inside it. Daemon views pick those up eventually, by covering every insert range. A view over
-  late-arriving data (uploads delayed by hours) will miss them on a narrow query. A later query
-  whose range covers their insert time picks them up. Accepted for v1; see Decisions.
+  late-arriving data (uploads delayed by hours) will miss them on a narrow query. Accepted for v1; see Decisions.
 
 ## Decisions
 
@@ -463,6 +474,10 @@ step 8.
     are `Option<i32>`, `validate_view_definition` returns the on-demand source list, and
     `promote_closed_buckets` takes a `RangeConvention`, and `make_session_context` and
     `MaterializedView::new` take a `SessionRange` instead of `Option<TimeRange>`;
+    `DdlRow.update_group` is `Option<i32>`; `query()`, `register_functions`,
+    `register_lakehouse_functions`, `make_merge_session_context`, and the
+    `ViewInstanceTableFunction` / `ParseBlockTableFunction` / `ProcessSpansTableFunction`
+    constructors take `SessionRange`;
   - schema v12.
 
 ## Testing Strategy
@@ -507,8 +522,8 @@ No-DB unit tests under `rust/analytics/tests/`:
   `make_session_context` with `Query` installs `TableScanRewrite`; with the other variants it
   doesn't.
 
-  The `materialize_partitions` and `regenerate_partitions` rejection is checked at the call
-  boundary in the same file.
+- `lakehouse_admin_gate_test.rs`: the `materialize_partitions` and `regenerate_partitions`
+  rejection of on-demand views.
 - `jit_promotion_tests.rs`: `RangeConvention::Aligned` inside and intersects at touching edges.
   Existing `BlockHull` cases keep passing.
 
