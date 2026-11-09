@@ -4,11 +4,11 @@ import {
   buildListQueryDenialsSql,
   buildRemoveQueryDenialSql,
   decodeQueryDenyRules,
-  escapeSqlLiteral,
   extractRemoveResult,
   extractRuleId,
   formatRelativeTime,
 } from '../query-deny-list-api'
+import { escapeSqlLiteral } from '../sql-literal'
 
 describe('escapeSqlLiteral', () => {
   it('doubles a single quote', () => {

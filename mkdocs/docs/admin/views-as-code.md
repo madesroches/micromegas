@@ -7,7 +7,7 @@ stored: the desired state is the files (checked into git, typically), the curren
 [`list_view_set_definitions()`](functions-reference.md#list_view_set_definitions), and the write
 path is the same `CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW` DDL described
 in [Materialized Views](materialized-views.md), executed over FlightSQL. This is a client-side
-diff/apply layer — there is no new server concept here.
+diff/apply layer — there is no new server concept here. For a one-off change without a repository, the [View Sets admin page](web-app.md#view-sets) edits a single definition in the browser.
 
 ## Requirements
 

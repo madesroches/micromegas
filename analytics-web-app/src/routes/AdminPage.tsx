@@ -6,6 +6,7 @@ import {
   Upload,
   Map,
   KeyRound,
+  Layers,
   ShieldCheck,
   ShieldBan,
   SlidersHorizontal,
@@ -97,6 +98,15 @@ function cards(isAdmin: boolean): AdminCard[] {
       iconColor: 'text-red-500',
       title: 'Query Deny List',
       description: 'Reject a misbehaving query at the FlightSQL service, without a deploy.',
+      adminOnly: true,
+    },
+    {
+      href: '/admin/view-sets',
+      icon: <Layers className="w-6 h-6" />,
+      iconBg: 'bg-indigo-500/15',
+      iconColor: 'text-indigo-500',
+      title: 'View Sets',
+      description: 'List, create, edit and drop SQL-defined materialized view sets.',
       adminOnly: true,
     },
     {

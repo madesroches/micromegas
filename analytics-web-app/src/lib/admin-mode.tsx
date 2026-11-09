@@ -10,6 +10,7 @@ export const ADMIN_ONLY_PATHS = [
   '/admin/maps',
   '/admin/analytics-keys',
   '/admin/query-deny-list',
+  '/admin/view-sets',
   '/admin/groups',
   '/admin/settings',
 ]

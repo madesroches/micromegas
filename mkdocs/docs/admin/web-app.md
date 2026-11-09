@@ -104,10 +104,10 @@ analytics-web-srv --disable-auth
 
 **Admin** (`/admin`) is open to **every authenticated user**, not just admins — `AuthGuard` on
 this route carries no `requireAdmin`. It renders a role-filtered card grid: an admin sees all
-ten cards; a non-admin sees only the two that have a real non-admin capability —
+eleven cards; a non-admin sees only the two that have a real non-admin capability —
 **Ingestion API Keys** (mint only — see [Web app admin pages](api-keys.md#web-app-admin-pages))
-and **Audience Access** (see [Audience Access](#audience-access)). The other eight — Data Sources,
-Export Screens, Import Screens, Maps, Analytics API Keys, Query Deny List, Groups, Settings — have no
+and **Audience Access** (see [Audience Access](#audience-access)). The other nine — Data Sources,
+Export Screens, Import Screens, Maps, Analytics API Keys, Query Deny List, View Sets, Groups, Settings — have no
 non-admin capability at all and stay hidden from a non-admin, same as their pages stay gated by
 `<AuthGuard requireAdmin>`.
 
@@ -204,6 +204,44 @@ who hand-typed the SQL would get "function not found" regardless.
 Because the page uses the admin endpoint, a rule's expression may mention any function name,
 for example `deny_queries('sql LIKE ''%retire_partitions%''', '...')`. A deny rule that targets
 `client = 'web'` does not cover queries sent in admin mode, which report client `web-admin`.
+
+## View Sets
+
+**Admin → View Sets** (`/admin/view-sets`) lists every view set and manages the SQL-defined ones
+without hand-writing DDL. It is a front end for `list_view_set_definitions()`, `list_view_sets()`,
+`list_partitions()`, `check_view_merge(ddl)` and the `CREATE [OR REPLACE]` / `DROP MATERIALIZED
+VIEW` statements described in [Materialized Views](materialized-views.md), issued through
+`POST /api/admin/query-stream` (see [Admin mode](#admin-mode)) against the selected data source.
+There is no dedicated REST route.
+
+The left column holds the data source selector and a table of view sets with a `ddl` or `builtin`
+badge and a health label: `ok`, `read-only` for built-ins, or `failed to load` for a SQL-defined
+view set whose stored definition is not loaded. Health reflects the replica that answered the
+query. Other replicas reload definitions every `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`
+(default 60 seconds), so right after a create or an edit the label can read `failed to load` for
+up to that long.
+
+Selecting a view set shows three tabs:
+
+- **Definition**: the stored `CREATE` statement, read-only, with **Edit** and **Drop**. When the
+  merge does not stream (a `SortExec` survives in the merge plan), a warning shows the plan line.
+  **Edit** switches to an editor; **Check** plans the merge without storing anything, and **Save**
+  sends the text as `CREATE OR REPLACE MATERIALIZED VIEW` after a confirmation. The name cannot be
+  changed; a rename is a create followed by a drop.
+- **Schema**: the column table, the sort order and the usage guide.
+- **Partitions**: partition count, rows, file size and insert-time range, loaded when the tab
+  opens.
+
+**Create View Set** opens an editor pre-filled with a skeleton statement. It sends a plain
+`CREATE`, so a name that already exists is refused rather than replaced. Parse errors, invalid
+queries and dependent views are reported by the server and shown above the editor with the text
+intact.
+
+Saving a definition that changes the output schema invalidates the old partitions. Saving one that
+keeps the schema does not rebuild anything: the existing partitions must be retired and rebuilt by
+other means (see [What a redefinition means](materialized-views.md#what-a-redefinition-means)).
+**Drop** retires the view set's partitions and is refused while another definition reads it. The
+page does not retire or rebuild partitions itself.
 
 ## Admin mode
 

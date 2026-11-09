@@ -16,7 +16,7 @@ any other definition.
 
 ## Creating and dropping a view
 
-From the web app, `CREATE` and `DROP MATERIALIZED VIEW` run only in a notebook with [admin mode](web-app.md#admin-mode) on.
+From the web app, `CREATE` and `DROP MATERIALIZED VIEW` run only in a notebook with [admin mode](web-app.md#admin-mode) on. The [View Sets admin page](web-app.md#view-sets) creates, edits and drops definitions without writing the DDL by hand.
 
 ```sql
 CREATE [OR REPLACE] MATERIALIZED VIEW <name> WITH (
