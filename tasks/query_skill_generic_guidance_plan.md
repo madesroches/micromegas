@@ -30,7 +30,7 @@ Docs-only change to one file; no code, no SQL surface change.
 
 ## Implementation Steps
 1. Edit `claude-plugin/skills/micromegas-query/SKILL.md`: add MANDATORY RULE 7; rewrite the first step of `## Available views` (items 1, 2, 4); add `## Deployment notes` (item 8); add performance additions and `### Sizing views` (items 3, 5, 6, 7).
-2. Add a `CHANGELOG.md` entry under Unreleased with the bold prefix `**Claude plugin:**` describing the skill's new generic guidance, citing (#1772). State "No SQL changes."
+2. Add a `CHANGELOG.md` entry under Unreleased with the bold prefix `**Claude Code Plugin:**` describing the skill's new generic guidance, citing (#1772). State "No SQL changes."
 
 ## Files to Modify
 - `claude-plugin/skills/micromegas-query/SKILL.md`
