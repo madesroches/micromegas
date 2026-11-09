@@ -139,11 +139,11 @@ it gets the red admin chrome.
 
 Open in a browser (self-contained, app tokens copied from `src/styles/globals.css`):
 
-- `tasks/1768_view_sets_admin_ui_mockups/option-a-master-detail.html`: list left, detail with
+- `tasks/completed/1768_view_sets_admin_ui_mockups/option-a-master-detail.html`: list left, detail with
   Definition/Schema/Partitions tabs right. One page, no extra routes, quick to hop between view
   sets; the editor is cramped on narrow screens. **Chosen**. Its list shows a
   "sort buffers" badge as an illustration; drop the badge when implementing.
-- `tasks/1768_view_sets_admin_ui_mockups/option-b-table-and-editor.html` (not chosen)
+- `tasks/completed/1768_view_sets_admin_ui_mockups/option-b-table-and-editor.html` (not chosen)
 
 ## Implementation Steps
 
