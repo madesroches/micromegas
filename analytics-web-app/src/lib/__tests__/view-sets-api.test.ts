@@ -31,7 +31,7 @@ describe('SQL builders', () => {
   it('escapes quotes in the DDL passed to check_view_merge and leaves $$ alone', () => {
     const ddl = "CREATE MATERIALIZED VIEW v WITH (extract_query = $$ SELECT 'a' $$)"
     expect(buildCheckViewMergeSql(ddl)).toBe(
-      "SELECT streams, sort_exec_line FROM check_view_merge('CREATE MATERIALIZED VIEW v WITH (extract_query = $$ SELECT ''a'' $$)')"
+      "SELECT streams, sort_exec_line FROM check_view_merge('CREATE MATERIALIZED VIEW v WITH (extract_query = $$ SELECT ''a'' $$)')",
     )
   })
 
@@ -43,7 +43,7 @@ describe('SQL builders', () => {
 describe('toReplaceStatement', () => {
   it('rewrites a plain CREATE', () => {
     expect(toReplaceStatement('CREATE MATERIALIZED VIEW v WITH (a = 1)')).toBe(
-      'CREATE OR REPLACE MATERIALIZED VIEW v WITH (a = 1)'
+      'CREATE OR REPLACE MATERIALIZED VIEW v WITH (a = 1)',
     )
   })
 
@@ -54,7 +54,7 @@ describe('toReplaceStatement', () => {
 
   it('skips leading line and block comments', () => {
     expect(toReplaceStatement('-- note\n/* more */\nCREATE MATERIALIZED VIEW v')).toBe(
-      '-- note\n/* more */\nCREATE OR REPLACE MATERIALIZED VIEW v'
+      '-- note\n/* more */\nCREATE OR REPLACE MATERIALIZED VIEW v',
     )
   })
 
@@ -65,7 +65,7 @@ describe('toReplaceStatement', () => {
 
   it('handles lowercase keywords', () => {
     expect(toReplaceStatement('create materialized view v')).toBe(
-      'CREATE OR REPLACE materialized view v'
+      'CREATE OR REPLACE materialized view v',
     )
   })
 
@@ -179,9 +179,10 @@ describe('mergeViewSetRows', () => {
   })
 
   it('marks a ddl definition missing from the loaded sets as failed to load', () => {
-    const rows = mergeViewSetRows([def('a', 'ddl'), def('b', 'ddl')], [
-      { name: 'a', description: 'd', columns: 'x: Int64', sortOrder: 'x' },
-    ])
+    const rows = mergeViewSetRows(
+      [def('a', 'ddl'), def('b', 'ddl')],
+      [{ name: 'a', description: 'd', columns: 'x: Int64', sortOrder: 'x' }],
+    )
     expect(rows[0].health).toBe('ok')
     expect(rows[0].columns).toEqual([{ name: 'x', type: 'Int64' }])
     expect(rows[1].health).toBe('failed to load')
@@ -189,9 +190,10 @@ describe('mergeViewSetRows', () => {
   })
 
   it('marks built-ins read-only', () => {
-    const rows = mergeViewSetRows([def('log_entries', 'builtin')], [
-      { name: 'log_entries', description: null, columns: null, sortOrder: null },
-    ])
+    const rows = mergeViewSetRows(
+      [def('log_entries', 'builtin')],
+      [{ name: 'log_entries', description: null, columns: null, sortOrder: null }],
+    )
     expect(rows[0].health).toBe('read-only')
     expect(rows[0].definitionSql).toBeNull()
   })
