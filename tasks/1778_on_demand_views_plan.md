@@ -93,9 +93,9 @@ a per-bucket source count, with no dependency on `blocks`.
   daemon-updated view cannot read an on-demand one". This goes next to the existing
   update-group ordering check.
 - **On-demand view reading on-demand views: allowed, made explicit.** The JIT driver must bring
-  its on-demand sources up to date *before* it snapshots source partitions. The extract session
-  uses a `PartitionCache` snapshot and runs with `query_range = None`, so the scan-time
-  `jit_update` inside that session cannot refresh upstream in time (see Trade-offs). So:
+  its on-demand sources up to date *before* it snapshots source partitions. The extract and count
+  sessions are `SessionRange::Snapshot` sessions over a `PartitionCache` loaded beforehand. A
+  scan inside them cannot refresh upstream in time (see Trade-offs and Decisions). So:
   - The same walk also collects the on-demand source views:
     `walk_plan_for_scans(..., on_demand_sources: &mut Vec<Arc<dyn View>>)`.
     `validate_view_definition` returns them: `Result<Vec<Arc<dyn View>>>` instead of `Result<()>`.
@@ -128,9 +128,9 @@ pub async fn update_on_demand_view(
 `SqlBatchView::jit_update` behaves like this:
 
 - `update_group.is_some()`: it stays a no-op.
-- `query_range == None`: also a no-op. The cases are daemon and validation sessions, and an
-  unbounded user query. With no range there is nothing to size the work from, and the view
-  serves whatever exists.
+- `query_range == None`: a no-op. `MaterializedView::scan` has already rejected
+  `SessionRange::Unbounded` and short-circuited `NoPartitions` (§3a). `None` therefore means
+  `Snapshot`, whose caller already refreshed the on-demand sources.
 - Otherwise it calls the entry point above. It needs `Arc<dyn View>` for itself, because
   promotion hands the view to `create_merged_partition`. `SqlBatchView` cannot produce that from
   `&self`, so the driver takes it from `ViewFactory` by name
@@ -177,8 +177,8 @@ Steps, for one `jit_update`:
    - `planned_rung`: `Some(rung)` when the unit is exactly one planned bucket.
 
    Normally a unit is just the planned bucket, holding its finer rows. It grows when a coarser
-   row covers the bucket (an earlier query at a coarser rung, or a promotion), or when a hand
-   `materialize_partitions` wrote a misaligned row. Because units contain every row they touch,
+   row covers the bucket (an earlier query at a coarser rung, or a promotion), or when a view
+   converted from daemon-updated left rows on the daemon's grid. Because units contain every row they touch,
    `Containment` always retires everything a write replaces, and no `Overlap` mode is needed.
 6. **Judge (pure, after one probe per unit).** `spec = view.make_batch_partition_spec(lakehouse,
    cache, unit.range)`. `judge_unit(unit, rows, file_schema_hash, probed_count) -> UnitVerdict`
@@ -203,6 +203,58 @@ Steps, for one `jit_update`:
 Planned bucket count for a 7-day query: `rung = 6h`, 28 closed buckets, plus roughly 6 + 12 + 5
 open-edge descendants. So about 50 probes, each one `make_session_context` plus one count query.
 The cost is close to the daemon's per-partition cost and is paid only by the reader who asks.
+
+### 3a. Unbounded queries are rejected, not answered from whatever exists
+
+If an on-demand view is queried with no time range, it would serve only the partitions earlier
+reads happened to leave, and the reader would get no sign the answer is incomplete. So a user
+query must give an on-demand view a range, and fails otherwise:
+
+> `od_log_counts` is an on-demand view and needs a query time range (pass begin/end with the query)
+
+The obstacle is that today's `query_range: None` means three different things, and only one of
+them should fail:
+
+| What the session is | Today | Should an on-demand view… |
+|---|---|---|
+| A user query with no range | `None` | fail |
+| An internal session over a partition snapshot its caller prepared: daemon and on-demand extract and count sessions (`make_batch_partition_spec`), merges, `export_log_view` | `None` + `PartitionCache` | read the snapshot; its caller already refreshed upstream (§2) |
+| Planning only, never reading data: validation contexts, `SqlBatchView::new`'s schema discovery | `None` + `NullPartitionProvider` | yield nothing, run no JIT |
+
+The read scope can't separate them: unauthenticated user queries also get `ReadScope::All`. So
+the range is made explicit. `make_session_context` and `MaterializedView` take a `SessionRange`
+instead of `Option<TimeRange>`:
+
+```rust
+pub enum SessionRange {
+    /// User query over a time range: event-time pruning (`TableScanRewrite`) + JIT over it.
+    Query(TimeRange),
+    /// User query with no time range: no pruning; views that need a range refuse.
+    Unbounded,
+    /// Internal session over the caller's partition snapshot. The caller already brought on-demand
+    /// sources up to date for the snapshot's insert range, so no range-driven JIT runs here.
+    Snapshot,
+    /// Planning only: an explicit absence of partitions. Scans yield an empty plan with the view's
+    /// schema, with no partition fetch and no JIT.
+    NoPartitions,
+}
+```
+
+- `View` gains `fn requires_query_range(&self) -> bool { false }`. `SqlBatchView` returns
+  `is_on_demand()`.
+- `MaterializedView::scan`:
+  - `NoPartitions`: returns an `EmptyExec` over the schema.
+  - `Unbounded` with `view.requires_query_range()`: the error above.
+  - Otherwise as today. `jit_update` receives `Some(range)` for `Query` and `None` for the
+    other variants, so built-in views behave exactly as they do now.
+- `TableScanRewrite` is installed only for `Query`.
+- Changing the parameter type makes the compiler enumerate every call site, about 20 in the
+  sources and tests. Each picks its variant from the table above. FlightSQL picks `Query` or
+  `Unbounded`. Callers that pass `NullPartitionProvider` only to plan switch to `NoPartitions`.
+  Delete `NullPartitionProvider` if no other use is left.
+- `materialize_partitions` and `regenerate_partitions` reject on-demand views (see Decisions).
+  Those UDTFs plan the extract against a snapshot taken without first refreshing on-demand
+  sources. That would be the same silent hole by another route.
 
 ### 4. Promotion with aligned ranges
 
@@ -275,26 +327,40 @@ step 8.
 9. `sql_batch_view.rs`: add `on_demand_sources: Vec<Arc<dyn View>>`,
    `with_on_demand_sources`, and `is_on_demand`.
 
-**Phase 3: driver**
+**Phase 3: session range and driver**
 
-10. `partition_ladder.rs`: factor `plan_bucket` over a count closure and add
+10. `SessionRange` (Design §3a). This is a mechanical signature change, and the driver's
+    sessions build on it:
+    - `query.rs`: define the enum; `make_session_context` and `register_table` take it, and
+      `TableScanRewrite` is installed only for `Query`;
+    - `view.rs`: `requires_query_range`;
+    - `materialized_view.rs`: store the range, and handle `NoPartitions` and `Unbounded` in
+      `scan`;
+    - every `make_session_context` / `MaterializedView::new` caller picks its variant, including
+      `flight_sql_service_impl.rs` (`Query` or `Unbounded`), `view_definition.rs` and
+      `SqlBatchView::new` (`NoPartitions`), and `make_batch_partition_spec`, `merge.rs` and
+      `export_log_view.rs` (`Snapshot`);
+    - remove `NullPartitionProvider` if it becomes unused;
+    - `materialize_partitions_table_function.rs` and
+      `regenerate_partitions_table_function.rs`: reject on-demand views.
+11. `partition_ladder.rs`: factor `plan_bucket` over a count closure and add
     `plan_dense_buckets`.
-11. `jit_promotion.rs`: add `RangeConvention`, thread it through `promote_closed_buckets` and
+12. `jit_promotion.rs`: add `RangeConvention`, thread it through `promote_closed_buckets` and
     `promote_one`, and move `row_inside` / `row_intersects` onto it. `jit_partitions.rs` passes
     `BlockHull`.
-12. New `on_demand_jit.rs`:
+13. New `on_demand_jit.rs`:
     - pure `plan_units` and `judge_unit`;
     - `update_on_demand_view`, with upstream refresh, snapshot, probe, write with the
       conflict-retry, and promote;
     - metrics `on_demand_jit` count by `outcome = covered | written | conflict_dropped`.
-13. `sql_batch_view.rs::jit_update`: dispatch as in Design §3. Register the module in
+14. `sql_batch_view.rs::jit_update`: dispatch as in Design §3. Register the module in
     `lakehouse/mod.rs`.
 
 **Phase 4: access control docs, docs, changelog**
 
-14. `audience_guard.rs` rule 3 and `materialized_view.rs::instance_is_audience_guarded`: doc
+15. `audience_guard.rs` rule 3 and `materialized_view.rs::instance_is_audience_guarded`: doc
     rewrites only.
-15. Documentation and `CHANGELOG.md` (see below).
+16. Documentation and `CHANGELOG.md` (see below).
 
 ## Files to Modify
 
@@ -312,7 +378,15 @@ step 8.
 - `rust/analytics/src/lakehouse/on_demand_jit.rs` (new)
 - `rust/analytics/src/lakehouse/mod.rs`
 - `rust/analytics/src/lakehouse/audience_guard.rs` (doc)
-- `rust/analytics/src/lakehouse/materialized_view.rs` (doc)
+- `rust/analytics/src/lakehouse/materialized_view.rs` (unbounded check, doc)
+- `rust/analytics/src/lakehouse/view.rs`, `query.rs`, `partition_cache.rs`
+  (`NullPartitionProvider`), and every `make_session_context` / `MaterializedView::new` caller
+  (`metadata.rs`, `merge.rs`, `export_log_view.rs`, `parse_block_table_function.rs`,
+  `perfetto_trace_execution_plan.rs`, `process_spans_table_function.rs`,
+  `view_instance_table_function.rs`, `ownership_rewrite.rs` sources, and DB and no-DB tests)
+- `rust/analytics/src/lakehouse/materialize_partitions_table_function.rs`,
+  `regenerate_partitions_table_function.rs`
+- `rust/public/src/servers/flight_sql_service_impl.rs`
 - Tests: `view_ddl_parse_tests.rs`, `view_definition_validation_tests.rs`,
   `view_registry_tests.rs`, `partition_ladder_tests.rs`, `jit_promotion_tests.rs`, new
   `on_demand_jit_tests.rs`, plus the `ViewDefinition` constructors the compiler flags.
@@ -323,7 +397,7 @@ step 8.
 - **Missing `update_group` versus `materialization = 'on_demand'`.** The issue's call. The
   missing group already says it, and the daemon already keys on it.
 - **Explicit upstream refresh versus the scan-time `jit_update` inside the extract session.**
-  Upstream could be refreshed by giving the extract session `query_range = Some(unit)`. But that
+  Upstream could be refreshed by running the extract session as `SessionRange::Query(unit)`. But that
   installs `TableScanRewrite` and makes every source's partition fetch prune by *event* time,
   while extracts filter by *insert* time. Rows inserted inside the unit but carrying an earlier
   event time could then be pruned away. It would also make the same definition read sources
@@ -357,8 +431,18 @@ step 8.
 - Rejecting `source_partition_delta` / `merge_partition_delta` on on-demand views is a v1 stopgap.
   With the 24-bucket target, very dense sources get partitions that are too large, and authors
   have no way to cap them. Follow-up: #1779.
-- `materialize_partitions` / `regenerate_partitions` on an on-demand view stay allowed, as an
-  admin backfill. The rows they write are judged like any other row.
+- `SessionRange::Snapshot` carries no range. Letting on-demand sources materialize themselves
+  over a `Snapshot(insert_range)` would miss the already-taken snapshot (a second, live fetch
+  path would be needed). It would also materialize upstream at each unit's finer rung, once per
+  probe. The explicit refresh in §2 runs once over the whole aligned range. With no JIT use,
+  nothing would read the range: the caller already applied it when building the
+  `PartitionCache`.
+- An unbounded user query over an on-demand view is an error, not a partial answer (§3a).
+  Materializing all of history instead was rejected: the extent of the source is unknown, and
+  that first read would be unbounded in cost.
+- `materialize_partitions` / `regenerate_partitions` reject on-demand views. A backfill is a query
+  over the range, and repairing a range means `retire_partitions` followed by a query. Accepting
+  them would bypass the upstream refresh in §2.
 
 ## Documentation
 
@@ -372,7 +456,8 @@ step 8.
   - the feature;
   - **Minor breaking change**: `ViewDefinition.update_group` / `ViewDefinitionRow.update_group`
     are `Option<i32>`, `validate_view_definition` returns the on-demand source list, and
-    `promote_closed_buckets` takes a `RangeConvention`;
+    `promote_closed_buckets` takes a `RangeConvention`, and `make_session_context` and
+    `MaterializedView::new` take a `SessionRange` instead of `Option<TimeRange>`;
   - schema v12.
 
 ## Testing Strategy
@@ -403,6 +488,21 @@ No-DB unit tests under `rust/analytics/tests/`:
   - schema-hash mismatch, `Stale`;
   - touching neighbor rows are not absorbed;
   - promotion eligibility (closed, at rung, at least 2 rows, not grown).
+- `session_range_tests.rs`: `MaterializedView::scan` over a fake view that counts its
+  `jit_update` calls, using a lazily connected pool:
+  - `Unbounded`, with `requires_query_range() == true`: errors, naming the view, and
+    `jit_update` is not called;
+  - `Unbounded`, with a view that doesn't require a range (built-in): unchanged;
+  - `NoPartitions`: an empty plan with the view's schema, no `jit_update`, and no provider
+    fetch (a provider that panics on `fetch`);
+  - `Snapshot`: `jit_update(None)`, then fetches from the given provider;
+  - `Query(r)`: `jit_update(Some(r))`.
+
+  `make_session_context` with `Query` installs `TableScanRewrite`; with the other variants it
+  doesn't.
+
+  The `materialize_partitions` and `regenerate_partitions` rejection is checked at the call
+  boundary in the same file.
 - `jit_promotion_tests.rs`: `RangeConvention::Aligned` inside and intersects at touching edges.
   Existing `BlockHull` cases keep passing.
 
@@ -428,7 +528,9 @@ fake cannot reach. A break shows up immediately as empty results or daemon log l
    a new `updated` time.
 5. Query `--begin 7d`. Expected: 6-hour partitions replace the closed 1-hour ones (promotion).
 6. `grep od_log_counts /tmp/daemon.log`. Expected: no materialization lines.
-7. Create a daemon view (`update_group = 5000`) whose extract reads `od_log_counts`. Expected:
+7. `micromegas-query "SELECT count(*) FROM od_log_counts"` with no `--begin`/`--end`. Expected:
+   the "needs a query time range" error.
+8. Create a daemon view (`update_group = 5000`) whose extract reads `od_log_counts`. Expected:
    rejected with the daemon-reads-on-demand message.
 
 ## Open Questions
