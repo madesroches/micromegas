@@ -17,8 +17,9 @@ The user's query or question: $ARGUMENTS
 4. **Use `view_instance()` for single-process/stream queries.** Much better performance than filtering with WHERE.
 5. **`thread_spans` has no global view** — must use `view_instance('thread_spans', stream_id)` or `process_spans(process_id, 'thread')`.
 6. **`async_events` has no global view** — must use `view_instance('async_events', process_id)` or `process_spans(process_id, 'async')`.
+7. **For each view, stay within the time window its `description` gives (and apply its mandatory filters).** The `description` returned by `list_view_sets()` is binding (see Available views).
 
-Violating these rules can crash the analytics service by exhausting its memory.
+Violating these rules can crash the analytics service by exhausting its memory, as can a `GROUP BY` without a selective filter on a large view (see Performance tips) — `LIMIT` caps output, not the group set.
 
 ## Setup
 
@@ -208,15 +209,31 @@ micromegas-query [--file <path|->] ["<SQL>"] --begin <time> [--end <time>] [--fo
 - Use `--format csv` or `--format json` when processing results programmatically (csv for flat data, json when properties/nested fields matter)
 - `--max-colwidth 0` for unlimited column width
 
+## Deployment notes
+
+If `~/.micromegas/query-notes.md` exists, read it before the catalog read (the first step of Available views below). It holds facts about this deployment: approximate row counts, stricter windows for the largest views, preferred subset views over `log_entries`, environment conventions.
+
+Where the notes conflict with a view's `description`, the notes win only by being stricter (narrower windows, extra filters). They never loosen a `description` or the MANDATORY RULES. The same applies to deployment notes given in context.
+
 ## Available views
 
-**First step: ask the server what exists and how to use it.**
+**First step: ask the server what exists and how to use it.** Start with the cheap read of names only:
 
 ```
-micromegas-query "SELECT view_set_name, description, columns, sort_order FROM list_view_sets() LIMIT 100" --begin 1h --format json
+micromegas-query "SELECT view_set_name FROM list_view_sets() LIMIT 100" --begin 1h --format json
 ```
 
-`description` is a markdown usage guide per view (what a row is, how to access it, mandatory filters, how to decode columns, join keys, examples), `columns` lists `name: DataType` per column, and `sort_order` lists the columns a scan is already ordered by. It includes any views the deployment defined itself. Use `WHERE view_set_name = '<name>'` to read one. **Do not run DESCRIBE queries** — `columns` and `description` from `list_view_sets()` cover the schemas and usage.
+Then read the documentation for only the views the question needs:
+
+```
+micromegas-query "SELECT view_set_name, description, columns, sort_order FROM list_view_sets() WHERE view_set_name IN ('<name1>', '<name2>') LIMIT 100" --begin 1h --format json
+```
+
+`description` is a markdown usage guide per view (what a row is, how to access it, mandatory filters, how to decode columns, join keys, examples), `columns` lists `name: DataType` per column, and `sort_order` lists the columns a scan is already ordered by. It includes any views the deployment defined itself. Reading every view at once (dropping the `WHERE`) returns tens of KB on a deployment with a few dozen views, so avoid it. Keep `--format json`: table output truncates cells. **Do not run DESCRIBE queries** — `columns` and `description` from `list_view_sets()` cover the schemas and usage.
+
+**Descriptions are binding.** Time windows, mandatory filters and access rules in a view's `description` must be followed exactly like the MANDATORY RULES.
+
+**Empty results:** an empty result prints the lowercase string `no data` for every `--format`, so `json` and `csv` output is a bare, non-parseable string rather than an empty document. This includes a `GROUP BY` that matches no row. It is not an error and does not mean missing access. For an explicit 0, use a plain `COUNT(*)` without `GROUP BY`.
 
 **Ignore internal tables:** Tables prefixed with `__` and suffixed with `__partitions` (e.g. `__log_entries__partitions`) are internal partition tables — never query them directly.
 
@@ -353,8 +370,32 @@ micromegas-query "SELECT time, msg, jsonb_format_json(properties) as props FROM 
 - Use `view_instance()` for single-process/stream queries — much faster than global views with WHERE filters.
 - Use `log_stats` for volume analysis instead of counting `log_entries`.
 - Select only the columns you need — avoid `SELECT *` on large views.
+- **Project only the histogram columns you need.** Histograms are large and re-aggregated on every read, so `SELECT *` on a view with several histogram columns multiplies the scan cost.
+- **Avoid an unbounded `GROUP BY` on a large aggregated view.** Without a selective filter it can exhaust server memory: the group set is the problem, and `LIMIT` does not help. Filter on a selective column (typically the leading `sort_order` column) before grouping broadly.
 - Filter on time first, then other fields.
 - **Queries without `--begin` scan ALL historical data** and can exhaust server memory, crashing the analytics service for all users.
+
+### Pre-aggregated views first
+
+When the deployment defines per-minute rollups of `measures` (min/max/sum/count per bin), compute MIN/MAX/SUM/COUNT/AVG and find outliers there. Drill into raw `measures` with a tight window only when exact sample times are needed. Column names follow the rollup's own `description`; the translation is:
+
+| Raw `measures` | Rollup |
+|---|---|
+| `MIN(value)` | `MIN(min_value)` |
+| `MAX(value)` | `MAX(max_value)` |
+| `SUM(value)` | `SUM(sum_values)` |
+| `COUNT(value)` | `SUM(nb_values)` |
+| `AVG(value)` | `SUM(sum_values)/SUM(nb_values)` |
+
+### Sizing views
+
+`thread_spans`, `async_events`, `net_spans`, `otel_spans` and `images` are materialized on demand per `view_instance()` id (`thread_spans` is keyed per stream, the others per `process_id`), so `list_partitions()` row counts reflect past queries, not data volume. Estimate density from the source events per stream tag over a few days, divided by the number of days:
+
+```
+micromegas-query "SELECT array_to_string(\"streams.tags\", '+') AS tags, sum(nb_objects) AS events FROM blocks GROUP BY 1 ORDER BY events DESC LIMIT 20" --begin 3d
+```
+
+Map tags to views: `cpu` -> `thread_spans` / `async_events` (the `cpu` total covers both), `net` -> `net_spans`, `image` -> `images`, `trace` -> `otel_spans`.
 
 ## Workflow: narrowing time ranges
 
