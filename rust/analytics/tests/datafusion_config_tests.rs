@@ -12,7 +12,7 @@ use micromegas_analytics::lakehouse::datafusion_config::{
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::query::{
-    make_session_context, query_partitions, query_partitions_context,
+    SessionRange, make_session_context, query_partitions, query_partitions_context,
 };
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
@@ -144,7 +144,7 @@ async fn session(lakehouse: Arc<LakehouseContext>) -> Result<datafusion::prelude
             now,
             now + TimeDelta::hours(1),
         ))),
-        None,
+        SessionRange::Snapshot,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
         CallerContext::maintenance(),

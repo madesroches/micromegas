@@ -62,14 +62,14 @@ fn def(
     extract_query: &str,
     count_src_query: &str,
     merge_partitions_query: &str,
-    update_group: i32,
+    update_group: impl Into<Option<i32>>,
 ) -> ViewDefinition {
     ViewDefinition {
         view_set_name: name.to_string(),
         extract_query: extract_query.to_string(),
         count_src_query: count_src_query.to_string(),
         merge_partitions_query: merge_partitions_query.to_string(),
-        update_group,
+        update_group: update_group.into(),
         options: base_options(),
     }
 }
@@ -84,6 +84,16 @@ async fn try_validate(
     factory: Arc<ViewFactory>,
     definition: &ViewDefinition,
 ) -> anyhow::Result<()> {
+    try_validate_sources(lakehouse, factory, definition)
+        .await
+        .map(|_| ())
+}
+
+async fn try_validate_sources(
+    lakehouse: &LakehouseContext,
+    factory: Arc<ViewFactory>,
+    definition: &ViewDefinition,
+) -> anyhow::Result<Vec<Arc<dyn View>>> {
     let view = build_sql_batch_view(
         definition,
         lakehouse.runtime().clone(),
@@ -533,4 +543,98 @@ async fn seeded_log_stats_definition_passes_validation() {
          log_stats schema (names, types, nullability) -- if this legitimately changed, update \
          the expected field list here and treat it as a schema-breaking migration"
     );
+}
+
+const ON_DEMAND_EXTRACT: &str = "SELECT date_bin('1 minute', time) as time_bin, \
+            arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience, \
+            count(*) as count \
+     FROM log_entries \
+     WHERE insert_time >= '{begin}' AND insert_time < '{end}' \
+     GROUP BY time_bin";
+const ON_DEMAND_COUNT: &str = "SELECT count(*) AS count FROM log_entries \
+     WHERE insert_time >= '{begin}' AND insert_time < '{end}'";
+const ON_DEMAND_MERGE: &str = "SELECT time_bin, arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience, \
+            sum(count) as count \
+     FROM {source} GROUP BY time_bin";
+
+/// A factory carrying a built on-demand view named `od_source`.
+async fn factory_with_on_demand_view(lakehouse: &LakehouseContext) -> Arc<ViewFactory> {
+    let base = Arc::new(make_base_factory(lakehouse));
+    let d = def(
+        "od_source",
+        ON_DEMAND_EXTRACT,
+        ON_DEMAND_COUNT,
+        ON_DEMAND_MERGE,
+        None,
+    );
+    let view = build_sql_batch_view(
+        &d,
+        lakehouse.runtime().clone(),
+        lakehouse.lake().clone(),
+        base.clone(),
+        Arc::new(NoOpSessionConfigurator),
+    )
+    .await
+    .expect("build the on-demand fixture view");
+    assert!(view.requires_query_range());
+    let mut factory = (*base).clone();
+    factory.add_global_view(Arc::new(view));
+    Arc::new(factory)
+}
+
+fn reader_of_on_demand_view(group: impl Into<Option<i32>>) -> ViewDefinition {
+    def(
+        "od_reader",
+        "SELECT time_bin, audience, count FROM od_source",
+        ON_DEMAND_COUNT,
+        "SELECT time_bin, arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience, \
+                sum(count) as count \
+         FROM {source} GROUP BY time_bin",
+        group,
+    )
+}
+
+#[tokio::test]
+async fn daemon_view_reading_an_on_demand_view_is_rejected() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let factory = factory_with_on_demand_view(&lakehouse).await;
+    let err = try_validate(&lakehouse, factory, &reader_of_on_demand_view(9000))
+        .await
+        .expect_err("a daemon-updated view must not read an on-demand one");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("reads on-demand view 'od_source'"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn on_demand_view_reading_an_on_demand_view_returns_it_as_a_source() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let factory = factory_with_on_demand_view(&lakehouse).await;
+    let sources = try_validate_sources(&lakehouse, factory, &reader_of_on_demand_view(None))
+        .await
+        .expect("an on-demand view may read an on-demand one");
+    let names: Vec<String> = sources
+        .iter()
+        .map(|v| v.get_view_set_name().to_string())
+        .collect();
+    assert_eq!(names, vec!["od_source".to_string()]);
+}
+
+#[tokio::test]
+async fn view_reading_only_daemon_views_has_no_on_demand_sources() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let factory = Arc::new(make_base_factory(&lakehouse));
+    let d = def(
+        "my_view",
+        ON_DEMAND_EXTRACT,
+        VALID_COUNT_SRC,
+        ON_DEMAND_MERGE,
+        2500,
+    );
+    let sources = try_validate_sources(&lakehouse, factory, &d)
+        .await
+        .expect("a daemon view reading daemon views is accepted");
+    assert!(sources.is_empty());
 }

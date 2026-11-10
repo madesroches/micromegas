@@ -25,7 +25,7 @@ pub struct ViewDefinitionRow {
     pub extract_query: String,
     pub count_src_query: String,
     pub merge_partitions_query: String,
-    pub update_group: i32,
+    pub update_group: Option<i32>,
     pub view_options: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -72,8 +72,9 @@ const SELECT_COLUMNS: &str = "view_set_name, definition_sql, extract_query, coun
      merge_partitions_query, update_group, view_options, created_at, updated_at, updated_by";
 
 /// The rows-in seam [`super::view_registry::ViewRegistry::reload`] needs: every definition
-/// currently in force, ordered by `(update_group, view_set_name)` -- the order
-/// `super::view_registry::build_factory` relies on regardless of which caller fed it the rows.
+/// currently in force, ordered by `(update_group NULLS LAST, view_set_name)` -- on-demand rows
+/// (no group) last, on purpose. `super::view_registry::build_factory` relies on the group order
+/// for daemon-updated rows regardless of which caller fed it the rows.
 #[async_trait]
 pub trait ViewDefinitionStore: Send + Sync + Debug {
     async fn list(&self) -> Result<Vec<ViewDefinitionRow>>;
@@ -96,7 +97,7 @@ impl ViewDefinitionStore for PgViewDefinitionStore {
     async fn list(&self) -> Result<Vec<ViewDefinitionRow>> {
         let sql = format!(
             "SELECT {SELECT_COLUMNS} FROM lakehouse_view_set_definitions \
-             ORDER BY update_group, view_set_name"
+             ORDER BY update_group NULLS LAST, view_set_name"
         );
         let rows = sqlx::query(&sql)
             .fetch_all(&self.pool)
@@ -115,7 +116,7 @@ pub async fn list_tx(
 ) -> Result<Vec<ViewDefinitionRow>> {
     let sql = format!(
         "SELECT {SELECT_COLUMNS} FROM lakehouse_view_set_definitions \
-         ORDER BY update_group, view_set_name"
+         ORDER BY update_group NULLS LAST, view_set_name"
     );
     let rows = sqlx::query(&sql)
         .fetch_all(&mut **tx)

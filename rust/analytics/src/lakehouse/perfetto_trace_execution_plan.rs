@@ -3,6 +3,7 @@ use super::{
     lakehouse_context::LakehouseContext,
     partition_cache::QueryPartitionProvider,
     process_streams::get_process_thread_list,
+    query::SessionRange,
     read_scope::CallerContext,
     session_configurator::NoOpSessionConfigurator,
     view_factory::ViewFactory,
@@ -314,7 +315,7 @@ async fn generate_streaming_perfetto_trace(
     let ctx = super::query::make_session_context(
         lakehouse,
         part_provider,
-        Some(TimeRange {
+        SessionRange::Query(TimeRange {
             begin: time_range.begin,
             end: time_range.end,
         }),

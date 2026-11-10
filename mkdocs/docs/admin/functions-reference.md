@@ -138,6 +138,8 @@ SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:
 
 **Description**: Force-regenerates existing partition(s) directly from source data, bypassing the "already up to date" freshness check that `materialize_partitions()` stops at. Useful when a partition's content hash is unchanged but its internal row order or format needs to be refreshed -- for example, an existing merged `blocks` partition materialized before ordered merges were introduced (see `sort_order` in [`list_partitions()`](#list_partitions)), or a `SqlBatchView` (e.g. `log_stats`) whose live partitions predate it adopting a `with_merge_sort_order` declaration and so won't certify for ordered k-way merges until regenerated.
 
+It rejects on-demand views (DDL views without an `update_group`): retire their partitions and query instead.
+
 **Parameters**:
 - `view_set_name` (String): Name of the view set to regenerate
 - `begin` (Timestamp): Start time of the partition(s) being regenerated (inclusive)
@@ -756,7 +758,7 @@ ORDER BY update_group, view_set_name;
 |---|---|---|
 | `view_set_name` | String | The view set's name |
 | `definition_sql` | String, nullable | The `CREATE MATERIALIZED VIEW` statement text, verbatim, as last submitted; NULL for built-in view sets |
-| `update_group` | Int32, nullable | The daemon's materialization ordering group; NULL for a built-in view set without one |
+| `update_group` | Int32, nullable | The daemon's materialization ordering group; NULL for an on-demand DDL view or a built-in view set without one |
 | `updated_at` | Timestamp, nullable | When this row was last created or replaced; NULL for built-in view sets |
 | `updated_by` | String, nullable | The identity of the caller who last created or replaced it |
 | `source` | String | `'ddl'` or `'builtin'` |

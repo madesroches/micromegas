@@ -16,7 +16,7 @@ use datafusion::arrow::array::{Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
-use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query::{SessionRange, make_session_context};
 use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
@@ -53,7 +53,7 @@ async fn query(
     let ctx = make_session_context(
         lakehouse,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::Snapshot,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
         caller,

@@ -13,7 +13,7 @@ use datafusion::physical_plan::execute_stream;
 use futures::TryStreamExt;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
-use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query::{SessionRange, make_session_context};
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -48,7 +48,7 @@ async fn extract_query_without_an_order_by_satisfies_the_declared_sort_order() {
     let ctx = make_session_context(
         lakehouse.clone(),
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::NoPartitions,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
         CallerContext::maintenance(),

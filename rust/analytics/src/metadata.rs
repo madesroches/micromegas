@@ -18,9 +18,12 @@ use crate::{
     audience::coalesced_audience_column,
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
-        lakehouse_context::LakehouseContext, partition_cache::LivePartitionProvider,
-        query::make_session_context, read_scope::CallerContext,
-        session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
+        lakehouse_context::LakehouseContext,
+        partition_cache::LivePartitionProvider,
+        query::{SessionRange, make_session_context},
+        read_scope::CallerContext,
+        session_configurator::NoOpSessionConfigurator,
+        view_factory::ViewFactory,
     },
     properties::properties_column_accessor::properties_column_by_name,
     time::TimeRange,
@@ -202,7 +205,7 @@ pub async fn find_stream_from_view(
     let ctx = make_session_context(
         lakehouse,
         partition_provider,
-        query_range,
+        query_range.map_or(SessionRange::Unbounded, SessionRange::Query),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
         CallerContext::internal(),
@@ -328,7 +331,7 @@ pub async fn find_process_with_latest_timing(
     let ctx = make_session_context(
         lakehouse,
         partition_provider,
-        query_range,
+        query_range.map_or(SessionRange::Unbounded, SessionRange::Query),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
         CallerContext::internal(),

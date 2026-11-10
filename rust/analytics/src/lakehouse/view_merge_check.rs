@@ -9,6 +9,7 @@ use super::{
     partition_cache::PartitionCache,
     partitioned_execution_plan::ScanOrdering,
     partitioned_table_provider::PartitionedTableProvider,
+    query::SessionRange,
     read_scope::CallerContext,
     session_configurator::SessionConfigurator,
     view::{View, ViewMetadata},
@@ -94,7 +95,7 @@ pub async fn check_merge_streaming(
     let ctx = make_merge_session_context(
         lakehouse.clone(),
         Arc::new(PartitionCache::empty(insert_range)),
-        Some(insert_range),
+        SessionRange::Query(insert_range),
         view_factory,
         session_configurator,
         CallerContext::maintenance(),

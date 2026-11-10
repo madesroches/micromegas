@@ -7,7 +7,7 @@ use super::{
     lakehouse_context::LakehouseContext,
     materialized_view::MaterializedView,
     partition_cache::NullPartitionProvider,
-    query::make_session_context,
+    query::{SessionRange, make_session_context},
     read_scope::CallerContext,
     session_configurator::{NoOpSessionConfigurator, SessionConfigurator},
     sql_batch_view::{SqlBatchView, guarded_sql_options},
@@ -56,7 +56,9 @@ pub struct ViewDefinition {
     pub extract_query: String,
     pub count_src_query: String,
     pub merge_partitions_query: String,
-    pub update_group: i32,
+    /// `None` marks an on-demand view: the maintenance daemon never touches it, queries fill the
+    /// partitions covering their own range.
+    pub update_group: Option<i32>,
     pub options: ViewOptions,
 }
 
@@ -139,7 +141,7 @@ pub async fn build_sql_batch_view(
         lake,
         view_factory,
         session_configurator,
-        Some(def.update_group),
+        def.update_group,
         source_delta,
         merge_delta,
     )
@@ -296,10 +298,11 @@ fn walk_plan_for_scans(
     plan: &LogicalPlan,
     max_group: &mut Option<i32>,
     mutating_hit: &mut Option<String>,
+    on_demand_sources: &mut Vec<Arc<dyn View>>,
 ) -> datafusion::error::Result<()> {
     plan.apply_with_subqueries(|node| {
         if let LogicalPlan::TableScan(ts) = node {
-            inspect_scan(ts, max_group, mutating_hit)?;
+            inspect_scan(ts, max_group, mutating_hit, on_demand_sources)?;
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
@@ -310,6 +313,7 @@ fn inspect_scan(
     ts: &TableScan,
     max_group: &mut Option<i32>,
     mutating_hit: &mut Option<String>,
+    on_demand_sources: &mut Vec<Arc<dyn View>>,
 ) -> datafusion::error::Result<()> {
     // Checked first, and unconditionally: `view_instance` resolves to a `MaterializedView` just
     // like a well-behaved DDL view scan does (see `ViewInstanceTableFunction::call_with_args`),
@@ -333,8 +337,17 @@ fn inspect_scan(
             .table_provider
             .downcast_ref::<MaterializedView>()
     {
-        if let Some(group) = mat_view.get_view().get_update_group() {
+        let scanned = mat_view.get_view();
+        if let Some(group) = scanned.get_update_group() {
             *max_group = Some(max_group.map_or(group, |m| m.max(group)));
+        }
+        if scanned.requires_query_range()
+            && scanned.get_view_instance_id().as_str() == "global"
+            && !on_demand_sources
+                .iter()
+                .any(|v| v.get_view_set_name() == scanned.get_view_set_name())
+        {
+            on_demand_sources.push(scanned);
         }
         return Ok(());
     }
@@ -342,7 +355,7 @@ fn inspect_scan(
     // `__<name>__partitions` form) resolves through a view-backed logical plan rather than a
     // `MaterializedView` directly -- recurse into it to find the real scan.
     if let Some(inner) = ts.source.get_logical_plan() {
-        return walk_plan_for_scans(&inner, max_group, mutating_hit);
+        return walk_plan_for_scans(&inner, max_group, mutating_hit, on_demand_sources);
     }
     Ok(())
 }
@@ -360,7 +373,7 @@ async fn build_full_validation_ctx(
     make_session_context(
         lakehouse,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::NoPartitions,
         factory,
         session_configurator,
         CallerContext::maintenance(),
@@ -384,7 +397,7 @@ async fn build_narrow_validation_ctx(
     make_session_context(
         lakehouse,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::NoPartitions,
         factory,
         Arc::new(NoOpSessionConfigurator),
         CallerContext::internal(),
@@ -398,9 +411,12 @@ async fn build_narrow_validation_ctx(
 /// accepted at `CREATE` time in the first place. `view` must already be the result of
 /// [`build_sql_batch_view`] over `def` -- constructing it *is* most of the validation (it plans
 /// the extract query and yields the schema every check below inspects). `factory` is the factory
-/// `view` was built against -- every other definition, for the DDL executor, or only the
-/// definitions in a strictly lower `update_group` processed so far, for the registry loader --
-/// which the update-group ordering check below reads.
+/// `view` was built against -- every other definition, for the DDL executor, or the definitions
+/// the registry loader has folded in so far -- which the update-group ordering check and the
+/// on-demand source collection below read.
+///
+/// Returns the on-demand views the definition reads, for `SqlBatchView::with_on_demand_sources`.
+/// A daemon-updated definition may not read one.
 pub async fn validate_view_definition(
     def: &ViewDefinition,
     view: &SqlBatchView,
@@ -408,7 +424,7 @@ pub async fn validate_view_definition(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     session_configurator: Arc<dyn SessionConfigurator>,
-) -> Result<()> {
+) -> Result<Vec<Arc<dyn View>>> {
     let schema = view.get_file_schema();
 
     check_view_set_name_charset(&def.view_set_name)?;
@@ -506,13 +522,19 @@ pub async fn validate_view_definition(
     // no extra planning cost.
     let mut max_group: Option<i32> = None;
     let mut mutating_hit: Option<String> = None;
+    let mut on_demand_sources: Vec<Arc<dyn View>> = vec![];
     for (label, plan) in [
         ("extract_query", extract_df.logical_plan()),
         ("merge_partitions_query", merge_df.logical_plan()),
         ("count_src_query", count_df.logical_plan()),
     ] {
         check_no_volatile_functions(plan, label)?;
-        walk_plan_for_scans(plan, &mut max_group, &mut mutating_hit)?;
+        walk_plan_for_scans(
+            plan,
+            &mut max_group,
+            &mut mutating_hit,
+            &mut on_demand_sources,
+        )?;
     }
     if let Some(name) = mutating_hit {
         anyhow::bail!(
@@ -521,15 +543,23 @@ pub async fn validate_view_definition(
             def.view_set_name
         );
     }
-    if let Some(max_group) = max_group
-        && def.update_group <= max_group
-    {
-        anyhow::bail!(
-            "'{}' has update_group {}, which must be strictly greater than {max_group}, the \
-             highest update_group among the view sets it reads",
-            def.view_set_name,
-            def.update_group
-        );
+    if let Some(update_group) = def.update_group {
+        if let Some(source) = on_demand_sources.first() {
+            anyhow::bail!(
+                "'{}' reads on-demand view '{}'; a daemon-updated view cannot read an on-demand one",
+                def.view_set_name,
+                source.get_view_set_name()
+            );
+        }
+        if let Some(max_group) = max_group
+            && update_group <= max_group
+        {
+            anyhow::bail!(
+                "'{}' has update_group {update_group}, which must be strictly greater than \
+                 {max_group}, the highest update_group among the view sets it reads",
+                def.view_set_name
+            );
+        }
     }
 
     // merge_sort_order, if declared, must apply and plan against extract_query.
@@ -561,5 +591,5 @@ pub async fn validate_view_definition(
         })?;
     }
 
-    Ok(())
+    Ok(on_demand_sources)
 }

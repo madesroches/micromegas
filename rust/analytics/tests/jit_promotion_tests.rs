@@ -1,7 +1,9 @@
 //! Pure, no-DB unit tests for `promotion_candidates`.
 
 use chrono::{DateTime, TimeDelta, Utc};
-use micromegas_analytics::lakehouse::jit_partitions::{Coverage, JitBucket, PartitionFreshnessRow};
+use micromegas_analytics::lakehouse::jit_partitions::{
+    Coverage, JitBucket, PartitionFreshnessRow, RangeConvention,
+};
 use micromegas_analytics::lakehouse::jit_promotion::promotion_candidates;
 use micromegas_analytics::lakehouse::partition_ladder::PlannedBucket;
 use micromegas_analytics::time::TimeRange;
@@ -129,4 +131,29 @@ fn rejects_buckets_that_are_not_covered() {
         retire_match: micromegas_analytics::lakehouse::write_partition::RetireMatch::Containment,
     };
     assert_eq!(select(&bucket(HOUR, true), stale, &rows, 1_000), 0);
+}
+
+#[test]
+fn aligned_convention_treats_a_row_ending_at_the_bucket_end_as_inside() {
+    let bucket = TimeRange::new(hour_start(), hour_start() + HOUR);
+    let row = |begin: DateTime<Utc>, end: DateTime<Utc>| PartitionFreshnessRow {
+        begin_insert_time: begin,
+        end_insert_time: end,
+        file_schema_hash: SCHEMA.to_vec(),
+        source_data_hash: 1_i64.to_le_bytes().to_vec(),
+    };
+    let whole = row(bucket.begin, bucket.end);
+    assert!(RangeConvention::Aligned.row_inside(&whole, bucket));
+    assert!(!RangeConvention::BlockHull.row_inside(&whole, bucket));
+
+    // Touching neighbors do not intersect under `Aligned`, they do under `BlockHull`'s inclusive end.
+    let before = row(bucket.begin - HOUR, bucket.begin);
+    let after = row(bucket.end, bucket.end + HOUR);
+    assert!(!RangeConvention::Aligned.row_intersects(&before, bucket));
+    assert!(!RangeConvention::Aligned.row_intersects(&after, bucket));
+    assert!(RangeConvention::BlockHull.row_intersects(&before, bucket));
+
+    let straddling = row(bucket.end - FIVE_MINUTES, bucket.end + FIVE_MINUTES);
+    assert!(RangeConvention::Aligned.row_intersects(&straddling, bucket));
+    assert!(!RangeConvention::Aligned.row_inside(&straddling, bucket));
 }

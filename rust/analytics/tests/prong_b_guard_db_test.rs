@@ -23,7 +23,7 @@ use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
-use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query::{SessionRange, make_session_context};
 use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
@@ -203,7 +203,7 @@ async fn query(
     let ctx = make_session_context(
         lakehouse,
         part_provider,
-        query_range,
+        query_range.map_or(SessionRange::Unbounded, SessionRange::Query),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
         caller,

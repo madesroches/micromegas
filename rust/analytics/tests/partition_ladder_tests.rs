@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use micromegas_analytics::lakehouse::partition_ladder::{
-    BucketCount, LADDER, PlannedBucket, finer_rung, plan_buckets, select_rung,
+    BucketCount, LADDER, PlannedBucket, finer_rung, plan_buckets, plan_dense_buckets, select_rung,
 };
 use micromegas_analytics::time::TimeRange;
 
@@ -214,4 +214,45 @@ fn fixed_sizing_reproduces_hourly_buckets() {
         ]
     );
     assert!(planned.iter().all(|b| b.rung == HOUR && b.closed));
+}
+
+#[test]
+fn dense_plan_emits_closed_buckets_at_the_rung_and_descends_only_the_open_edge() {
+    let now = t("2024-01-02T10:30:30Z");
+    let end_of_minute = t("2024-01-02T10:31:00Z");
+    let insert_range = TimeRange::new(t("2024-01-01T00:00:00Z"), end_of_minute);
+    let planned = plan_dense_buckets(insert_range, SIX_HOURS, MINUTE, now, TimeDelta::seconds(90));
+
+    let closed: Vec<_> = planned.iter().filter(|b| b.closed).collect();
+    assert!(closed.iter().any(|b| b.rung == SIX_HOURS));
+    for b in planned.iter().filter(|b| !b.closed) {
+        assert_eq!(b.rung, MINUTE, "only minute buckets may be open: {b:?}");
+        assert!(b.range.begin >= t("2024-01-02T10:00:00Z"));
+    }
+    // Jan 1's four 6h buckets and Jan 2's 00:00-06:00 are closed; the 06:00-12:00 one is open
+    // and descends.
+    assert_eq!(planned.iter().filter(|b| b.rung == SIX_HOURS).count(), 5);
+    for pair in planned.windows(2) {
+        assert!(pair[0].range.end <= pair[1].range.begin);
+    }
+}
+
+#[test]
+fn dense_plan_never_begins_a_bucket_at_or_after_the_end() {
+    let now = t("2024-01-02T10:30:30Z");
+    let end_of_minute = t("2024-01-02T10:31:00Z");
+    let insert_range = TimeRange::new(t("2024-01-02T06:00:00Z"), end_of_minute);
+    let planned = plan_dense_buckets(insert_range, SIX_HOURS, MINUTE, now, TimeDelta::seconds(90));
+    assert!(!planned.is_empty());
+    assert!(planned.iter().all(|b| b.range.begin < end_of_minute));
+    assert_eq!(planned.last().unwrap().range.end, end_of_minute);
+}
+
+#[test]
+fn dense_plan_of_a_future_range_is_empty() {
+    let now = t("2024-01-02T10:30:30Z");
+    let insert_range = TimeRange::new(t("2024-01-02T12:00:00Z"), t("2024-01-02T10:31:00Z"));
+    assert!(
+        plan_dense_buckets(insert_range, MINUTE, MINUTE, now, TimeDelta::seconds(90)).is_empty()
+    );
 }

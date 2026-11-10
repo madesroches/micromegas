@@ -60,18 +60,21 @@ fn sum_counts(counts: &[BucketCount], range: TimeRange) -> (i64, i64) {
         .fold((0, 0), |(blocks, objects), c| (blocks + c.1, objects + c.2))
 }
 
+/// `(nb_blocks, nb_objects)` of a bucket. A bucket with no blocks is skipped.
+type CountFn<'a> = &'a dyn Fn(TimeRange) -> (i64, i64);
+
 #[allow(clippy::too_many_arguments)]
 fn plan_bucket(
     bucket: TimeRange,
     rung: TimeDelta,
     finest: TimeDelta,
     closed_before: DateTime<Utc>,
-    counts: &[BucketCount],
+    count: CountFn<'_>,
     single_finest_bucket: bool,
     max_nb_objects: i64,
     out: &mut Vec<PlannedBucket>,
 ) {
-    let (nb_blocks, nb_objects) = sum_counts(counts, bucket);
+    let (nb_blocks, nb_objects) = count(bucket);
     // The count query is skipped for a single-bucket range, which cannot need descent.
     if nb_blocks == 0 && !single_finest_bucket {
         return;
@@ -91,7 +94,7 @@ fn plan_bucket(
                     finer,
                     finest,
                     closed_before,
-                    counts,
+                    count,
                     false,
                     max_nb_objects,
                     out,
@@ -138,9 +141,50 @@ pub fn plan_buckets(
             rung,
             finest,
             closed_before,
-            counts,
+            &|range| sum_counts(counts, range),
             single_finest_bucket,
             max_nb_objects,
+            &mut out,
+        );
+        begin += rung;
+    }
+    out
+}
+
+/// Plans the buckets to materialize over `insert_range` (rung-aligned) when no per-bucket count
+/// is available: every bucket is assumed non-empty and none descends on object count. A closed
+/// bucket is emitted at `rung`; only the open edge descends, down to `finest`. A bucket that
+/// begins at or after `insert_range.end` is dropped, so the open edge stops at the end of the
+/// range instead of planning empty future buckets.
+///
+/// `nb_blocks` and `nb_objects` of the result are placeholders: the caller probes each bucket
+/// itself.
+pub fn plan_dense_buckets(
+    insert_range: TimeRange,
+    rung: TimeDelta,
+    finest: TimeDelta,
+    now: DateTime<Utc>,
+    grace: TimeDelta,
+) -> Vec<PlannedBucket> {
+    let mut out = vec![];
+    let closed_before = now - grace;
+    let count = |bucket: TimeRange| {
+        if bucket.begin >= insert_range.end {
+            (0, 0)
+        } else {
+            (1, 0)
+        }
+    };
+    let mut begin = insert_range.begin;
+    while begin < insert_range.end {
+        plan_bucket(
+            TimeRange::new(begin, begin + rung),
+            rung,
+            finest,
+            closed_before,
+            &count,
+            false,
+            i64::MAX,
             &mut out,
         );
         begin += rung;

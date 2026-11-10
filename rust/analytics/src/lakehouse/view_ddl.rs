@@ -1,5 +1,6 @@
 //! `CREATE [OR REPLACE] MATERIALIZED VIEW ... WITH (...)` / `DROP MATERIALIZED VIEW ...` --
-//! the DDL front end for DDL-defined eagerly materialized views.
+//! the DDL front end for DDL-defined materialized views: daemon-updated (`update_group` set) or
+//! on-demand (`update_group` omitted).
 //!
 //! All three queries (`extract_query`, `count_src_query`, `merge_partitions_query`) are `WITH`
 //! options, so none of them is privileged the way a statement body would be -- that requires
@@ -160,10 +161,11 @@ fn value_to_i32(expr: &SqlExpr) -> Result<i32> {
 }
 
 /// Assembles the normalized `ViewDefinition` from a `WITH (...)` option list. Option semantics:
-/// `extract_query`, `count_src_query`, `merge_partitions_query`, and `update_group` are required;
-/// `time_column` is required unless
+/// `extract_query`, `count_src_query` and `merge_partitions_query` are required; `update_group`
+/// is optional, and its absence makes the view on-demand. `time_column` is required unless
 /// both `min_time_column` and `max_time_column` are given individually; `source_partition_delta`
-/// defaults to `'1 day'`; `merge_partition_delta` defaults to `source_partition_delta`;
+/// defaults to `'1 day'`; `merge_partition_delta` defaults to `source_partition_delta`; both are
+/// rejected on an on-demand view, whose partition sizes follow the query range;
 /// `merge_sort_order` is an optional comma-separated column list; `description` is an optional,
 /// non-blank markdown usage guide. Anything else is a hard error.
 fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result<ViewDefinition> {
@@ -231,7 +233,19 @@ fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result
     let count_src_query = count_src_query.context("missing required option 'count_src_query'")?;
     let merge_partitions_query =
         merge_partitions_query.context("missing required option 'merge_partitions_query'")?;
-    let update_group = update_group.context("missing required option 'update_group'")?;
+    if update_group.is_none() {
+        for (option, value) in [
+            ("source_partition_delta", &source_partition_delta),
+            ("merge_partition_delta", &merge_partition_delta),
+        ] {
+            if value.is_some() {
+                anyhow::bail!(
+                    "{option} only applies to daemon-updated views (set `update_group`), \
+                     on-demand partition sizes follow the query range"
+                );
+            }
+        }
+    }
 
     let (resolved_min, resolved_max) = match (time_column, min_time_column, max_time_column) {
         (Some(t), min, max) => (min.unwrap_or_else(|| t.clone()), max.unwrap_or(t)),

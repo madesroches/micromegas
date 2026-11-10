@@ -25,7 +25,7 @@ use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::partitioned_table_provider::PartitionedTableProvider;
-use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query::{SessionRange, make_session_context};
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
@@ -120,7 +120,7 @@ async fn make_merge_session_context_forces_a_single_reader_scan() {
     let merge_ctx = make_merge_session_context(
         lakehouse.clone(),
         Arc::new(PartitionCache::empty(insert_range)),
-        None,
+        SessionRange::Snapshot,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
         CallerContext::maintenance(),
@@ -162,7 +162,7 @@ async fn make_merge_session_context_forces_a_single_reader_scan() {
     let control_ctx = make_session_context(
         lakehouse.clone(),
         Arc::new(PartitionCache::empty(insert_range)),
-        None,
+        SessionRange::Snapshot,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
         CallerContext::maintenance(),
@@ -227,7 +227,7 @@ async fn merge_pinned_optimizer_settings_beat_overrides() {
             t0,
             t0 + TimeDelta::hours(1),
         ))),
-        None,
+        SessionRange::Snapshot,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
         CallerContext::maintenance(),

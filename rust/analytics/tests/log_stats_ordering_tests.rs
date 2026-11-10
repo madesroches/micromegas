@@ -22,7 +22,7 @@ use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
 use micromegas_analytics::lakehouse::partitioned_execution_plan::ScanOrdering;
 use micromegas_analytics::lakehouse::partitioned_table_provider::PartitionedTableProvider;
-use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query::{SessionRange, make_session_context};
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
@@ -196,7 +196,7 @@ async fn log_stats_extract_query_still_plans_through_the_sort_applying_helper() 
     let ctx = make_session_context(
         lakehouse.clone(),
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::Snapshot,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
         CallerContext::maintenance(),

@@ -3,6 +3,7 @@ use super::{
     block_object_decoder::{BlockObjectDecoderMap, ObjectVisitor, default_block_object_decoders},
     lakehouse_context::LakehouseContext,
     partition_cache::QueryPartitionProvider,
+    query::SessionRange,
     read_scope::CallerContext,
     session_configurator::NoOpSessionConfigurator,
     view_factory::ViewFactory,
@@ -11,7 +12,6 @@ use crate::{
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     metadata::StreamMetadata,
     payload::fetch_block_payload,
-    time::TimeRange,
 };
 use anyhow::Context;
 use async_trait::async_trait;
@@ -77,7 +77,7 @@ pub fn transit_value_to_jsonb(value: TransitValue<'_>) -> JsonbValue<'_> {
 async fn fetch_block_metadata(
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     view_factory: Arc<ViewFactory>,
     block_id: Uuid,
     caller: CallerContext,
@@ -232,7 +232,7 @@ pub struct ParseBlockTableFunction {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     decoders: Arc<BlockObjectDecoderMap>,
     guard: Arc<AudienceGuard>,
 }
@@ -242,7 +242,7 @@ impl ParseBlockTableFunction {
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
-        query_range: Option<TimeRange>,
+        query_range: SessionRange,
         guard: Arc<AudienceGuard>,
     ) -> Self {
         Self {
@@ -287,7 +287,7 @@ struct ParseBlockProvider {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     decoders: Arc<BlockObjectDecoderMap>,
     guard: Arc<AudienceGuard>,
 }
@@ -332,14 +332,16 @@ impl TableProvider for ParseBlockProvider {
         .map_err(|e| DataFusionError::External(e.into()))?
         else {
             let message = match self.query_range {
-                Some(range) => format!(
+                SessionRange::Query(range) => format!(
                     "parse_block: block '{block_id_str}' not found in `blocks` for the queried \
                      range [{}, {}]. The block may be outside the query's time range — widen \
                      the range to include it.",
                     range.begin.to_rfc3339(),
                     range.end.to_rfc3339()
                 ),
-                None => format!("parse_block: block '{block_id_str}' not found in `blocks`."),
+                SessionRange::Unbounded | SessionRange::Snapshot | SessionRange::NoPartitions => {
+                    format!("parse_block: block '{block_id_str}' not found in `blocks`.")
+                }
             };
             return plan_err!("{message}");
         };

@@ -19,7 +19,7 @@ fn ddl(name: &str) -> DdlRow {
     DdlRow {
         view_set_name: name.into(),
         definition_sql: "SELECT 1".into(),
-        update_group: 7,
+        update_group: Some(7),
         updated_at_nanos: 42,
         updated_by: Some("admin".into()),
     }

@@ -135,12 +135,17 @@ applying it is harmless, since the schema hash used to invalidate partitions com
 inferred Arrow schema, not the query text (see [Materialized Views: What a redefinition
 means](materialized-views.md#what-a-redefinition-means)).
 
+The `update_group` line of a definition can be omitted, which makes the view
+[on-demand](materialized-views.md#on-demand-views).
+
 ## What this tool does not manage
 
 - **Built-in view sets** (the ones registered in code, not via DDL) have no stored definition
   (`list_view_set_definitions()` reports them with a NULL `definition_sql`), and the tool ignores
   them, so they never appear in `micromegas-views list` — e.g. `log_entries` is not something you'd expect to `pull`.
-- **On-demand cached queries** have no name and are not part of this inventory at all.
+- **Per-process JIT views and ad-hoc query results** have no stored definition and are not part
+  of this inventory at all. On-demand DDL views (no `update_group`) are different: they are
+  managed like any other DDL view.
 
 ## Validation happens at `apply`, not at `plan`
 

@@ -53,7 +53,7 @@ fn create_materialized_view_parses() {
             assert_eq!(name, "my_view");
             assert!(!or_replace);
             assert_eq!(definition.view_set_name, "my_view");
-            assert_eq!(definition.update_group, 9000);
+            assert_eq!(definition.update_group, Some(9000));
             assert_eq!(definition.options.min_time_column, "x");
             assert_eq!(definition.options.max_time_column, "x");
             assert_eq!(sql, CREATE_SQL);
@@ -308,4 +308,45 @@ fn view_options_description_serde_round_trip() {
         serde_json::from_str::<ViewOptions>(&json).unwrap(),
         described
     );
+}
+
+fn parsed_definition(
+    sql: &str,
+) -> anyhow::Result<micromegas_analytics::lakehouse::view_definition::ViewDefinition> {
+    match parse_view_ddl(sql)?.expect("should be view DDL") {
+        ViewDdl::Create { definition, .. } => Ok(*definition),
+        ViewDdl::Drop { .. } => panic!("expected Create"),
+    }
+}
+
+#[test]
+fn definition_without_update_group_is_on_demand() {
+    let sql = CREATE_SQL.replace("update_group = 9000, ", "");
+    let def = parsed_definition(&sql).unwrap();
+    assert_eq!(def.update_group, None);
+}
+
+#[test]
+fn delta_options_without_update_group_are_rejected() {
+    for option in ["source_partition_delta", "merge_partition_delta"] {
+        let sql = CREATE_SQL.replace("update_group = 9000, ", &format!("{option} = '1 hour', "));
+        let err = parsed_definition(&sql).expect_err("delta option on an on-demand view");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(option) && msg.contains("only applies to daemon-updated views"),
+            "unexpected error: {msg}"
+        );
+    }
+}
+
+#[test]
+fn delta_options_with_update_group_are_unchanged() {
+    let sql = CREATE_SQL.replace(
+        "update_group = 9000, ",
+        "update_group = 9000, source_partition_delta = '1 hour', ",
+    );
+    let def = parsed_definition(&sql).unwrap();
+    assert_eq!(def.update_group, Some(9000));
+    assert_eq!(def.options.source_partition_delta, "1 hour");
+    assert_eq!(def.options.merge_partition_delta, "1 hour");
 }

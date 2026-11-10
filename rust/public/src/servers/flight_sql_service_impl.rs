@@ -40,7 +40,7 @@ use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
-use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query::{SessionRange, make_session_context};
 use micromegas_analytics::lakehouse::query_deny_list::{
     QueryAttribution, fingerprint_of, skip_for_admin_recovery,
 };
@@ -940,7 +940,7 @@ impl FlightSqlServiceImpl {
         let ctx = make_session_context(
             lakehouse,
             self.part_provider.clone(),
-            query_range,
+            query_range.map_or(SessionRange::Unbounded, SessionRange::Query),
             self.view_registry.current(),
             self.session_configurator.clone(),
             caller,
@@ -1686,7 +1686,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ctx = make_session_context(
             self.lakehouse.clone(),
             self.part_provider.clone(),
-            None,
+            SessionRange::NoPartitions,
             self.view_registry.current(),
             self.session_configurator.clone(),
             caller,

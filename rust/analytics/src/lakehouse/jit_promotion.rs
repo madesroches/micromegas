@@ -6,7 +6,7 @@
 //! never fails the query, and it skips instead of waiting when another query is already on it.
 
 use super::{
-    jit_partitions::{Coverage, JitBucket, PartitionFreshnessRow, row_inside},
+    jit_partitions::{Coverage, JitBucket, PartitionFreshnessRow, RangeConvention},
     lakehouse_context::LakehouseContext,
     merge::create_merged_partition,
     partition::Partition,
@@ -32,7 +32,7 @@ pub struct PromotionTarget {
 
 /// Whether `inputs` are worth merging: at least two of them, within the object cap, all written
 /// with the same file schema.
-fn is_promotable(inputs: &[&PartitionFreshnessRow], max_nb_objects: i64) -> bool {
+pub(crate) fn is_promotable(inputs: &[&PartitionFreshnessRow], max_nb_objects: i64) -> bool {
     if inputs.len() < 2 {
         return false;
     }
@@ -71,7 +71,7 @@ pub fn promotion_candidates(
         }
         let inputs: Vec<&PartitionFreshnessRow> = candidates
             .iter()
-            .filter(|r| row_inside(r, planned.range))
+            .filter(|r| RangeConvention::BlockHull.row_inside(r, planned.range))
             .collect();
         if is_promotable(&inputs, max_nb_objects) {
             targets.push(PromotionTarget {
@@ -135,6 +135,7 @@ async fn promote_one(
     view: &Arc<dyn View>,
     target: &PromotionTarget,
     max_nb_objects: i64,
+    convention: RangeConvention,
 ) -> Result<Promotion> {
     let pool = &lakehouse.lake().db_pool;
     let mut lock_transaction = pool.begin().await.with_context(|| "begin")?;
@@ -165,12 +166,12 @@ async fn promote_one(
     let (inside, others): (Vec<Partition>, Vec<Partition>) = fetched
         .partitions
         .into_iter()
-        .partition(|p| row_inside(&freshness_row(p), target.bucket));
+        .partition(|p| convention.row_inside(&freshness_row(p), target.bucket));
     let rows: Vec<PartitionFreshnessRow> = inside.iter().map(freshness_row).collect();
     let row_refs: Vec<&PartitionFreshnessRow> = rows.iter().collect();
-    let straddled = others.iter().any(|p| {
-        p.begin_insert_time() < target.bucket.end && p.end_insert_time() >= target.bucket.begin
-    });
+    let straddled = others
+        .iter()
+        .any(|p| convention.row_intersects(&freshness_row(p), target.bucket));
     let hull = hull_of(rows.iter());
     if straddled
         || !is_promotable(&row_refs, max_nb_objects)
@@ -208,9 +209,10 @@ pub async fn promote_closed_buckets(
     view: Arc<dyn View>,
     targets: Vec<PromotionTarget>,
     max_nb_objects: i64,
+    convention: RangeConvention,
 ) {
     for target in targets {
-        match promote_one(&lakehouse, &view, &target, max_nb_objects).await {
+        match promote_one(&lakehouse, &view, &target, max_nb_objects, convention).await {
             Ok(Promotion::Promoted) => {
                 info!(
                     "jit promotion promoted [{}, {})",

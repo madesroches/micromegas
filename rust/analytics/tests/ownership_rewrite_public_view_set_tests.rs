@@ -30,7 +30,7 @@ use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::log_stats_view::make_log_stats_view;
 use micromegas_analytics::lakehouse::partition_cache::{NullPartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
-use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query::{SessionRange, make_session_context};
 use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -286,7 +286,7 @@ async fn optimized_plan_with_factory(
     let ctx: SessionContext = make_session_context(
         lakehouse,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::Snapshot,
         view_factory,
         Arc::new(NoOpSessionConfigurator),
         caller,

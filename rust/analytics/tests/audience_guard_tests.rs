@@ -40,6 +40,7 @@ use micromegas_analytics::lakehouse::dataframe_time_bounds::DataFrameTimeBounds;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::materialized_view::MaterializedView;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
+use micromegas_analytics::lakehouse::query::SessionRange;
 use micromegas_analytics::lakehouse::read_scope::ReadScope;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::view::{PartitionSpec, View};
@@ -543,7 +544,7 @@ async fn materialized_view_scan_denies_before_jit_update_for_foreign_audience_in
         lakehouse.reader_factory().clone(),
         view,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::Snapshot,
         Some(guard),
     );
 
@@ -600,7 +601,7 @@ async fn instance_is_audience_guarded_matches_authorize_view_instance_arms() {
         lakehouse.reader_factory().clone(),
         global_view,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::Snapshot,
         Some(guard.clone()),
     );
     assert!(
@@ -630,7 +631,7 @@ async fn instance_is_audience_guarded_matches_authorize_view_instance_arms() {
         lakehouse.reader_factory().clone(),
         uuid_view,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::Snapshot,
         Some(guard.clone()),
     );
     assert!(
@@ -659,7 +660,7 @@ async fn instance_is_audience_guarded_matches_authorize_view_instance_arms() {
         lakehouse.reader_factory().clone(),
         no_guard_view,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::Snapshot,
         None,
     );
     assert!(
