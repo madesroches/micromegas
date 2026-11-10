@@ -150,8 +150,9 @@ Steps, for one `jit_update`:
    `plan_buckets` keeps its signature. Every bucket is assumed non-empty, and there is no
    object-count descent. Closed buckets are emitted at `rung`. Only the open edge descends,
    down to one minute, as in #1496. Any sub-bucket whose `begin >= insert_range.end` (the clamped
-   now) is dropped, so the open edge stops at the current minute. `grace` comes from
-   `JitPartitionConfig::default()` (90s), the same rule the built-in JIT views follow. If no
+   now) is dropped, so the open edge stops at the current minute. `grace` is read from
+   `JitPartitionConfig::default().bucket_sizing`'s `BucketSizing::RangeDriven { grace }` (90s), as
+   `jit_partitions.rs` does for the built-in JIT views. If no
    bucket is planned (e.g. a query range entirely in the future), return `Ok(())`.
 3. **Rows.** `fetch_freshness_candidates(pool, view_meta, insert_range)` gets this view's rows.
 4. **Units (pure).** Call `plan_units(&planned, &rows) -> Vec<Unit>`. Each planned bucket grows
@@ -182,7 +183,7 @@ Steps, for one `jit_update`:
    `sum(source_data_hash) == probed_count`. Otherwise it returns `Stale`. This is
    `verify_overlapping_partitions`' rule (equality, summed), so a definition gives the same
    verdicts under either writer.
-7. **Write stale units.** Call `spec.write(lake, null_logger)`. On `PartitionOverlapConflict`,
+7. **Write stale units.** Call `spec.write(lake, Arc::new(ResponseWriter::new(None)))`. On `PartitionOverlapConflict`,
    which means a concurrent reader wrote an overlapping coarser or finer unit first:
    1. Refetch the rows over the unit's range.
    2. Recompute the unit (it may grow). If it is not contained in `source_range`, refresh the
@@ -262,7 +263,9 @@ pub enum SessionRange {
   `make_batch_partition_spec` uses `Snapshot`.
 - `materialize_partitions` and `regenerate_partitions` reject on-demand views (see Decisions).
   The rejection sits in the spawned `*_impl` after the view lookup and before
-  `fetch_overlapping_insert_range`, and surfaces as an error row in the output log stream.
+  `fetch_overlapping_insert_range`. `materialize_partitions` reports it as an error row in the
+  log stream and `regenerate_partitions` as a query-level error, each through its existing
+  error path.
 
 ### 4. Promotion with aligned ranges
 
@@ -466,20 +469,32 @@ step 8.
     views reading on-demand ones, the delta options being rejected, the late-insert caveat, and
     the rule that `count_src_query` counts the rows of the extracted tables, not `blocks`, with
     an example. For a chained on-demand view, the count is over the raw table the upstream
-    on-demand view extracts from, not the upstream view.
+    on-demand view extracts from, not the upstream view. Next to it, the chained extract rule:
+    the extract must filter on the upstream view's event-time column (see Author obligations),
+    since the ladder units are often finer than upstream partitions and partition scoping matches
+    by overlap.
   - Options table: qualify the `count_src_query` row. Daemon views count a raw,
     `insert_time`-bearing table (typically `blocks`); on-demand views count the rows of the table
-    their extract reads, as described in the new "On-demand views" section.
+    their extract reads, as described in the new "On-demand views" section. The row's clause
+    "never the view's own extract source, and never another materialized view" applies to daemon
+    views only and is replaced for on-demand views; for the chained case, "materialized view"
+    means a DDL view source, not built-in global views like `log_entries`.
   - Intro (eager materialization by the maintenance daemon): note that on-demand views are
     materialized by queries instead.
   - `update_group` ordering check: state that it is skipped for on-demand views, and that a
     daemon view reading an on-demand one is rejected.
   - Recovery with `materialize_partitions(...)`: for on-demand views, recovery is
     `retire_partitions` followed by a query.
+  - Line ~142 ("after the daemon or an explicit `materialize_partitions()` call fills in fresh
+    partitions"): say that on-demand views are filled by queries.
   - Fix the "this is the only dependency mechanism" sentence.
 - `mkdocs/docs/admin/views-as-code.md`: mention that the `update_group` line can be omitted.
 - `mkdocs/docs/admin/functions-reference.md`: in the `list_view_set_definitions()` column table,
   `update_group` is "NULL for an on-demand DDL view or a built-in view set without one".
+  Also add a one-line note on the `regenerate_partitions` entry that it rejects on-demand views
+  (retire partitions and query instead).
+- `mkdocs/docs/admin/maintenance.md` ("backfill a time range", ~line 278): one-line note that
+  on-demand views are backfilled by a query, not `materialize_partitions`.
 - `CHANGELOG.md`, Unreleased:
   - the feature;
   - **Minor breaking change**: `ViewDefinition.update_group` / `ViewDefinitionRow.update_group`
@@ -535,7 +550,8 @@ No-DB unit tests under `rust/analytics/tests/`:
   doesn't.
 
 - `on_demand_jit_tests.rs`: the `materialize_partitions` and `regenerate_partitions`
-  rejection of on-demand views, offline (lazy pool, in-memory store), asserting on the error row.
+  rejection of on-demand views, offline (lazy pool, in-memory store). `materialize_partitions`
+  is asserted on its error row, `regenerate_partitions` on the error from `collect()`.
 - `jit_promotion_tests.rs`: `RangeConvention::Aligned` inside and intersects at touching edges.
   Existing `BlockHull` cases keep passing.
 
