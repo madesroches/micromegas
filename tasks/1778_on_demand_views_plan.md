@@ -23,8 +23,8 @@ already work.
   (`migration.rs::upgrade_v9_to_v10`). `LATEST_LAKEHOUSE_SCHEMA_VERSION = 11`.
 - **Daemon.** `maintenance.rs::get_global_views_with_update_group` keeps only views whose
   `get_update_group()` is `Some`. Every built-in global view (`blocks`, `processes`, `streams`,
-  `log_entries`, `measures`) returns `Some`. So among global views, `None` currently never
-  occurs, and after this change it will mean "on-demand DDL view".
+  `log_entries`, `measures`) returns `Some`. On-demand DDL views are identified by
+  `requires_query_range()` (§3a).
 - **JIT entry point.** `MaterializedView::scan` calls `view.jit_update(lakehouse, query_range)`
   before fetching partitions. `query_range` is the session's range, which is `None` for daemon
   and validation sessions. A JIT failure on a read-only connection becomes a query error with a
@@ -87,7 +87,7 @@ already work.
 
 - **Daemon view reading an on-demand view: rejected.** `inspect_scan` additionally records
   whether any scanned `MaterializedView` is a `'global'` instance with
-  `get_update_group() == None`. `validate_view_definition` fails a definition with
+  `requires_query_range()`. `validate_view_definition` fails a definition with
   `update_group = Some(_)` that has such a source: "`X` reads on-demand view `Y`; a
   daemon-updated view cannot read an on-demand one". This goes next to the existing
   update-group ordering check.
@@ -257,8 +257,8 @@ pub enum SessionRange {
 - `SessionRange` (not `Option`) threads through `register_functions`,
   `register_lakehouse_functions` (`query.rs`), `ViewInstanceTableFunction`,
   `ParseBlockTableFunction`, `ProcessSpansTableFunction`, and the pub `query()`. The
-  OwnershipRewrite `processes`/`streams` sources (`query.rs`) and `metadata.rs`'s internal live
-  reads use `Unbounded`. `ExportLogView::new` (planning only) uses `NoPartitions`; only its
+  OwnershipRewrite `processes`/`streams` sources (`query.rs`) use `Unbounded`. `metadata.rs`
+  maps the caller's `Some(r)` to `Query(r)` and `None` to `Unbounded`. `ExportLogView::new` (planning only) uses `NoPartitions`; only its
   `make_batch_partition_spec` uses `Snapshot`.
 - `materialize_partitions` and `regenerate_partitions` reject on-demand views (see Decisions).
   The rejection sits in the spawned `*_impl` after the view lookup and before
@@ -324,7 +324,7 @@ step 8.
 
 7. `view_definition.rs`:
    - `inspect_scan` and `walk_plan_for_scans` collect on-demand sources (global
-     `MaterializedView`, `get_update_group() == None`).
+     `MaterializedView`, `requires_query_range()`).
    - `validate_view_definition` rejects a daemon view with any on-demand source and returns the
      source list. The `def.update_group <= max_group` ordering check (~line 524) is skipped when
      `update_group` is `None`.
@@ -391,6 +391,7 @@ step 8.
 - `rust/analytics/src/lakehouse/mod.rs`
 - `rust/analytics/src/lakehouse/audience_guard.rs` (doc)
 - `rust/analytics/src/lakehouse/materialized_view.rs` (unbounded check, doc)
+- `rust/analytics/src/lakehouse/view_merge_check.rs`
 - `rust/analytics/src/lakehouse/view.rs`, `query.rs`, and every `make_session_context` / `MaterializedView::new` caller
   (`metadata.rs`, `merge.rs`, `export_log_view.rs`, `parse_block_table_function.rs`,
   `perfetto_trace_execution_plan.rs`, `process_spans_table_function.rs`,
@@ -400,7 +401,7 @@ step 8.
 - `rust/public/src/servers/flight_sql_service_impl.rs`
 - Tests: `view_ddl_parse_tests.rs`, `view_definition_validation_tests.rs`,
   `view_registry_tests.rs`, `partition_ladder_tests.rs`, `jit_promotion_tests.rs`, new
-  `on_demand_jit_tests.rs`, new `session_range_tests.rs`, `lakehouse_admin_gate_test.rs`, plus the `ViewDefinition` constructors the compiler flags.
+  `on_demand_jit_tests.rs`, new `session_range_tests.rs`, plus the `ViewDefinition` constructors the compiler flags.
 - `mkdocs/docs/admin/materialized-views.md`, `mkdocs/docs/admin/views-as-code.md`,
   `mkdocs/docs/admin/functions-reference.md`, `CHANGELOG.md`
 
@@ -424,14 +425,6 @@ step 8.
   count is a full query. Probing every minute of a 7-day range would mean about 10,000 queries.
   Dense planning probes each emitted bucket once. Empty buckets are written as empty partition
   records (`num_rows = 0`), so later queries see them as `Covered` without running the extract.
-- **No object-count descent.** The authored count is in the author's units (rows, blocks…), not
-  objects, so the cap has no meaning. Bucket width is bounded by the ladder (at most one day),
-  the same as the daemon's default `source_partition_delta`. That cap is not small enough for
-  dense sources: #1779.
-- **Query range used as the insert range.** On-demand views share the DDL keying, so source rows
-  inserted after `query_range.end` are not read for that query, even if their event time is
-  inside it. Daemon views pick those up eventually, by covering every insert range. A view over
-  late-arriving data (uploads delayed by hours) will miss them on a narrow query. Accepted for v1; see Decisions.
 
 ## Decisions
 
@@ -443,20 +436,17 @@ step 8.
 - Rejecting `source_partition_delta` / `merge_partition_delta` on on-demand views is a v1 stopgap.
   With the 24-bucket target, very dense sources get partitions that are too large, and authors
   have no way to cap them. Follow-up: #1779.
-- `SessionRange::Snapshot` carries no range. Letting on-demand sources materialize themselves
-  over a `Snapshot(insert_range)` would miss the already-taken snapshot (a second, live fetch
-  path would be needed). It would also materialize upstream at each unit's finer rung, once per
-  probe. The explicit refresh in §2 runs once over the whole aligned range. With no JIT use,
-  nothing would read the range: the caller already applied it when building the
-  `PartitionCache`.
+- `SessionRange::Snapshot` carries no range: sources are refreshed once over the unit hull before
+  the snapshot (§2), so nothing in the session would read it.
 - An unbounded user query over an on-demand view is an error, not a partial answer (§3a).
   Materializing all of history instead was rejected: the extent of the source is unknown, and
   that first read would be unbounded in cost.
 - `materialize_partitions` / `regenerate_partitions` reject on-demand views. A backfill is a query
   over the range, and repairing a range means `retire_partitions` followed by a query. Accepting
   them would bypass the upstream refresh in §2.
-- No insert-time look-ahead option in v1; late-arriving rows are picked up by a later query whose
-  range covers their insert time; revisit on a concrete need.
+- No insert-time look-ahead option in v1: source rows inserted after `query_range.end` are not
+  read for that query even if their event time is inside it; a later query whose range covers
+  their insert time picks them up; revisit on a concrete need.
 - Admission is unchanged in v1: on-demand materialization runs before the gate, as built-in JIT
   does; gating JIT work is a follow-up.
 - An on-demand view's `count_src_query` counts the rows of the tables its `extract_query` reads
@@ -544,8 +534,8 @@ No-DB unit tests under `rust/analytics/tests/`:
   `make_session_context` with `Query` installs `TableScanRewrite`; with the other variants it
   doesn't.
 
-- `lakehouse_admin_gate_test.rs`: the `materialize_partitions` and `regenerate_partitions`
-  rejection of on-demand views.
+- `on_demand_jit_tests.rs`: the `materialize_partitions` and `regenerate_partitions`
+  rejection of on-demand views, offline (lazy pool, in-memory store), asserting on the error row.
 - `jit_promotion_tests.rs`: `RangeConvention::Aligned` inside and intersects at touching edges.
   Existing `BlockHull` cases keep passing.
 
