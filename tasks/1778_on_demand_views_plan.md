@@ -273,9 +273,10 @@ Add a `RangeConvention` enum:
   `begin < e && end >= b`.
 - `Aligned`: inside is `begin >= b && end <= e`; intersects is `begin < e && end > b`.
 
-Make `row_inside` / `row_intersects` methods on it, and thread it through
-`promote_closed_buckets` and `promote_one`'s re-check and straddle test.
-`update_insert_time_jit_view` passes `BlockHull`; the on-demand driver passes `Aligned`.
+Define it in `jit_partitions.rs`, next to `row_inside` / `row_intersects`, which become methods
+on it. `judge_bucket` (and so `resolve_bucket_coverage`) uses `BlockHull`. `jit_promotion.rs`
+imports the enum and threads it through `promote_closed_buckets` and `promote_one`'s re-check
+and straddle test. `update_insert_time_jit_view` passes `BlockHull`; the on-demand driver passes `Aligned`.
 `promotion_candidates` stays block-only. The on-demand driver builds its targets from units in
 step 8.
 
@@ -356,9 +357,9 @@ step 8.
       `regenerate_partitions_table_function.rs`: reject on-demand views.
 11. `partition_ladder.rs`: factor `plan_bucket` over a count closure and add
     `plan_dense_buckets`.
-12. `jit_promotion.rs`: add `RangeConvention`, thread it through `promote_closed_buckets` and
-    `promote_one`, and move `row_inside` / `row_intersects` onto it. `jit_partitions.rs` passes
-    `BlockHull`.
+12. `jit_partitions.rs`: add `RangeConvention` and move `row_inside` / `row_intersects` onto it;
+    `judge_bucket` uses `BlockHull`. `jit_promotion.rs`: import it and thread it through
+    `promote_closed_buckets` and `promote_one`. `update_insert_time_jit_view` passes `BlockHull`.
 13. New `on_demand_jit.rs`:
     - pure `plan_units` and `judge_unit`;
     - `update_on_demand_view`, with upstream refresh, snapshot, probe, write with the
@@ -462,7 +463,10 @@ step 8.
   (e.g. `count(*) FROM log_entries` over the insert range), not `blocks`. The daemon writes
   `blocks` before `log_entries` within a tick, so a block count can run ahead of the rows, and
   the equality judge would then keep a short partition `Covered` for good. This is an authoring
-  rule, documented, not enforced.
+  rule, documented, not enforced. For a chained on-demand view, whose extract reads another
+  on-demand view, the count is over the raw, `insert_time`-bearing table the upstream view
+  extracts from (e.g. `log_entries`) over `{begin}`/`{end}`, not over the upstream view, which
+  has no reliable `insert_time`.
 
 ## Documentation
 
@@ -471,7 +475,17 @@ step 8.
   - New "On-demand views" section: behavior, open-edge grace, chain rule, the rejection of daemon
     views reading on-demand ones, the delta options being rejected, the late-insert caveat, and
     the rule that `count_src_query` counts the rows of the extracted tables, not `blocks`, with
-    an example.
+    an example. For a chained on-demand view, the count is over the raw table the upstream
+    on-demand view extracts from, not the upstream view.
+  - Options table: qualify the `count_src_query` row. Daemon views count a raw,
+    `insert_time`-bearing table (typically `blocks`); on-demand views count the rows of the table
+    their extract reads, as described in the new "On-demand views" section.
+  - Intro (eager materialization by the maintenance daemon): note that on-demand views are
+    materialized by queries instead.
+  - `update_group` ordering check: state that it is skipped for on-demand views, and that a
+    daemon view reading an on-demand one is rejected.
+  - Recovery with `materialize_partitions(...)`: for on-demand views, recovery is
+    `retire_partitions` followed by a query.
   - Fix the "this is the only dependency mechanism" sentence.
 - `mkdocs/docs/admin/views-as-code.md`: mention that the `update_group` line can be omitted.
 - `mkdocs/docs/admin/functions-reference.md`: in the `list_view_set_definitions()` column table,
