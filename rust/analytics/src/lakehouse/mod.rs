@@ -82,6 +82,8 @@ pub mod metrics_view;
 pub mod migration;
 /// Jit view of pre-paired network bandwidth spans (Connection / Object / Property / RPC)
 pub mod net_spans_view;
+/// Query-driven materialization of on-demand SQL views
+pub mod on_demand_jit;
 /// OTLP reader path: attribute helpers, block processors, and the otel_spans view.
 pub mod otel;
 /// The row-level filter: injects an audience predicate into every

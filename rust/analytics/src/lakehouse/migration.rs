@@ -6,7 +6,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 11;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 12;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -45,6 +45,13 @@ pub async fn migrate_lakehouse(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
             return Err(e);
         }
         current_version = read_lakehouse_schema_version(&mut tr).await;
+    }
+    if 11 == current_version {
+        info!("upgrade lakehouse schema to v12");
+        let mut tr = pool.begin().await?;
+        upgrade_v11_to_v12(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
     }
     assert_eq!(current_version, LATEST_LAKEHOUSE_SCHEMA_VERSION);
     Ok(())
@@ -657,5 +664,18 @@ async fn upgrade_v10_to_v11(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> R
     tr.execute("UPDATE lakehouse_migration SET version=11;")
         .await
         .with_context(|| "Updating lakehouse schema version to 11")?;
+    Ok(())
+}
+
+async fn upgrade_v11_to_v12(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // A NULL `update_group` marks an on-demand view. Existing rows keep their groups.
+    tr.execute(
+        "ALTER TABLE lakehouse_view_set_definitions ALTER COLUMN update_group DROP NOT NULL;",
+    )
+    .await
+    .with_context(|| "dropping NOT NULL on lakehouse_view_set_definitions.update_group")?;
+    tr.execute("UPDATE lakehouse_migration SET version=12;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 12")?;
     Ok(())
 }

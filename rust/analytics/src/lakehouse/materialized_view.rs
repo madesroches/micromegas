@@ -1,10 +1,9 @@
 use super::{
     audience_guard::AudienceGuard, lakehouse_context::LakehouseContext,
     partition_cache::QueryPartitionProvider,
-    partitioned_execution_plan::make_partitioned_execution_plan, reader_factory::ReaderFactory,
-    view::View,
+    partitioned_execution_plan::make_partitioned_execution_plan, query::SessionRange,
+    reader_factory::ReaderFactory, view::View,
 };
-use crate::time::TimeRange;
 use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::SchemaRef,
@@ -12,7 +11,7 @@ use datafusion::{
     datasource::TableType,
     error::DataFusionError,
     logical_expr::{Expr, TableProviderFilterPushDown},
-    physical_plan::ExecutionPlan,
+    physical_plan::{ExecutionPlan, empty::EmptyExec},
 };
 use micromegas_ingestion::data_lake_connection::is_read_only_violation;
 use micromegas_tracing::prelude::*;
@@ -25,7 +24,7 @@ pub struct MaterializedView {
     reader_factory: Arc<ReaderFactory>,
     view: Arc<dyn View>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     /// The `view_instance(...)` scan-time audience check, run before `jit_update`.
     /// `Some` only when this provider was built by `ViewInstanceTableFunction` -- a
     /// caller-named instance. `None` for every server-constructed `MaterializedView`: the
@@ -41,7 +40,7 @@ impl MaterializedView {
         reader_factory: Arc<ReaderFactory>,
         view: Arc<dyn View>,
         part_provider: Arc<dyn QueryPartitionProvider>,
-        query_range: Option<TimeRange>,
+        query_range: SessionRange,
         instance_guard: Option<Arc<AudienceGuard>>,
     ) -> Self {
         Self {
@@ -62,7 +61,8 @@ impl MaterializedView {
     /// against the caller's scope, and deny, before `scan` yields a row. True only for a
     /// caller-named, non-`'global'` `view_instance(...)`: those take the guard's Uuid arm (or its
     /// fail-closed fallthrough). `'global'` is excluded because the guard passes it unconditionally
-    /// -- global instances are row-filtered instead.
+    /// -- global instances are row-filtered instead, including an on-demand view's, whose read
+    /// materializes global partitions under the maintenance caller.
     ///
     /// Deliberately does not mirror the guard's public-view-set arm: this accessor would still
     /// return `true` for a public view set's instance, even though the guard passes it
@@ -105,9 +105,31 @@ impl TableProvider for MaterializedView {
                 .await?;
         }
 
+        let projected_schema = || match projection {
+            Some(indices) => self.schema().project(indices).map(Arc::new),
+            None => Ok(self.schema()),
+        };
+        match self.query_range {
+            SessionRange::NoPartitions => {
+                return Ok(Arc::new(EmptyExec::new(projected_schema()?)));
+            }
+            SessionRange::Unbounded if self.view.requires_query_range() => {
+                return Err(DataFusionError::External(
+                    format!(
+                        "{} is an on-demand view and needs a query time range (pass begin/end \
+                         with the query)",
+                        self.view.get_view_set_name()
+                    )
+                    .into(),
+                ));
+            }
+            SessionRange::Query(_) | SessionRange::Unbounded | SessionRange::Snapshot => {}
+        }
+        let query_range = self.query_range.query_range();
+
         if let Err(e) = self
             .view
-            .jit_update(self.lakehouse.clone(), self.query_range)
+            .jit_update(self.lakehouse.clone(), query_range)
             .await
         {
             if is_read_only_violation(&e) {
@@ -135,7 +157,7 @@ impl TableProvider for MaterializedView {
             .fetch(
                 &self.view.get_view_set_name(),
                 &self.view.get_view_instance_id(),
-                self.query_range,
+                query_range,
                 self.view.get_file_schema_hash(),
             )
             .await

@@ -25,7 +25,7 @@ use micromegas_analytics::lakehouse::partition_source_data::{
     PartitionSourceBlock, SourceDataBlocksInMemory,
 };
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
-use micromegas_analytics::lakehouse::query::query;
+use micromegas_analytics::lakehouse::query::{SessionRange, query};
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -305,7 +305,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let _ = query(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(query_range),
+        SessionRange::Query(query_range),
         &format!(r#"SELECT "begin", "end" FROM view_instance('thread_spans', '{stream_id_str}');"#),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
@@ -316,7 +316,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let partition_count_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        None,
+        SessionRange::Unbounded,
         &format!(
             "SELECT count(*) as c FROM list_partitions() \
              WHERE view_set_name = 'thread_spans' AND view_instance_id = '{stream_id_str}';"
@@ -342,7 +342,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let null_sort_key_time_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        None,
+        SessionRange::Unbounded,
         &format!(
             "SELECT count(*) as c FROM list_partitions() \
              WHERE view_set_name = 'thread_spans' AND view_instance_id = '{stream_id_str}' \
@@ -375,7 +375,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let ctx = micromegas_analytics::lakehouse::query::make_session_context(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(query_range),
+        SessionRange::Query(query_range),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
         CallerContext::internal(),
@@ -400,7 +400,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let answer = query(
         lakehouse,
         part_provider,
-        Some(query_range),
+        SessionRange::Query(query_range),
         &format!(r#"SELECT "begin" FROM view_instance('thread_spans', '{stream_id_str}') ORDER BY "begin";"#),
         view_factory,
         Arc::new(NoOpSessionConfigurator),
@@ -561,7 +561,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     query(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(query_range),
+        SessionRange::Query(query_range),
         &format!(r#"SELECT "begin", "end" FROM view_instance('thread_spans', '{stream_id_str}');"#),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
@@ -574,7 +574,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     let answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(query_range),
+        SessionRange::Query(query_range),
         &format!(
             r#"SELECT "begin" FROM view_instance('thread_spans', '{stream_id_str}') ORDER BY "begin";"#
         ),
@@ -608,7 +608,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     let perfetto_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        None,
+        SessionRange::Unbounded,
         &format!(
             "SELECT chunk_id FROM perfetto_trace_chunks('{process_id_str}', 'thread', \
              TIMESTAMP '{}', TIMESTAMP '{}');",
@@ -635,7 +635,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     let list_answer = query(
         lakehouse,
         part_provider,
-        None,
+        SessionRange::Unbounded,
         &format!(
             "SELECT begin_insert_time, end_insert_time, min_event_time, max_event_time \
              FROM list_partitions() \

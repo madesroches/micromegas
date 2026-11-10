@@ -3,10 +3,11 @@ use super::{
     lakehouse_context::LakehouseContext,
     partition_cache::QueryPartitionProvider,
     process_streams::get_process_thread_list,
+    query::SessionRange,
     session_configurator::NoOpSessionConfigurator,
     view_factory::ViewFactory,
 };
-use crate::{dfext::expressions::exp_to_string, span_table::get_spans_schema, time::TimeRange};
+use crate::{dfext::expressions::exp_to_string, span_table::get_spans_schema};
 use async_stream::try_stream;
 use datafusion::{
     arrow::{
@@ -86,7 +87,7 @@ pub struct ProcessSpansTableFunction {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     guard: Arc<AudienceGuard>,
 }
 
@@ -95,7 +96,7 @@ impl ProcessSpansTableFunction {
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
-        query_range: Option<TimeRange>,
+        query_range: SessionRange,
         guard: Arc<AudienceGuard>,
     ) -> Self {
         Self {
@@ -176,7 +177,7 @@ pub struct ProcessSpansExecutionPlan {
     process_id: String,
     process_uuid: Uuid,
     span_types: SpanTypes,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
@@ -196,7 +197,7 @@ impl ProcessSpansExecutionPlan {
         process_id: String,
         process_uuid: Uuid,
         span_types: SpanTypes,
-        query_range: Option<TimeRange>,
+        query_range: SessionRange,
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,

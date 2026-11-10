@@ -5,7 +5,7 @@ use datafusion::arrow::array::{Array, BooleanArray, StringArray};
 use datafusion::arrow::record_batch::RecordBatch;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
-use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::query::{SessionRange, make_session_context};
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -113,7 +113,7 @@ async fn run_udtf(ddl_text: &str) -> datafusion::error::Result<Vec<RecordBatch>>
     let ctx = make_session_context(
         lakehouse,
         Arc::new(NullPartitionProvider {}),
-        None,
+        SessionRange::Snapshot,
         Arc::new(ViewFactory::new(vec![])),
         Arc::new(NoOpSessionConfigurator),
         CallerContext::maintenance(),

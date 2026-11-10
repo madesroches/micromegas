@@ -1,9 +1,9 @@
 use super::{
     audience_guard::AudienceGuard, lakehouse_context::LakehouseContext,
     materialized_view::MaterializedView, partition_cache::QueryPartitionProvider,
-    view_factory::ViewFactory,
+    query::SessionRange, view_factory::ViewFactory,
 };
-use crate::{dfext::expressions::exp_to_string, time::TimeRange};
+use crate::dfext::expressions::exp_to_string;
 use datafusion::{
     catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider},
     common::plan_err,
@@ -31,7 +31,7 @@ pub struct ViewInstanceTableFunction {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     guard: Arc<AudienceGuard>,
 }
 
@@ -40,7 +40,7 @@ impl ViewInstanceTableFunction {
         lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
-        query_range: Option<TimeRange>,
+        query_range: SessionRange,
         guard: Arc<AudienceGuard>,
     ) -> Self {
         Self {

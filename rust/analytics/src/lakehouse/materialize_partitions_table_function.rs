@@ -47,6 +47,12 @@ async fn materialize_partitions_impl(
     let view = view_factory
         .get_global_view(view_name)
         .with_context(|| format!("can't find view {view_name}"))?;
+    if view.requires_query_range() {
+        anyhow::bail!(
+            "{view_name} is an on-demand view; a query over the range fills it, and repairing a \
+             range means retire_partitions followed by a query"
+        );
+    }
 
     let existing_partitions_all_views = Arc::new(
         PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)

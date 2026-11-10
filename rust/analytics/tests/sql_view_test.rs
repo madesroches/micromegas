@@ -7,7 +7,7 @@ use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
-use micromegas_analytics::lakehouse::query::query;
+use micromegas_analytics::lakehouse::query::{SessionRange, query};
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -251,7 +251,7 @@ async fn test_log_summary_view(
     let answer = query(
         lakehouse.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
-        Some(TimeRange::new(begin_range, end_range)),
+        SessionRange::Query(TimeRange::new(begin_range, end_range)),
         "
         SELECT time_bin,
                min_time,
@@ -277,7 +277,7 @@ async fn test_log_summary_view(
     let answer = query(
         lakehouse,
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
-        Some(TimeRange::new(begin_range, end_range)),
+        SessionRange::Query(TimeRange::new(begin_range, end_range)),
         "
         SELECT date_bin('1 minute', time) as time_bin,
                min(time) as min_time,

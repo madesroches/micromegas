@@ -7,7 +7,7 @@ use micromegas_analytics::{
         blocks_view::BlocksView,
         lakehouse_context::LakehouseContext,
         partition_cache::{LivePartitionProvider, PartitionCache},
-        query::query,
+        query::{SessionRange, query},
         read_scope::CallerContext,
         runtime::make_runtime_env,
         session_configurator::NoOpSessionConfigurator,
@@ -202,7 +202,7 @@ async fn test_cpu_usage_view(
     let answer = query(
         lakehouse,
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
-        Some(TimeRange::new(begin_range, end_range)),
+        SessionRange::Query(TimeRange::new(begin_range, end_range)),
         "
         SELECT time_bin,
                process_id,

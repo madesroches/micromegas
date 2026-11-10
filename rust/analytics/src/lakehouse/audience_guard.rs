@@ -487,17 +487,19 @@ impl AudienceGuard {
     ///    any view set an operator puts on the allowlist -- any authenticated caller can still
     ///    force `jit_update` for arbitrary process/stream ids of a public view set. Deliberate.
     /// 3. `view_instance_id == "global"` -> `Ok(())`. Global instances are row-filtered, not
-    ///    call-guarded: `jit_update` is a no-op for every `'global'` instance today
-    ///    (`LogView`/`MetricsView`, the only two view sets that accept `'global'`), so there is
-    ///    no materialization to protect against, and denying the call would break the legal
+    ///    call-guarded: denying the call would break the legal
     ///    `view_instance('log_entries', 'global')` spelling of `SELECT * FROM log_entries` for no
-    ///    security gain -- the row-level filter already filters its rows one at a time. This is a different
+    ///    security gain -- the row-level filter already filters its rows one at a time. An
+    ///    on-demand view's `'global'` instance does materialize on a read, and that is
+    ///    acceptable: `OwnershipRewrite`'s `audience` branch still filters its rows at read time
+    ///    (`check_audience_reachable` makes the column mandatory for every DDL view), and the
+    ///    materialization runs under `CallerContext::maintenance()` and writes global, unfiltered
+    ///    partitions, so nothing caller-specific is persisted. Triggering it is a cost concern,
+    ///    not a confidentiality one, and the reader who asks pays. This is a different
     ///    rule from `list_partitions`' `global_rows_visible`, which gates *visibility of
     ///    partition metadata* about a `'global'` file with no per-row filter available; reusing
     ///    it here would deny the `log_entries`/`measures` `'global'` instances to every
-    ///    non-admin scoped caller, a regression. The invariant that makes this rule sound --
-    ///    `'global'` never triggers JIT -- lives in each view set's `jit_update` impl; a future
-    ///    view set whose `'global'` instance does materialize would need to revisit this rule.
+    ///    non-admin scoped caller, a regression.
     /// 4. `view_instance_id` parses as a `Uuid` -> [`Self::authorize`] under
     ///    `IdKind::ProcessOrStream`, discarding the returned `Authorized`. The witness exists to
     ///    gate construction of an inner unscoped session; this call site builds none --

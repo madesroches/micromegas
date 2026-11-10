@@ -144,6 +144,12 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// tells the daemon which view should be materialized and in what order
     fn get_update_group(&self) -> Option<i32>;
 
+    /// True when the view fills its partitions from the query's own time range, so a query with
+    /// no range would serve only whatever earlier reads happened to leave behind.
+    fn requires_query_range(&self) -> bool {
+        false
+    }
+
     /// allow the view to subdivide the requested partition
     fn get_max_partition_time_delta(&self, _strategy: &PartitionCreationStrategy) -> TimeDelta {
         TimeDelta::days(1)

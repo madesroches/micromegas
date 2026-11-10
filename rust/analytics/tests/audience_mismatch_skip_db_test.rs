@@ -18,7 +18,7 @@ use micromegas_analytics::dfext::string_column_accessor::string_column_by_name;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::log_stats_view::make_log_stats_view;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
-use micromegas_analytics::lakehouse::query::query;
+use micromegas_analytics::lakehouse::query::{SessionRange, query};
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -297,7 +297,7 @@ async fn cross_audience_injected_block_is_excluded_from_materialization() -> Res
     let blocks_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(insert_range),
+        SessionRange::Query(insert_range),
         &format!("SELECT audience FROM blocks WHERE process_id = '{process_id}'"),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
@@ -328,7 +328,7 @@ async fn cross_audience_injected_block_is_excluded_from_materialization() -> Res
     let log_entries_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(insert_range),
+        SessionRange::Query(insert_range),
         &format!("SELECT msg, audience FROM log_entries WHERE process_id = '{process_id}'"),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
@@ -358,7 +358,7 @@ async fn cross_audience_injected_block_is_excluded_from_materialization() -> Res
     let measures_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(insert_range),
+        SessionRange::Query(insert_range),
         &format!("SELECT name, audience FROM measures WHERE process_id = '{process_id}'"),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
@@ -391,7 +391,7 @@ async fn cross_audience_injected_block_is_excluded_from_materialization() -> Res
     let processes_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(insert_range),
+        SessionRange::Query(insert_range),
         &format!("SELECT audience FROM processes WHERE process_id = '{process_id}'"),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),
@@ -419,7 +419,7 @@ async fn cross_audience_injected_block_is_excluded_from_materialization() -> Res
     let log_stats_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
-        Some(insert_range),
+        SessionRange::Query(insert_range),
         &format!("SELECT audience, count FROM log_stats WHERE process_id = '{process_id}'"),
         view_factory.clone(),
         Arc::new(NoOpSessionConfigurator),

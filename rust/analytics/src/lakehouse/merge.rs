@@ -7,7 +7,7 @@ use super::{
         ScanOrdering, assert_ordering_satisfied, assert_single_partition, sort_exprs,
     },
     partitioned_table_provider::PartitionedTableProvider,
-    query::make_session_context,
+    query::{SessionRange, make_session_context},
     read_scope::CallerContext,
     session_configurator::SessionConfigurator,
     view::{ScanSortColumn, View},
@@ -49,7 +49,7 @@ use xxhash_rust::xxh32::xxh32;
 pub async fn make_merge_session_context(
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     view_factory: Arc<ViewFactory>,
     configurator: Arc<dyn SessionConfigurator>,
     caller: CallerContext,
@@ -325,7 +325,7 @@ impl PartitionMerger for QueryMerger {
         let ctx = make_merge_session_context(
             lakehouse.clone(),
             partitions_all_views,
-            Some(insert_range),
+            SessionRange::Query(insert_range),
             self.view_factory.clone(),
             self.session_configurator.clone(),
             CallerContext::maintenance(),

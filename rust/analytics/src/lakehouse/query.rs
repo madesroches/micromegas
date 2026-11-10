@@ -52,12 +52,38 @@ use datafusion::{
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
+/// What a session knows about the time range it serves. The range decides event-time pruning and
+/// range-driven JIT, and whether a view that needs a range may be read at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRange {
+    /// User query over a time range: event-time pruning (`TableScanRewrite`) + JIT over it.
+    Query(TimeRange),
+    /// User query with no time range: no pruning; views that need a range refuse.
+    Unbounded,
+    /// Internal session over the caller's partition snapshot. The caller already brought on-demand
+    /// sources up to date for the snapshot's insert range, so no range-driven JIT runs here.
+    Snapshot,
+    /// Planning only: an explicit absence of partitions. Scans yield an empty plan with the
+    /// view's schema, with no partition fetch and no JIT.
+    NoPartitions,
+}
+
+impl SessionRange {
+    /// The range handed to `View::jit_update` and to the partition provider.
+    pub fn query_range(&self) -> Option<TimeRange> {
+        match self {
+            SessionRange::Query(range) => Some(*range),
+            SessionRange::Unbounded | SessionRange::Snapshot | SessionRange::NoPartitions => None,
+        }
+    }
+}
+
 #[span_fn]
 async fn register_table(
     lakehouse: Arc<LakehouseContext>,
     reader_factory: Arc<ReaderFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     ctx: &SessionContext,
     view: Arc<dyn View>,
 ) -> Result<()> {
@@ -118,7 +144,7 @@ pub fn register_lakehouse_functions(
     ctx: &SessionContext,
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     view_factory: Arc<ViewFactory>,
     caller: &CallerContext,
     configurator: Arc<dyn SessionConfigurator>,
@@ -283,7 +309,7 @@ pub fn register_functions(
     ctx: &SessionContext,
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     view_factory: Arc<ViewFactory>,
     caller: &CallerContext,
     configurator: Arc<dyn SessionConfigurator>,
@@ -304,7 +330,7 @@ pub fn register_functions(
 pub async fn make_session_context(
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     view_factory: Arc<ViewFactory>,
     configurator: Arc<dyn SessionConfigurator>,
     caller: CallerContext,
@@ -323,7 +349,7 @@ pub async fn make_session_context(
         .set_bool("datafusion.sql_parser.collect_spans", true)
         .with_information_schema(true);
     let ctx = SessionContext::new_with_config_rt(config, lakehouse.runtime().clone());
-    if let Some(range) = &query_range {
+    if let SessionRange::Query(range) = &query_range {
         ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(*range)));
     }
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
@@ -355,11 +381,11 @@ pub async fn make_session_context(
         // it anyway, so skip resolving `processes`/`streams` sources and registering the rule
         // entirely rather than requiring every ReadScope::All caller's ViewFactory to carry them.
         //
-        // Must be registered *after* the TableScanRewrite registration above (`query_range.is_some()`
+        // Must be registered *after* the TableScanRewrite registration above (`SessionRange::Query`
         // block): TableScanRewrite::analyze walks the whole plan with transform_up_with_subqueries
         // and would time-bound the audience lookup's own processes/streams scans if it ran after
         // OwnershipRewrite injected them (analyzer rules each run exactly once, in registration
-        // order). The audience lookup must stay time-unbounded (query_range: None below).
+        // order). The audience lookup must stay time-unbounded (`SessionRange::Unbounded` below).
         let processes_view = view_factory.get_global_view("processes").with_context(
             || "OwnershipRewrite requires the `processes` global view to be registered",
         )?;
@@ -372,7 +398,7 @@ pub async fn make_session_context(
                 reader_factory.clone(),
                 processes_view,
                 part_provider.clone(),
-                None,
+                SessionRange::Unbounded,
                 None,
             ))));
         let streams_source: Arc<dyn TableSource> =
@@ -381,7 +407,7 @@ pub async fn make_session_context(
                 reader_factory.clone(),
                 streams_view,
                 part_provider.clone(),
-                None,
+                SessionRange::Unbounded,
                 None,
             ))));
         ctx.add_analyzer_rule(Arc::new(OwnershipRewrite::new(
@@ -400,7 +426,7 @@ pub async fn make_session_context(
 pub async fn query(
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    query_range: SessionRange,
     sql: &str,
     view_factory: Arc<ViewFactory>,
     configurator: Arc<dyn SessionConfigurator>,

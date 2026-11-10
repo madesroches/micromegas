@@ -4,10 +4,11 @@ use super::{
     lakehouse_context::LakehouseContext,
     materialized_view::MaterializedView,
     merge::{MergeQueryResult, PartitionMerger, QueryMerger},
+    on_demand_jit::update_on_demand_view,
     partition::Partition,
     partition_cache::{NullPartitionProvider, PartitionCache},
     partitioned_execution_plan::ScanOrdering,
-    query::make_session_context,
+    query::{SessionRange, make_session_context},
     read_scope::CallerContext,
     session_configurator::SessionConfigurator,
     sql_partition_spec::fetch_sql_partition_spec,
@@ -57,7 +58,7 @@ fn sort_order_as_scan_columns(columns: &[Arc<String>]) -> Vec<ScanSortColumn> {
 }
 
 /// SQL-defined view updated in batch
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SqlBatchView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
@@ -79,6 +80,10 @@ pub struct SqlBatchView {
     /// A `QueryMerger` declaring `ScanOrdering::PerFile { columns: sort_order }`, used instead of
     /// `merger` when every input to a merge certifies `sort_order`.
     ordered_merger: Option<Arc<dyn PartitionMerger>>,
+    /// On-demand views this view's queries read. The JIT driver refreshes them before it
+    /// snapshots source partitions, because the extract and count sessions cannot refresh
+    /// upstream themselves.
+    on_demand_sources: Vec<Arc<dyn View>>,
 }
 
 impl SqlBatchView {
@@ -116,7 +121,7 @@ impl SqlBatchView {
         let ctx = make_session_context(
             lakehouse,
             null_part_provider,
-            None,
+            SessionRange::NoPartitions,
             view_factory.clone(),
             session_configurator.clone(),
             CallerContext::maintenance(),
@@ -157,7 +162,20 @@ impl SqlBatchView {
             max_partition_delta_from_merge,
             sort_order: None,
             ordered_merger: None,
+            on_demand_sources: vec![],
         })
+    }
+
+    /// An on-demand view has no `update_group`: the daemon never touches it and queries fill the
+    /// partitions covering their own range.
+    pub fn is_on_demand(&self) -> bool {
+        self.update_group.is_none()
+    }
+
+    /// Attaches the on-demand views this view reads (see `validate_view_definition`).
+    pub fn with_on_demand_sources(mut self, sources: Vec<Arc<dyn View>>) -> Self {
+        self.on_demand_sources = sources;
+        self
     }
 
     /// Declares that this view's partitions are internally sorted, ascending, by `columns` in
@@ -258,7 +276,7 @@ impl View for SqlBatchView {
         let ctx = make_session_context(
             lakehouse,
             partitions_in_range.clone(),
-            None,
+            SessionRange::Snapshot,
             self.view_factory.clone(),
             self.session_configurator.clone(),
             CallerContext::maintenance(),
@@ -307,10 +325,20 @@ impl View for SqlBatchView {
 
     async fn jit_update(
         &self,
-        _lakehouse: Arc<LakehouseContext>,
-        _query_range: Option<TimeRange>,
+        lakehouse: Arc<LakehouseContext>,
+        query_range: Option<TimeRange>,
     ) -> Result<()> {
-        Ok(())
+        // `None` is a snapshot session, whose caller already refreshed the on-demand sources.
+        let (true, Some(query_range)) = (self.is_on_demand(), query_range) else {
+            return Ok(());
+        };
+        update_on_demand_view(
+            lakehouse,
+            Arc::new(self.clone()),
+            &self.on_demand_sources,
+            query_range,
+        )
+        .await
     }
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
@@ -409,6 +437,10 @@ impl View for SqlBatchView {
 
     fn get_update_group(&self) -> Option<i32> {
         self.update_group
+    }
+
+    fn requires_query_range(&self) -> bool {
+        self.is_on_demand()
     }
 
     fn get_max_partition_time_delta(&self, strategy: &PartitionCreationStrategy) -> TimeDelta {

@@ -7,7 +7,8 @@
 
 use super::{
     session_configurator::SessionConfigurator,
-    view_definition::{build_sql_batch_view, validate_view_definition},
+    sql_batch_view::SqlBatchView,
+    view_definition::{ViewDefinition, build_sql_batch_view, validate_view_definition},
     view_definition_store::{ViewDefinitionRow, ViewDefinitionStore},
     view_factory::ViewFactory,
 };
@@ -39,7 +40,8 @@ fn refresh_interval() -> Duration {
 }
 
 /// Hashes the `(view_set_name, updated_at)` tuples of `rows`, in the order given (already
-/// `(update_group, view_set_name)`-ordered by `ViewDefinitionStore::list`) -- what `reload()`
+/// `(update_group NULLS LAST, view_set_name)`-ordered by `ViewDefinitionStore::list`) -- what
+/// `reload()`
 /// compares against `loaded_digest` to short-circuit a steady-state tick to one `SELECT`.
 fn digest_of(rows: &[ViewDefinitionRow]) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -113,13 +115,16 @@ fn skip(
 /// building each row's `SqlBatchView` is itself `async` and needs `runtime`/`lake`/
 /// `session_configurator` to plan the extract query.
 ///
-/// Builds incrementally, in the order `rows` is given (`(update_group, view_set_name)`): `let mut
-/// factory = (**base).clone();` then, per row, build and validate its `SqlBatchView` against
-/// `Arc::new(factory.clone())` -- the built-ins plus every already-folded-in row -- and only then
-/// `factory.add_global_view(...)`. A row that fails to parse, build, or validate is **skipped, not
-/// fatal**: collected into the returned failed-set with its reason, so one broken definition
-/// cannot take out every other view set. Whether that skip is also logged and metered is
-/// `purpose`'s call.
+/// Builds incrementally as a fixpoint: `let mut factory = (**base).clone();` then, per row in the
+/// order given (`(update_group NULLS LAST, view_set_name)`), build and validate its
+/// `SqlBatchView` against `Arc::new(factory.clone())` -- the built-ins plus every already-folded-in
+/// row -- and only then `factory.add_global_view(...)`. Daemon rows are sorted sources-first by
+/// their group, but an on-demand row has no group, so one may sort before an on-demand view it
+/// reads; the rows that failed are therefore retried for as long as the previous pass added at
+/// least one view. A row that fails to parse, or still fails to build or validate when a pass adds
+/// nothing, is **skipped, not fatal**: collected into the returned failed-set with its reason, so
+/// one broken definition cannot take out every other view set. Whether that skip is also logged
+/// and metered is `purpose`'s call.
 pub async fn build_factory(
     base: &Arc<ViewFactory>,
     rows: &[ViewDefinitionRow],
@@ -130,50 +135,78 @@ pub async fn build_factory(
 ) -> Result<(Arc<ViewFactory>, Vec<BuildFailure>)> {
     let mut factory = (**base).clone();
     let mut failed = Vec::new();
+    let mut pending = Vec::new();
     for row in rows {
-        let name = row.view_set_name.clone();
-        let def = match row.clone().into_definition() {
-            Ok(def) => def,
-            Err(e) => {
-                failed.push(skip(purpose, name, "to parse", e));
-                continue;
-            }
-        };
-        let factory_so_far = Arc::new(factory.clone());
-        let view = match build_sql_batch_view(
-            &def,
-            runtime.clone(),
-            lake.clone(),
-            factory_so_far.clone(),
-            session_configurator.clone(),
-        )
-        .await
-        {
-            Ok(view) => view,
-            Err(e) => {
-                failed.push(skip(purpose, name, "to build", e));
-                continue;
-            }
-        };
-        if let Err(e) = validate_view_definition(
-            &def,
-            &view,
-            &factory_so_far,
-            runtime.clone(),
-            lake.clone(),
-            session_configurator.clone(),
-        )
-        .await
-        {
-            failed.push(skip(purpose, name, "validation", e));
-            continue;
-        }
-        factory.add_global_view(Arc::new(view));
-        if let Some(description) = &def.options.description {
-            factory.set_description(&name, Arc::from(description.as_str()));
+        match row.clone().into_definition() {
+            Ok(def) => pending.push(def),
+            Err(e) => failed.push(skip(purpose, row.view_set_name.clone(), "to parse", e)),
         }
     }
+    loop {
+        let mut added_any = false;
+        let mut still_failing = Vec::new();
+        for def in pending {
+            let factory_so_far = Arc::new(factory.clone());
+            let attempt = fold_definition(
+                &def,
+                &factory_so_far,
+                runtime.clone(),
+                lake.clone(),
+                session_configurator.clone(),
+            )
+            .await;
+            match attempt {
+                Ok(view) => {
+                    factory.add_global_view(Arc::new(view));
+                    if let Some(description) = &def.options.description {
+                        factory
+                            .set_description(&def.view_set_name, Arc::from(description.as_str()));
+                    }
+                    added_any = true;
+                }
+                Err((stage, e)) => still_failing.push((def, stage, e)),
+            }
+        }
+        if !added_any || still_failing.is_empty() {
+            for (def, stage, e) in still_failing {
+                failed.push(skip(purpose, def.view_set_name, stage, e));
+            }
+            break;
+        }
+        pending = still_failing.into_iter().map(|(def, _, _)| def).collect();
+    }
     Ok((Arc::new(factory), failed))
+}
+
+/// Builds and validates one definition against `factory_so_far`, attaching the on-demand views it
+/// reads. The error carries the stage that failed, for [`skip`].
+async fn fold_definition(
+    def: &ViewDefinition,
+    factory_so_far: &Arc<ViewFactory>,
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    session_configurator: Arc<dyn SessionConfigurator>,
+) -> std::result::Result<SqlBatchView, (&'static str, anyhow::Error)> {
+    let view = build_sql_batch_view(
+        def,
+        runtime.clone(),
+        lake.clone(),
+        factory_so_far.clone(),
+        session_configurator.clone(),
+    )
+    .await
+    .map_err(|e| ("to build", e))?;
+    let on_demand_sources = validate_view_definition(
+        def,
+        &view,
+        factory_so_far,
+        runtime,
+        lake,
+        session_configurator,
+    )
+    .await
+    .map_err(|e| ("validation", e))?;
+    Ok(view.with_on_demand_sources(on_demand_sources))
 }
 
 /// A shared `Arc<ViewFactory>` (base + N DDL-defined `SqlBatchView`s) rebuilt from
@@ -299,13 +332,14 @@ impl ViewRegistry {
     /// Refreshes `current()` from `lakehouse_view_set_definitions`.
     ///
     /// 0. Acquires `reload_mutex` and holds it through every step below.
-    /// 1. `store.list()` -> rows ordered by `(update_group, view_set_name)`.
+    /// 1. `store.list()` -> rows ordered by `(update_group NULLS LAST, view_set_name)`.
     /// 2. Hashes the `(view_set_name, updated_at)` tuples; if unchanged from `loaded_digest`
     ///    **and** the previous build's failed set was empty, returns -- one `SELECT`, no
     ///    planning. A digest match after a failed build does *not* short-circuit, so a row that
     ///    failed for a transient reason is retried every tick.
     /// 3. `build_factory(...)`.
-    /// 4. A row that fails to build or validate is skipped, not fatal (see [`build_factory`]).
+    /// 4. A row that still fails to build or validate once the build settles is skipped, not fatal
+    ///    (see [`build_factory`]).
     /// 5. Swaps `current`, updates `loaded_digest` and `failed_view_sets`.
     pub async fn reload(&self) -> Result<()> {
         let _guard = self.reload_mutex.lock().await;

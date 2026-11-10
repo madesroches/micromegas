@@ -1249,13 +1249,40 @@ fn bucket_facts(bucket: &JitBucket) -> Result<BucketFacts> {
     })
 }
 
-/// A row's inclusive `[begin, end]` insert range against a half-open bucket.
-fn row_intersects(row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
-    row.begin_insert_time < bucket.end && row.end_insert_time >= bucket.begin
+/// How a partition row's insert range relates to a half-open bucket, which depends on who wrote
+/// the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeConvention {
+    /// Block-driven partitions: the row is the inclusive `[min, max]` of its blocks' insert
+    /// times, which never touches a bucket edge from outside.
+    BlockHull,
+    /// Bucket-aligned partitions (SQL views): the row's range is its bucket, so `end` equals the
+    /// next bucket's `begin`.
+    Aligned,
 }
 
-pub(crate) fn row_inside(row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
-    row.begin_insert_time >= bucket.begin && row.end_insert_time < bucket.end
+impl RangeConvention {
+    pub fn row_intersects(&self, row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
+        match self {
+            RangeConvention::BlockHull => {
+                row.begin_insert_time < bucket.end && row.end_insert_time >= bucket.begin
+            }
+            RangeConvention::Aligned => {
+                row.begin_insert_time < bucket.end && row.end_insert_time > bucket.begin
+            }
+        }
+    }
+
+    pub fn row_inside(&self, row: &PartitionFreshnessRow, bucket: TimeRange) -> bool {
+        match self {
+            RangeConvention::BlockHull => {
+                row.begin_insert_time >= bucket.begin && row.end_insert_time < bucket.end
+            }
+            RangeConvention::Aligned => {
+                row.begin_insert_time >= bucket.begin && row.end_insert_time <= bucket.end
+            }
+        }
+    }
 }
 
 /// Judges one bucket against `rows` (the rows that count as present). The retire mode of a stale
@@ -1270,8 +1297,8 @@ fn judge_bucket(
 ) -> Result<Coverage> {
     let (inner, outer): (Vec<&PartitionFreshnessRow>, Vec<&PartitionFreshnessRow>) = rows
         .iter()
-        .filter(|r| row_intersects(r, facts.range))
-        .partition(|r| row_inside(r, facts.range));
+        .filter(|r| RangeConvention::BlockHull.row_intersects(r, facts.range))
+        .partition(|r| RangeConvention::BlockHull.row_inside(r, facts.range));
     let schema_ok = |r: &&PartitionFreshnessRow| r.file_schema_hash == view_meta.file_schema_hash;
     let covered = if outer.is_empty() {
         // Fine-or-equal rungs: the bucket's own rows must cover every required object. A surplus
@@ -1297,9 +1324,10 @@ fn judge_bucket(
     if covered {
         return Ok(Coverage::Covered);
     }
-    let raw_has_outer = raw_rows
-        .iter()
-        .any(|r| row_intersects(r, facts.range) && !row_inside(r, facts.range));
+    let raw_has_outer = raw_rows.iter().any(|r| {
+        RangeConvention::BlockHull.row_intersects(r, facts.range)
+            && !RangeConvention::BlockHull.row_inside(r, facts.range)
+    });
     Ok(Coverage::Stale {
         retire_match: if raw_has_outer {
             RetireMatch::Overlap
@@ -1511,7 +1539,14 @@ pub async fn update_insert_time_jit_view(
         query_rung,
         config.max_nb_objects,
     );
-    promote_closed_buckets(lakehouse, view, targets, config.max_nb_objects).await;
+    promote_closed_buckets(
+        lakehouse,
+        view,
+        targets,
+        config.max_nb_objects,
+        RangeConvention::BlockHull,
+    )
+    .await;
     Ok(())
 }
 

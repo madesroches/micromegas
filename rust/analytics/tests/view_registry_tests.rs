@@ -64,13 +64,16 @@ impl FakeStore {
 #[async_trait]
 impl ViewDefinitionStore for FakeStore {
     async fn list(&self) -> anyhow::Result<Vec<ViewDefinitionRow>> {
-        // Matches `PgViewDefinitionStore::list`'s `ORDER BY update_group, view_set_name` --
-        // `build_factory` relies on the store handing back rows already in that order.
+        // Matches `PgViewDefinitionStore::list`'s `ORDER BY update_group NULLS LAST,
+        // view_set_name` -- `build_factory` relies on the store handing back rows already in
+        // that order. `Option` sorts `None` first, so on-demand rows are keyed explicitly.
         let mut rows = self.rows.lock().expect("lock").clone();
         rows.sort_by(|a, b| {
-            a.update_group
-                .cmp(&b.update_group)
-                .then_with(|| a.view_set_name.cmp(&b.view_set_name))
+            (a.update_group.is_none(), a.update_group, &a.view_set_name).cmp(&(
+                b.update_group.is_none(),
+                b.update_group,
+                &b.view_set_name,
+            ))
         });
         Ok(rows)
     }
@@ -83,7 +86,7 @@ fn row(
     name: &str,
     extract_query: &str,
     merge_partitions_query: &str,
-    update_group: i32,
+    update_group: impl Into<Option<i32>>,
     updated_at: DateTime<Utc>,
 ) -> ViewDefinitionRow {
     let options = ViewOptions {
@@ -100,7 +103,7 @@ fn row(
         extract_query: extract_query.to_string(),
         count_src_query: VALID_COUNT_SRC.to_string(),
         merge_partitions_query: merge_partitions_query.to_string(),
-        update_group,
+        update_group: update_group.into(),
         view_options: serde_json::to_string(&options).expect("serialize ViewOptions"),
         created_at: updated_at,
         updated_at,
@@ -384,4 +387,64 @@ async fn reload_registers_descriptions_of_loaded_views_only() {
     assert_eq!(factory.get_description("a").as_deref(), Some("# a"));
     assert!(factory.get_description("c").is_none());
     assert!(factory.get_description("broken").is_none());
+}
+
+/// An on-demand definition (no `update_group`) reading `source`, or `log_entries` when `None`.
+fn on_demand_row(name: &str, source: Option<&str>, updated_at: DateTime<Utc>) -> ViewDefinitionRow {
+    let extract = match source {
+        Some(source) => format!("SELECT time_bin, audience, count FROM {source}"),
+        None => "SELECT date_bin('1 minute', time) as time_bin, \
+                        arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience, \
+                        count(*) as count \
+                 FROM log_entries \
+                 WHERE insert_time >= '{begin}' AND insert_time < '{end}' \
+                 GROUP BY time_bin"
+            .to_string(),
+    };
+    row(
+        name,
+        &extract,
+        "SELECT time_bin, arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience, \
+                sum(count) as count \
+         FROM {source} GROUP BY time_bin",
+        None,
+        updated_at,
+    )
+}
+
+#[tokio::test]
+async fn on_demand_chain_builds_whichever_name_sorts_first() {
+    for (reader, source) in [("a_view", "b_view"), ("b_view", "a_view")] {
+        let lakehouse = make_offline_lakehouse_context().await;
+        let now = Utc::now();
+        let store = Arc::new(FakeStore::new(vec![
+            on_demand_row(reader, Some(source), now),
+            on_demand_row(source, None, now),
+        ]));
+        let registry = make_registry(&lakehouse, store);
+        registry.reload().await.expect("reload");
+        assert!(
+            registry.failed_view_sets().is_empty(),
+            "{reader} reads {source}: {:?}",
+            registry.failed_view_sets()
+        );
+        let factory = registry.current();
+        assert!(factory.get_global_view(reader).is_some());
+        assert!(factory.get_global_view(source).is_some());
+    }
+}
+
+#[tokio::test]
+async fn on_demand_cycle_reports_both_views_as_failed() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let now = Utc::now();
+    let store = Arc::new(FakeStore::new(vec![
+        on_demand_row("x_view", Some("y_view"), now),
+        on_demand_row("y_view", Some("x_view"), now),
+    ]));
+    let registry = make_registry(&lakehouse, store);
+    registry.reload().await.expect("reload");
+    let mut failed = registry.failed_view_sets();
+    failed.sort();
+    assert_eq!(failed, vec!["x_view".to_string(), "y_view".to_string()]);
 }

@@ -71,7 +71,7 @@ pub fn log_stats_view_definition() -> ViewDefinition {
         extract_query: EXTRACT_QUERY.to_string(),
         count_src_query: COUNT_SRC_QUERY.to_string(),
         merge_partitions_query: MERGE_QUERY.to_string(),
-        update_group: 3000,
+        update_group: Some(3000),
         options: ViewOptions {
             min_time_column: "time_bin".to_string(),
             max_time_column: "time_bin".to_string(),
@@ -114,7 +114,8 @@ pub fn log_stats_ddl_text() -> String {
         def.extract_query,
         def.count_src_query,
         def.merge_partitions_query,
-        def.update_group,
+        def.update_group
+            .expect("log_stats is a daemon-updated view"),
         def.options.min_time_column,
         def.options.source_partition_delta,
         def.options.merge_partition_delta,

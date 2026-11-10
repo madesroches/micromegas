@@ -280,6 +280,7 @@ binary:
   source data, bypassing the freshness check `materialize_partitions()` stops
   at), `retire_partitions()`, and `retire_partition_by_metadata()`. All four
   require an authenticated admin — see [Authentication](flight-sql.md#authentication).
+  On-demand views are backfilled by a query over the range, not by `materialize_partitions()`.
 - **Python helpers** such as `micromegas.admin.list_incompatible_partitions()` and
   `micromegas.admin.retire_incompatible_partitions()` (the latter internally calls
   `retire_partition_by_metadata()` and so also requires admin).

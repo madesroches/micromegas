@@ -44,7 +44,7 @@ fn schema() -> SchemaRef {
 pub struct DdlRow {
     pub view_set_name: String,
     pub definition_sql: String,
-    pub update_group: i32,
+    pub update_group: Option<i32>,
     pub updated_at_nanos: i64,
     pub updated_by: Option<String>,
 }
@@ -69,7 +69,7 @@ pub fn merge_rows(ddl: Vec<DdlRow>, factory: &ViewFactory) -> Vec<DefinitionRow>
         .map(|r| DefinitionRow {
             view_set_name: r.view_set_name,
             definition_sql: Some(r.definition_sql),
-            update_group: Some(r.update_group),
+            update_group: r.update_group,
             updated_at_nanos: Some(r.updated_at_nanos),
             updated_by: r.updated_by,
             source: "ddl",

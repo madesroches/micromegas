@@ -3,7 +3,7 @@ use super::{
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     lakehouse_context::LakehouseContext,
     partition_cache::{NullPartitionProvider, PartitionCache},
-    query::make_session_context,
+    query::{SessionRange, make_session_context},
     read_scope::CallerContext,
     session_configurator::SessionConfigurator,
     view::{PartitionSpec, View},
@@ -119,7 +119,7 @@ impl ExportLogView {
         let ctx = make_session_context(
             lakehouse,
             null_part_provider,
-            None,
+            SessionRange::NoPartitions,
             view_factory.clone(),
             session_configurator.clone(),
             CallerContext::maintenance(),
@@ -173,7 +173,7 @@ impl View for ExportLogView {
         let ctx = make_session_context(
             lakehouse,
             partitions_in_range.clone(),
-            None,
+            SessionRange::Snapshot,
             self.view_factory.clone(),
             self.session_configurator.clone(),
             CallerContext::maintenance(),

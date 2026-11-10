@@ -23,6 +23,7 @@ use micromegas_analytics::lakehouse::partition_cache::{
 };
 use micromegas_analytics::lakehouse::partitioned_execution_plan::ScanOrdering;
 use micromegas_analytics::lakehouse::partitioned_table_provider::PartitionedTableProvider;
+use micromegas_analytics::lakehouse::query::SessionRange;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -325,7 +326,7 @@ async fn register_table_never_carries_the_merge_query_sort_node() {
         reader_factory,
         view.clone(),
         part_provider,
-        None,
+        SessionRange::Snapshot,
         None,
     );
 
