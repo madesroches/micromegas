@@ -458,13 +458,20 @@ step 8.
   range covers their insert time; revisit on a concrete need.
 - Admission is unchanged in v1: on-demand materialization runs before the gate, as built-in JIT
   does; gating JIT work is a follow-up.
+- An on-demand view's `count_src_query` counts the rows of the tables its `extract_query` reads
+  (e.g. `count(*) FROM log_entries` over the insert range), not `blocks`. The daemon writes
+  `blocks` before `log_entries` within a tick, so a block count can run ahead of the rows, and
+  the equality judge would then keep a short partition `Covered` for good. This is an authoring
+  rule, documented, not enforced.
 
 ## Documentation
 
 - `mkdocs/docs/admin/materialized-views.md`:
   - `update_group` becomes optional in the options table.
   - New "On-demand views" section: behavior, open-edge grace, chain rule, the rejection of daemon
-    views reading on-demand ones, the delta options being rejected, and the late-insert caveat.
+    views reading on-demand ones, the delta options being rejected, the late-insert caveat, and
+    the rule that `count_src_query` counts the rows of the extracted tables, not `blocks`, with
+    an example.
   - Fix the "this is the only dependency mechanism" sentence.
 - `mkdocs/docs/admin/views-as-code.md`: mention that the `update_group` line can be omitted.
 - `mkdocs/docs/admin/functions-reference.md`: in the `list_view_set_definitions()` column table,
@@ -541,8 +548,9 @@ fake cannot reach. A break shows up immediately as empty results or daemon log l
 1. `python3 local_test_env/ai_scripts/start_services.py`, then generate some telemetry (any
    instrumented test binary).
 2. `micromegas-query "CREATE MATERIALIZED VIEW od_log_counts WITH (extract_query = '…', count_src_query = '…', merge_partitions_query = '…', time_column = 'time_bin')"`,
-   using the web app's create skeleton minus `update_group` and the delta lines. Expected:
-   success.
+   using the web app's create skeleton minus `update_group` and the delta lines, with
+   `count_src_query` replaced by `SELECT count(*) AS count FROM log_entries WHERE insert_time >=
+   '{begin}' AND insert_time < '{end}'`. Expected: success.
 3. `micromegas-query "SELECT count(*) FROM od_log_counts" --begin 24h`, then
    `micromegas-query "SELECT begin_insert_time, end_insert_time, num_rows, updated FROM list_partitions() WHERE view_set_name = 'od_log_counts' ORDER BY begin_insert_time" --begin 24h`.
    Expected: non-zero count; 1-hour partitions, 5-minute and 1-minute partitions at the newest edge.
@@ -552,3 +560,4 @@ fake cannot reach. A break shows up immediately as empty results or daemon log l
 6. `grep od_log_counts /tmp/daemon.log`. Expected: no materialization lines.
 7. `micromegas-query "SELECT count(*) FROM od_log_counts"` with no `--begin`/`--end`. Expected:
    the "needs a query time range" error.
+
