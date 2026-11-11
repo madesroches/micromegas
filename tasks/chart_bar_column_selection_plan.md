@@ -16,7 +16,7 @@ a click anywhere in a bar's column selects that bar (`hitAt` already guarantees 
   the last (topmost) rect with `left <= x <= left + width` **and** `top <= y <= top + height`.
 - `analytics-web-app/src/components/XYChart.tsx:434-460` — `makeBarPaths` collects one `BarRect`
   per drawn bar from uPlot's `bars({ each })` callback (canvas pixels). uPlot 1.6.32 calls `each`
-  for every non-null value, including zero-height bars (`uPlot.esm.js:2617`). Each series gets
+  for every non-null value, including zero-height bars (`uPlot.esm.js:2631`). Each series gets
   slot width `0.8 / seriesCount` and its own `align` offset, so grouped series sit side by side.
 - `XYChart.tsx:463-475` — `hitAt` in `createSelectionPlugin` rejects cursors outside the plot
   (`left/top < 0`), filters rects of hidden series, converts the cursor to canvas px, and calls
@@ -58,10 +58,9 @@ Clearing keeps working through: clicking a gap between columns, clicking outside
 2. `XYChart.tsx`: in `hitAt`'s bar branch, drop the Y argument and pass only the converted X.
 3. `__tests__/xychart-selection.test.ts`: update existing calls to drop the y argument and adjust
    the "misses outside" case, which today asserts a miss above a bar, and add:
-   - click above a short bar (inside its column, well above `top`) → hits that bar;
-   - click below a bar's rect but inside the plot → hits;
+   - a hit depends only on x within `[left, left + width]`: rects with a small `height` and with
+     `height: 0` are both hit by any x in their column;
    - click in the gap between two columns → null;
-   - zero-height bar (`height: 0`), click anywhere in its column → hits;
    - grouped series: clicks in each series' slot select that series.
 4. `mkdocs/docs/web-app/notebooks/cell-types.md:68`: say that clicking anywhere in a bar's column
    selects it, and that the gap between columns counts as empty space.
@@ -95,8 +94,8 @@ Clearing keeps working through: clicking a gap between columns, clicking outside
 ## Testing Strategy
 
 The hit-test rule is a pure function and is covered by the `hitTestBars` unit tests listed in
-step 3, including the cases the issue names: a click above a short bar, a click in the gap, and
-a click on a zero-height bar.
+step 3, including the issue's cases (a click above a short bar, a click on a zero-height bar), which are
+covered by the x-only test, and a click in the gap.
 
 ## Manual Verification
 
