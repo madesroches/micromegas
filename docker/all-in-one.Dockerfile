@@ -47,7 +47,7 @@ RUN printf '{\n  "name": "micromegas-datafusion-wasm",\n  "version": "0.1.0",\n 
 FROM --platform=$BUILDPLATFORM node:26-alpine AS frontend-builder
 
 WORKDIR /app
-RUN corepack enable
+RUN npm install -g corepack && corepack enable
 COPY analytics-web-app/package.json analytics-web-app/yarn.lock analytics-web-app/.yarnrc.yml ./
 # Local link: dependency must exist for yarn to create the symlink
 COPY analytics-web-app/src/lib/datafusion-wasm/ ./src/lib/datafusion-wasm/
