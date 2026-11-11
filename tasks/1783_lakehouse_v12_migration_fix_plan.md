@@ -9,8 +9,7 @@ The v11 → v12 lakehouse migration step added by #1780 can never run. It sits i
 `assert_eq!(current_version, LATEST_LAKEHOUSE_SCHEMA_VERSION)`. Its step chain stops at v11, so
 the assert compares 11 with 12 and panics first. Every service that builds a lakehouse context
 against a database below v12 (that is, every database) crashes at startup. The fix moves the step
-into the chain. A live-DB regression test pins the bug, because it only shows up against a real
-Postgres.
+into the chain.
 
 ## Current State
 
@@ -68,23 +67,26 @@ dev database's version, and the test would migrate (or skip) the wrong tables.
 One test, **`migrates_fresh_lakehouse_to_latest`**: on an empty schema (v0), call
 `migrate_lakehouse`. Assert that it returns `Ok`, that the version equals
 `LATEST_LAKEHOUSE_SCHEMA_VERSION`, and that `lakehouse_view_set_definitions.update_group` is
-nullable (`information_schema.columns.is_nullable = 'YES'`). Then call `migrate_lakehouse` again
+nullable (`information_schema.columns.is_nullable = 'YES'`, filtered by `table_schema` equal to
+the throwaway schema, since `search_path` does not scope `information_schema`). Then call `migrate_lakehouse` again
 and assert it is still `Ok` (the idempotent restart path).
+
+The test assumes the `btree_gist` extension is already installed, for example in `public` by a
+prior lakehouse migration.
 
 The doc comment names the bug the test pins: a step left outside `execute_lakehouse_migration`
 panics at startup. It also says how to run it.
 
 ## Implementation Steps
 
-1. In `rust/analytics/src/lakehouse/migration.rs`, move lines 49–55 into
-   `execute_lakehouse_migration` after the v10 → v11 block.
-2. Add `rust/analytics/tests/lakehouse_migration_db_test.rs` as designed above. Reuse
+1. Add `rust/analytics/tests/lakehouse_migration_db_test.rs` as designed above. Reuse
    `common::db_fixtures::ensure_telemetry_guard` as the other analytics DB tests do.
-3. `cargo fmt`, then `cargo clippy --workspace --all-targets -- -D warnings`, then
+2. With local services' Postgres up, run `cargo test -p micromegas-analytics --test
+   lakehouse_migration_db_test -- --ignored`. It must fail with the line-140 panic.
+3. In `rust/analytics/src/lakehouse/migration.rs`, move lines 49–55 into
+   `execute_lakehouse_migration` after the v10 → v11 block, then rerun the test. It must pass.
+4. `cargo fmt`, then `cargo clippy --workspace --all-targets -- -D warnings`, then
    `cargo test -p micromegas-analytics`.
-4. With local services' Postgres up, run `cargo test -p micromegas-analytics --test
-   lakehouse_migration_db_test -- --ignored`, both before the step-1 change (the test must fail
-   with the line-140 panic) and after it (it must pass).
 
 ## Files to Modify
 
@@ -113,5 +115,5 @@ panics at startup. It also says how to run it.
 
 ## Manual Verification
 
-None beyond step 4 of the implementation. That step is where the regression test proves it
+None beyond steps 2 and 3 of the implementation. Those steps are where the regression test proves it
 catches the bug, by failing before the fix and passing after it.
