@@ -7,8 +7,9 @@
 In a bar chart with `selectionMode: 'single'`, a click only selects a bar when it lands inside
 the bar's drawn rectangle. With `scale_mode: 'max'` and a long-tailed distribution, most bars are
 a few pixels tall, so they are hard to hit, and a near miss just above a short bar counts as a
-click on empty space and clears the selection. This change hit-tests bars on the X axis only:
-a click anywhere in a bar's column selects that bar (`hitAt` already guarantees the click is inside the plot).
+click on empty space and clears the selection. This change adds an X-only fallback to the bar hit test:
+a click inside a drawn bar still selects that bar, and a click anywhere else in a bar's column
+selects that bar (`hitAt` already guarantees the click is inside the plot).
 
 ## Current State
 
@@ -17,7 +18,11 @@ a click anywhere in a bar's column selects that bar (`hitAt` already guarantees 
 - `analytics-web-app/src/components/XYChart.tsx:434-460` — `makeBarPaths` collects one `BarRect`
   per drawn bar from uPlot's `bars({ each })` callback (canvas pixels). uPlot 1.6.32 calls `each`
   for every non-null value, including zero-height bars (`uPlot.esm.js:2631`). Each series gets
-  slot width `0.8 / seriesCount` and its own `align` offset, so grouped series sit side by side.
+  bar width `0.8 / seriesCount` of the category, but multi-series charts pass `align: i`
+  (`XYChart.tsx:1002-1008`), and uPlot only distinguishes `0`, `1`, and anything else
+  (`uPlot.esm.js:2567`): series 0 is centered on the category x, series 1 spans `[x, x + bw]`, and
+  every series ≥ 2 spans about `[x - bw, x]`. Grouped bars therefore overlap rather than sit side
+  by side; with 3+ series, series 0 is horizontally covered by series 1 and 2.
 - `XYChart.tsx:463-475` — `hitAt` in `createSelectionPlugin` rejects cursors outside the plot
   (`left/top < 0`), filters rects of hidden series, converts the cursor to canvas px, and calls
   `hitTestBars`. The same `hitAt` drives both the click (`mouseup`) and the pointer cursor
@@ -31,21 +36,27 @@ a click anywhere in a bar's column selects that bar (`hitAt` already guarantees 
 
 ## Design
 
-Change `hitTestBars` to test only the horizontal extent of each rect against the cursor X:
+Change `hitTestBars` to a two-tier rule, keeping its signature:
 
 ```ts
-/** Topmost bar whose horizontal extent contains x, in canvas pixels. */
-export function hitTestBars(rects: BarRect[], x: number): BarRect | null
+/**
+ * Topmost bar containing (x, y); failing that, topmost bar whose horizontal extent contains x.
+ * Canvas pixels.
+ */
+export function hitTestBars(rects: BarRect[], x: number, y: number): BarRect | null
 ```
 
-- A hit requires `r.left <= x <= r.left + r.width`. The rect's own `top`/`height` are no longer consulted, so a zero-height bar is selectable by
-  its column, and so is a bar drawn below the baseline (negative value).
-- Iteration order stays reverse (last pushed wins), so shared edges between adjacent grouped
-  bars resolve the same way as today.
-- Per-series slots are unchanged: each rect keeps its own `left`/`width` from uPlot, so in a
-  grouped chart each series' bar keeps its own column, and the gaps between slots and between
-  categories still clear the selection on click.
-- `hitAt` (`XYChart.tsx:471`) drops the Y argument and passes only the converted X. Because
+- Tier 1 is today's check (`left <= x <= left + width` and `top <= y <= top + height`). Because
+  grouped bars overlap (see Current State), keeping it first means a click on a bar's visible
+  drawn area still selects that bar, exactly as today.
+- Tier 2 only runs when tier 1 misses: it requires `r.left <= x <= r.left + r.width`, ignoring
+  `top`/`height`, so a click above a short bar, on a zero-height bar's column, or on a bar drawn
+  below the baseline (negative value) selects it.
+- Both tiers iterate in reverse (last pushed wins), matching the drawing order, so where columns
+  overlap the bar drawn on top wins.
+- The grouped layout (`align: i`) is not changed. Each rect keeps its own `left`/`width` from
+  uPlot, and the gaps between categories still clear the selection on click.
+- `hitAt` (`XYChart.tsx:471`) is unchanged: it already passes both converted coordinates. Because
   `hitAt` drives `setCursor` too, the pointer cursor follows the new column hit area with no
   extra change.
 
@@ -54,22 +65,20 @@ Clearing keeps working through: clicking a gap between columns, clicking outside
 
 ## Implementation Steps
 
-1. `xychart-selection.ts`: update `hitTestBars` signature, check, and doc comment as above.
-2. `XYChart.tsx`: in `hitAt`'s bar branch, drop the Y argument and pass only the converted X.
-3. `__tests__/xychart-selection.test.ts`: update existing calls to drop the y argument and adjust
-   the "misses outside" case, which today asserts a miss above a bar, and add:
-   - a hit depends only on x within `[left, left + width]`: rects with a small `height` and with
-     `height: 0` are both hit by any x in their column;
+1. `xychart-selection.ts`: implement the two-tier rule and update the doc comment as above.
+2. `__tests__/xychart-selection.test.ts`: adjust the "misses outside" case, which today asserts a
+   miss above a bar, and add:
+   - a click above a short bar, and any y in the column of a `height: 0` rect, hit that rect;
    - click in the gap between two columns → null;
-   - grouped series: clicks in each series' slot select that series.
-4. `mkdocs/docs/web-app/notebooks/cell-types.md:68`: say that clicking anywhere in a bar's column
+   - overlapping rects (as grouped bars are drawn): a click inside the earlier rect's drawn area,
+     outside the later one, selects the earlier rect; a click above both selects the later rect.
+3. `mkdocs/docs/web-app/notebooks/cell-types.md:68`: say that clicking anywhere in a bar's column
    selects it, and that the gap between columns counts as empty space.
-5. `yarn lint`, `yarn type-check`, `yarn test` in `analytics-web-app/`.
+4. `yarn lint`, `yarn type-check`, `yarn test` in `analytics-web-app/`.
 
 ## Files to Modify
 
 - `analytics-web-app/src/components/xychart-selection.ts`
-- `analytics-web-app/src/components/XYChart.tsx`
 - `analytics-web-app/src/components/__tests__/xychart-selection.test.ts`
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 
@@ -81,11 +90,18 @@ Clearing keeps working through: clicking a gap between columns, clicking outside
   clicking outside the plot. Keeping the drawn slot (80% of the category width split across
   series) gives a large target while keeping in-plot clearing. Widening can be added later if
   very narrow bars prove a problem.
+- **Two-tier hit test vs. fixing the grouped layout.** Grouped bars overlap because `align: i` is
+  not a real per-series offset. Computing non-overlapping per-series offsets would give each
+  series a distinct column, but it changes how every grouped bar chart is drawn. The two-tier
+  rule meets the issue's goal (short bars easy to click) without any visual change: visible bars
+  stay selectable as today, and clicks above them pick the topmost column. A series fully hidden
+  by its neighbors stays unselectable, as it is today.
 
 ## Decisions
 
 - Line/point selection (`findNearestPoint`, `POINT_HIT_RADIUS`) is out of scope, per the issue.
 - A tooltip limited to the hit column is out of scope.
+- AFK: Grouped bars overlap (`align: i` is not a per-series offset), so use a two-tier hit test (topmost rect containing (x, y), else topmost rect whose X extent contains x) and leave the grouped bar layout unchanged.
 
 ## Documentation
 
@@ -95,7 +111,7 @@ Clearing keeps working through: clicking a gap between columns, clicking outside
 
 The hit-test rule is a pure function and is covered by the `hitTestBars` unit tests listed in
 step 3, including the issue's cases (a click above a short bar, a click on a zero-height bar), which are
-covered by the x-only test, and a click in the gap.
+covered by the X-only fallback, a click in the gap, and overlapping rects as grouped bars draw them.
 
 ## Manual Verification
 
@@ -108,5 +124,5 @@ canvas that jsdom cannot drive. Breakage would be obvious on first use:
    the others dim.
 3. Click the gap between two columns: the selection clears. Click a column, then click the same
    column again: the selection clears.
-4. With two queries (grouped bars), click above each series' bar in one category: each click
-   selects that series' bar.
+4. With two queries (grouped bars), click on each series' visible bar area in one category: each
+   click selects that series' bar. Click above both bars: the bar drawn on top (series 1) is selected.
