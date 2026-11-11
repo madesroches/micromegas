@@ -34,9 +34,6 @@ No database can be at v12 today. The v0 → v11 steps each commit, then the asse
 v12 runs, so every affected database is stuck at exactly v11. No data repair is needed, and the
 fixed binary upgrades those databases normally on its next start.
 
-Existing coverage: `rust/analytics/tests/query_deny_list_db_test.rs` calls `migrate_lakehouse`,
-but it is `#[ignore]`d, runs against the shared dev schema, and was not run for #1780.
-
 ## Design
 
 ### Fix
@@ -44,8 +41,7 @@ but it is `#[ignore]`d, runs against the shared dev schema, and was not run for 
 Move the `if 11 == current_version { … }` block from `migrate_lakehouse` to
 `execute_lakehouse_migration`, after the `10 == current_version` step and before the final
 assert. `migrate_lakehouse` then goes back to its pre-#1780 shape, the same as `migrate_db`.
-As a result, the v12 step also runs under advisory lock `1` like every other step. Today it runs
-after the lock transaction has been dropped, so two services starting at once could race on it.
+As a result, the v12 step also runs under advisory lock `1` like every other step.
 
 No change to `upgrade_v11_to_v12`, the version constant, or any SQL surface.
 
@@ -71,21 +67,15 @@ No change to `upgrade_v11_to_v12`, the version constant, or any SQL surface.
 
 - No `CHANGELOG.md` entry: #1780 is unreleased, and the existing Unreleased line already
   describes the v12 behavior as it will ship.
-- No repair path for v12 databases: none can exist, since the step was unreachable.
 - No live-DB regression test: the bug was caught on a dev deployment, not in the wild; the fix is
   verified manually on the local stack.
-
-## Testing Strategy
-
-- The existing `cargo test -p micromegas-analytics` suite as a no-regression check.
-- Manual check on the local stack (below). Only a real Postgres runs the DDL chain and the
-  version reads that the panic depends on.
 
 ## Manual Verification
 
 `migrate_lakehouse` runs when a lakehouse context is built: in `flight-sql-srv` (log
-`/tmp/analytics.log`), in the maintenance daemon (`/tmp/daemon.log`), and in the monolith
-(`/tmp/monolith.log`).
+`/tmp/analytics.log`) and in the maintenance daemon (`/tmp/daemon.log`). The version is read from
+Postgres with `(cd local_test_env/db && python3 connect.py)` (a `psql` session), running
+`SELECT version FROM lakehouse_migration;`.
 
 1. Upgrade from v11: bring up a local PostgreSQL whose lakehouse is at v11 by starting the
    services from `main` (before the fix) with `python3 local_test_env/ai_scripts/start_services.py`.
@@ -93,8 +83,10 @@ No change to `upgrade_v11_to_v12`, the version constant, or any SQL surface.
    database already at v11). Stop them with `python3 local_test_env/ai_scripts/stop_services.py`
    without wiping the database.
 2. On the fix branch, run `start_services.py` again. Confirm there is no panic in
-   `/tmp/analytics.log` / `/tmp/daemon.log` and that `SELECT version FROM lakehouse_migration`
-   returns 12.
+   `/tmp/analytics.log` / `/tmp/daemon.log` and that the
+   `lakehouse_migration` query returns 12.
 3. Restart the services and confirm the migration is a no-op: no panic, version still 12.
-4. Fresh database: start the services on an empty database and confirm it reaches version 12
-   without a panic.
+4. Fresh database: run `stop_services.py`, then `docker stop teledb`, then
+   `(cd local_test_env/db && python3 delete.py)`, then `start_services.py`, which creates a new empty
+   `teledb`. Confirm it reaches version 12 without a panic. This destroys the local database;
+   `local_test_env/db/dump.py <file>` can back it up first.
