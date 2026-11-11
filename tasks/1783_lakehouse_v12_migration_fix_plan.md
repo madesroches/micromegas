@@ -82,11 +82,14 @@ Postgres with `(cd local_test_env/db && python3 connect.py)` (a `psql` session),
    They panic at the assert, which leaves the database at v11 (or reuse an existing local
    database already at v11). Stop them with `python3 local_test_env/ai_scripts/stop_services.py`
    without wiping the database.
-2. On the fix branch, run `start_services.py` again. Confirm there is no panic in
-   `/tmp/analytics.log` / `/tmp/daemon.log` and that the
-   `lakehouse_migration` query returns 12.
-3. Restart the services and confirm the migration is a no-op: no panic, version still 12.
+2. On the fix branch, run `start_services.py` again. This runs the v11 → v12 step. Confirm there
+   is no panic in `/tmp/analytics.log` / `/tmp/daemon.log`, that the `lakehouse_migration` query
+   returns 12, and that the constraint is gone:
+   `SELECT is_nullable FROM information_schema.columns WHERE table_name = 'lakehouse_view_set_definitions' AND column_name = 'update_group';`
+   returns `YES` (it was `NO` at v11).
+3. Restart the services again. The database is already at v12, so no step should run: no panic,
+   version still 12.
 4. Fresh database: run `stop_services.py`, then `docker stop teledb`, then
    `(cd local_test_env/db && python3 delete.py)`, then `start_services.py`, which creates a new empty
-   `teledb`. Confirm it reaches version 12 without a panic. This destroys the local database;
+   `teledb`. Confirm it reaches version 12 without a panic and `update_group` is nullable. This destroys the local database;
    `local_test_env/db/dump.py <file>` can back it up first.
