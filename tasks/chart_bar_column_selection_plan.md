@@ -8,13 +8,13 @@ In a bar chart with `selectionMode: 'single'`, a click only selects a bar when i
 the bar's drawn rectangle. With `scale_mode: 'max'` and a long-tailed distribution, most bars are
 a few pixels tall, so they are hard to hit, and a near miss just above a short bar counts as a
 click on empty space and clears the selection. This change hit-tests bars on the X axis only:
-a click anywhere in a bar's column, from the top of the plot area down to its bottom, selects that bar.
+a click anywhere in a bar's column selects that bar (`hitAt` already guarantees the click is inside the plot).
 
 ## Current State
 
 - `analytics-web-app/src/components/xychart-selection.ts:22` — `hitTestBars(rects, x, y)` returns
   the last (topmost) rect with `left <= x <= left + width` **and** `top <= y <= top + height`.
-- `analytics-web-app/src/components/XYChart.tsx:434-458` — `makeBarPaths` collects one `BarRect`
+- `analytics-web-app/src/components/XYChart.tsx:434-460` — `makeBarPaths` collects one `BarRect`
   per drawn bar from uPlot's `bars({ each })` callback (canvas pixels). uPlot 1.6.32 calls `each`
   for every non-null value, including zero-height bars (`uPlot.esm.js:2617`). Each series gets
   slot width `0.8 / seriesCount` and its own `align` offset, so grouped series sit side by side.
@@ -31,32 +31,23 @@ a click anywhere in a bar's column, from the top of the plot area down to its bo
 
 ## Design
 
-Change `hitTestBars` to test the horizontal extent of each rect against the cursor X, and to
-test the cursor Y against the plot area's vertical bounds instead of the rect's:
+Change `hitTestBars` to test only the horizontal extent of each rect against the cursor X:
 
 ```ts
-/** Topmost bar whose column (its horizontal extent, across the full plot height) contains (x, y), in canvas pixels. */
-export function hitTestBars(
-  rects: BarRect[],
-  x: number,
-  y: number,
-  plot: { top: number; height: number },
-): BarRect | null
+/** Topmost bar whose horizontal extent contains x, in canvas pixels. */
+export function hitTestBars(rects: BarRect[], x: number): BarRect | null
 ```
 
-- A hit requires `r.left <= x <= r.left + r.width` and `plot.top <= y <= plot.top + plot.height`.
-  The rect's own `top`/`height` are no longer consulted, so a zero-height bar is selectable by
+- A hit requires `r.left <= x <= r.left + r.width`. The rect's own `top`/`height` are no longer consulted, so a zero-height bar is selectable by
   its column, and so is a bar drawn below the baseline (negative value).
 - Iteration order stays reverse (last pushed wins), so shared edges between adjacent grouped
   bars resolve the same way as today.
 - Per-series slots are unchanged: each rect keeps its own `left`/`width` from uPlot, so in a
   grouped chart each series' bar keeps its own column, and the gaps between slots and between
   categories still clear the selection on click.
-- `hitAt` (`XYChart.tsx:471`) passes `{ top: u.bbox.top, height: u.bbox.height }`. Because
+- `hitAt` (`XYChart.tsx:471`) drops the Y argument and passes only the converted X. Because
   `hitAt` drives `setCursor` too, the pointer cursor follows the new column hit area with no
   extra change.
-- `BarRect` keeps `top`/`height`. Nothing else reads them, but they are what uPlot reports and
-  dropping them would buy nothing.
 
 Clearing keeps working through: clicking a gap between columns, clicking outside the plot area
 (rejected earlier by `hitAt`), or clicking the selected column again (`nextSelection`).
@@ -64,14 +55,13 @@ Clearing keeps working through: clicking a gap between columns, clicking outside
 ## Implementation Steps
 
 1. `xychart-selection.ts`: update `hitTestBars` signature, check, and doc comment as above.
-2. `XYChart.tsx`: pass the plot bounds from `u.bbox` in `hitAt`'s bar branch.
-3. `__tests__/xychart-selection.test.ts`: update existing calls to pass a plot box and adjust
+2. `XYChart.tsx`: in `hitAt`'s bar branch, drop the Y argument and pass only the converted X.
+3. `__tests__/xychart-selection.test.ts`: update existing calls to drop the y argument and adjust
    the "misses outside" case, which today asserts a miss above a bar, and add:
    - click above a short bar (inside its column, well above `top`) → hits that bar;
    - click below a bar's rect but inside the plot → hits;
    - click in the gap between two columns → null;
    - zero-height bar (`height: 0`), click anywhere in its column → hits;
-   - click in the column but above `plot.top` or below `plot.top + plot.height` → null;
    - grouped series: clicks in each series' slot select that series.
 4. `mkdocs/docs/web-app/notebooks/cell-types.md:68`: say that clicking anywhere in a bar's column
    selects it, and that the gap between columns counts as empty space.
@@ -92,16 +82,11 @@ Clearing keeps working through: clicking a gap between columns, clicking outside
   clicking outside the plot. Keeping the drawn slot (80% of the category width split across
   series) gives a large target while keeping in-plot clearing. Widening can be added later if
   very narrow bars prove a problem.
-- **Plot bounds as a parameter vs. dropping the vertical check.** `hitAt` already rejects cursors
-  outside `u.over`, so the Y check is redundant in practice. Passing the plot box keeps
-  `hitTestBars` self-contained and testable on the "stay inside the plot" rule the issue asks
-  for, at the cost of one extra argument.
-- **Tooltip.** Already tied to the nearest X index, so it already shows on column hover. A
-  tooltip limited to the hit column would be a separate change, out of scope.
 
 ## Decisions
 
 - Line/point selection (`findNearestPoint`, `POINT_HIT_RADIUS`) is out of scope, per the issue.
+- A tooltip limited to the hit column is out of scope.
 
 ## Documentation
 
