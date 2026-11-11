@@ -46,13 +46,6 @@ pub async fn migrate_lakehouse(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         }
         current_version = read_lakehouse_schema_version(&mut tr).await;
     }
-    if 11 == current_version {
-        info!("upgrade lakehouse schema to v12");
-        let mut tr = pool.begin().await?;
-        upgrade_v11_to_v12(&mut tr).await?;
-        current_version = read_lakehouse_schema_version(&mut tr).await;
-        tr.commit().await?;
-    }
     assert_eq!(current_version, LATEST_LAKEHOUSE_SCHEMA_VERSION);
     Ok(())
 }
@@ -134,6 +127,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v11");
         let mut tr = pool.begin().await?;
         upgrade_v10_to_v11(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 11 == current_version {
+        info!("upgrade lakehouse schema to v12");
+        let mut tr = pool.begin().await?;
+        upgrade_v11_to_v12(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
