@@ -56,28 +56,23 @@ No change to `upgrade_v11_to_v12`, the version constant, or any SQL surface.
 New `rust/analytics/tests/lakehouse_migration_db_test.rs`. It is `#[ignore]`d and requires
 `MICROMEGAS_SQL_CONNECTION_STRING`. It uses the throwaway, `search_path`-scoped schema pattern
 from `rust/ingestion/tests/sql_migration_test.rs`: drop and create a dedicated schema, connect a
-pool with `options([("search_path", SCHEMA)])`, run the body, then drop the schema whatever the
-outcome.
+pool with `.max_connections(2)` (`migrate_lakehouse` holds lock 1 on one transaction while it
+calls `pool.begin()` again) and `options([("search_path", SCHEMA)])`, run the body, then drop the
+schema on Ok/Err. The schema is also dropped before it is created, so a panic, which skips the
+final drop, is cleaned up by the next run.
 
 The `search_path` must contain **only** the throwaway schema, not `public`. In the v0 case
 `read_lakehouse_schema_version` would otherwise find `public.lakehouse_migration`, read the real
 dev database's version, and the test would migrate (or skip) the wrong tables.
 
-Two tests, each with its own schema name so they can run in parallel:
+One test, **`migrates_fresh_lakehouse_to_latest`**: on an empty schema (v0), call
+`migrate_lakehouse`. Assert that it returns `Ok`, that the version equals
+`LATEST_LAKEHOUSE_SCHEMA_VERSION`, and that `lakehouse_view_set_definitions.update_group` is
+nullable (`information_schema.columns.is_nullable = 'YES'`). Then call `migrate_lakehouse` again
+and assert it is still `Ok` (the idempotent restart path).
 
-1. **`migrates_fresh_lakehouse_to_latest`**: on an empty schema (v0), call `migrate_lakehouse`.
-   Assert that it returns `Ok`, that the version equals `LATEST_LAKEHOUSE_SCHEMA_VERSION`, and
-   that `lakehouse_view_set_definitions.update_group` is nullable (`information_schema.columns
-   .is_nullable = 'YES'`). Then call `migrate_lakehouse` again and assert it is still `Ok` (the
-   idempotent restart path).
-2. **`migrates_v11_lakehouse_to_latest`**: this is the state every affected deployment is stuck
-   in. Build it by migrating a fresh schema to latest and then reverting the single v12 statement
-   (`ALTER COLUMN update_group SET NOT NULL; UPDATE lakehouse_migration SET version = 11;`).
-   Assert that the version is 11, then call `migrate_lakehouse` and make the same assertions as
-   test 1.
-
-The doc comment names the bug the tests pin: a step left outside `execute_lakehouse_migration`
-panics at startup. It also says how to run them.
+The doc comment names the bug the test pins: a step left outside `execute_lakehouse_migration`
+panics at startup. It also says how to run it.
 
 ## Implementation Steps
 
@@ -88,8 +83,8 @@ panics at startup. It also says how to run them.
 3. `cargo fmt`, then `cargo clippy --workspace --all-targets -- -D warnings`, then
    `cargo test -p micromegas-analytics`.
 4. With local services' Postgres up, run `cargo test -p micromegas-analytics --test
-   lakehouse_migration_db_test -- --ignored`, both before the step-1 change (the tests must fail
-   with the line-140 panic) and after it (they must pass).
+   lakehouse_migration_db_test -- --ignored`, both before the step-1 change (the test must fail
+   with the line-140 panic) and after it (it must pass).
 
 ## Files to Modify
 
@@ -98,15 +93,9 @@ panics at startup. It also says how to run them.
 
 ## Trade-offs
 
-- **Revert-the-v12-statement vs. chaining private `upgrade_vN` calls to build v11.** The
-  ingestion test chains `pub` per-step functions. Here that would mean making eleven private
-  functions `pub` only for a test. v12 is a single reversible DDL statement, so migrating to
-  latest and undoing it gives the exact v11 schema with no API change.
 - **Table-driven step list with a no-DB unit test that it covers `0..LATEST`.** Rejected. It
   would make this class of bug unrepresentable, but it is a rewrite of a pattern shared with the
   ingestion migration, for a mistake the regression test already catches.
-- **Removing the assert from `execute_lakehouse_migration`.** Rejected. The assert is what turns
-  a forgotten step into a loud failure, and it was right here. The step was in the wrong place.
 
 ## Decisions
 
@@ -116,7 +105,7 @@ panics at startup. It also says how to run them.
 
 ## Testing Strategy
 
-- The two `#[ignore]`d live-DB tests above. The bug was seen in the wild (daemon crash at boot),
+- The `#[ignore]`d live-DB test above. The bug was seen in the wild (daemon crash at boot),
   and migrations are a silent-failure class the tier rule sends to automated coverage. Only a
   real Postgres runs the DDL chain and the version reads that the panic depends on. There is no
   Rust-side seam that reproduces it without a database.
@@ -124,5 +113,5 @@ panics at startup. It also says how to run them.
 
 ## Manual Verification
 
-None beyond step 4 of the implementation. That step is where the regression tests prove they
-catch the bug, by failing before the fix and passing after it.
+None beyond step 4 of the implementation. That step is where the regression test proves it
+catches the bug, by failing before the fix and passing after it.
