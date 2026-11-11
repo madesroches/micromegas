@@ -58,8 +58,8 @@ describe('hitTestBars', () => {
   })
 
   it('prefers the rect actually drawn under the click over a later overlapping one', () => {
-    // x=12 is only in the earlier rect; y=25 is outside the later one
-    expect(hitTestBars(rects, 12, 25)?.seriesIndex).toBe(0)
+    // x=17 is in both columns; y=25 is inside the earlier rect but above the later one
+    expect(hitTestBars(rects, 17, 25)?.seriesIndex).toBe(0)
     // above both: the later rect wins
     expect(hitTestBars(rects, 17, 5)?.seriesIndex).toBe(1)
   })

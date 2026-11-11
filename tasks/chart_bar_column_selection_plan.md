@@ -110,7 +110,7 @@ Clearing keeps working through: clicking a gap between columns, clicking outside
 ## Testing Strategy
 
 The hit-test rule is a pure function and is covered by the `hitTestBars` unit tests listed in
-step 3, including the issue's cases (a click above a short bar, a click on a zero-height bar), which are
+step 2, including the issue's cases (a click above a short bar, a click on a zero-height bar), which are
 covered by the X-only fallback, a click in the gap, and overlapping rects as grouped bars draw them.
 
 ## Manual Verification
