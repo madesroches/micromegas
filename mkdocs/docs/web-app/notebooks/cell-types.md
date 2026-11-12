@@ -65,7 +65,7 @@ The `color` column is identified by name (case-insensitive) and may appear in an
 - SQL-driven per-row mark colors via `color` column (`rgba()`, `lerp_color()`, `color_scale()`)
 - Horizontal reference lines at configurable thresholds
 - Drag-to-zoom: drag horizontally on the chart to select a time range and zoom in
-- Click selection: with `selectionMode: 'single'`, clicking a bar or point publishes its source row (`{x_col, y_col, color?}`) as `$cellName.selected.*`. Click the selected mark again, or click empty space, to clear it. The other marks fade while a selection exists, and drag-to-zoom is unaffected. With several queries, the published row comes from the query that owns the clicked mark; alias the X columns identically across queries, because the type of each `selected` column is resolved from the first query's result
+- Click selection: with `selectionMode: 'single'`, clicking a bar or point publishes its source row (`{x_col, y_col, color?}`) as `$cellName.selected.*`. Clicking anywhere in a bar's column (above or below the bar included) selects that bar; the gap between columns counts as empty space. Click the selected mark again, or click empty space, to clear it. The other marks fade while a selection exists, and drag-to-zoom is unaffected. With several queries, the published row comes from the query that owns the clicked mark; alias the X columns identically across queries, because the type of each `selected` column is resolved from the first query's result
 - Chart type and scale mode toggleable via controls
 - Each query's results are registered in the WASM engine as `cellName.queryName` — or just `cellName` if the query has no `name`
 

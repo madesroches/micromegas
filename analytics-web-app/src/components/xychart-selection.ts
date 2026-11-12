@@ -19,11 +19,21 @@ export const DIM_STROKE = 0.5
 export const DIM_LINE = 0.3
 export const DIM_POINT = 0.3
 
-/** Topmost rect containing (x, y), in canvas pixels. */
+/**
+ * Topmost bar containing (x, y); failing that, topmost bar whose horizontal extent contains x.
+ * Canvas pixels.
+ */
 export function hitTestBars(rects: BarRect[], x: number, y: number): BarRect | null {
   for (let i = rects.length - 1; i >= 0; i--) {
     const r = rects[i]
     if (x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height) {
+      return r
+    }
+  }
+  // Grouped bars overlap, so the exact-hit tier must run first to keep every visible bar selectable.
+  for (let i = rects.length - 1; i >= 0; i--) {
+    const r = rects[i]
+    if (x >= r.left && x <= r.left + r.width) {
       return r
     }
   }

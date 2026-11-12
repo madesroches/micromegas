@@ -27,14 +27,41 @@ describe('hitTestBars', () => {
     expect(hitTestBars(rects, 14, 50)?.seriesIndex).toBe(0)
   })
 
-  it('misses outside', () => {
+  it('misses outside the columns', () => {
     expect(hitTestBars(rects, 5, 25)).toBeNull()
-    expect(hitTestBars(rects, 12, 10)).toBeNull()
+    expect(hitTestBars(rects, 30, 25)).toBeNull()
     expect(hitTestBars([], 1, 1)).toBeNull()
+  })
+
+  it('hits the column above or below a bar', () => {
+    expect(hitTestBars(rects, 12, 10)?.seriesIndex).toBe(0)
+    expect(hitTestBars(rects, 12, 500)?.seriesIndex).toBe(0)
+  })
+
+  it('hits any y in the column of a zero-height rect', () => {
+    const flat: BarRect[] = [{ seriesIndex: 0, dataIdx: 0, left: 10, top: 50, width: 10, height: 0 }]
+    expect(hitTestBars(flat, 15, 50)?.seriesIndex).toBe(0)
+    expect(hitTestBars(flat, 15, 5)?.seriesIndex).toBe(0)
+  })
+
+  it('misses in the gap between columns', () => {
+    const cols: BarRect[] = [
+      { seriesIndex: 0, dataIdx: 0, left: 10, top: 40, width: 10, height: 10 },
+      { seriesIndex: 0, dataIdx: 1, left: 40, top: 45, width: 10, height: 5 },
+    ]
+    expect(hitTestBars(cols, 30, 48)).toBeNull()
+    expect(hitTestBars(cols, 30, 10)).toBeNull()
   })
 
   it('returns the topmost of overlapping rects', () => {
     expect(hitTestBars(rects, 17, 40)?.seriesIndex).toBe(1)
+  })
+
+  it('prefers the rect actually drawn under the click over a later overlapping one', () => {
+    // x=17 is in both columns; y=25 is inside the earlier rect but above the later one
+    expect(hitTestBars(rects, 17, 25)?.seriesIndex).toBe(0)
+    // above both: the later rect wins
+    expect(hitTestBars(rects, 17, 5)?.seriesIndex).toBe(1)
   })
 })
 
