@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LADDER","TARGET_BUCKETS_PER_QUERY"],"fn":["align_outward","finer_rung","plan_buckets","plan_dense_buckets","select_rung"],"struct":["PlannedBucket"],"type":["BucketCount"]};

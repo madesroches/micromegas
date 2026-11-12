@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_export_logs_request","decode_cloudwatch_logs_record","ingest_cloudwatch_logs_firehose"],"struct":["CloudWatchLogEventJson","CloudWatchLogsMessageJson"]};

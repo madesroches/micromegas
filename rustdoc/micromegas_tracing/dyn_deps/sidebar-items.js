@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DYN_ID_TAG"],"fn":["merge_properties"],"struct":["DynDeps","MergedProperties"]};

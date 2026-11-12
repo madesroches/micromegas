@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_sql_batch_view","check_view_set_name_charset","parse_time_delta","validate_view_definition"],"struct":["ViewDefinition","ViewOptions"]};

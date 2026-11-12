@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["UnitVerdict"],"fn":["judge_unit","plan_units","promotion_targets","update_on_demand_view"],"struct":["Unit"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_AUDIENCE_CACHE_ENTRIES","DEFAULT_AUDIENCE_CACHE_TTL"],"enum":["IdKind","OwnerAudience"],"fn":["is_readable"],"struct":["AudienceGuard","AudienceIndex","Authorized"]};

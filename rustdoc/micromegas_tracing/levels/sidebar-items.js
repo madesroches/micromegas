@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["STATIC_MAX_LEVEL","STATIC_MAX_LOD"],"enum":["Level","LevelFilter","LodFilter","Verbosity"],"fn":["max_level","max_lod","set_max_level","set_max_lod"],"struct":["ParseLevelError"]};

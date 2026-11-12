@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["apply_pairs","callsite_set","dyn_property_get","property_get","static_value"],"struct":["DynProperty","PROPERTY_SET_DEP_TYPE_NAME","Property","PropertySet","PropertySetDependency","PropertySetId"],"trait":["PropertyDepsQueue","StringDepsQueue"]};

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <style>
+    .star { fill: #0a0a0f; }
+    @media (prefers-color-scheme: dark) { .star { fill: #ffffff; } }
+  </style>
+  <g transform="translate(256,256)">
+    <ellipse cx="0" cy="0" rx="180" ry="68" fill="none" stroke="#bf360c" stroke-width="22" transform="rotate(-20)"/>
+    <ellipse cx="0" cy="0" rx="142" ry="54" fill="none" stroke="#1565c0" stroke-width="22" transform="rotate(25)"/>
+    <ellipse cx="0" cy="0" rx="105" ry="40" fill="none" stroke="#ffb300" stroke-width="22" transform="rotate(-8)"/>
+    <polygon class="star" points="0,-42 8,-14 31,-14 12,4 21,31 0,14 -21,31 -12,4 -31,-14 -8,-14"/>
+  </g>
+</svg>
