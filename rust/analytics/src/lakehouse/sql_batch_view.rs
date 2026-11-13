@@ -261,66 +261,57 @@ impl View for SqlBatchView {
         self.view_instance_id.clone()
     }
 
+    #[span_fn]
     async fn make_batch_partition_spec(
         &self,
         lakehouse: Arc<LakehouseContext>,
         existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
-        let view = self.view_set_name.clone();
-        instrument_named!(
-            async {
-                let view_meta = ViewMetadata {
-                    view_set_name: self.get_view_set_name(),
-                    view_instance_id: self.get_view_instance_id(),
-                    file_schema_hash: self.get_file_schema_hash(),
-                };
-                let partitions_in_range =
-                    Arc::new(existing_partitions.filter_insert_range(insert_range));
-                let ctx = make_session_context(
-                    lakehouse,
-                    partitions_in_range.clone(),
-                    SessionRange::Snapshot,
-                    self.view_factory.clone(),
-                    self.session_configurator.clone(),
-                    CallerContext::maintenance(),
-                )
-                .await
-                .with_context(|| "make_session_context")?;
-
-                let count_src_sql = self
-                    .count_src_query
-                    .replace("{begin}", &insert_range.begin.to_rfc3339())
-                    .replace("{end}", &insert_range.end.to_rfc3339());
-
-                let extract_sql = self
-                    .extract_query
-                    .replace("{begin}", &insert_range.begin.to_rfc3339())
-                    .replace("{end}", &insert_range.end.to_rfc3339());
-
-                let spec: Arc<dyn PartitionSpec> = Arc::new(
-                    fetch_sql_partition_spec(
-                        ctx,
-                        Arc::new(TrivialRecordBatchTransformer {}),
-                        self.get_time_bounds(),
-                        self.schema.clone(),
-                        count_src_sql,
-                        extract_sql,
-                        view_meta,
-                        insert_range,
-                        self.sort_order
-                            .as_ref()
-                            .map(|columns| columns.iter().map(|c| c.to_string()).collect()),
-                    )
-                    .await
-                    .with_context(|| "fetch_sql_partition_spec")?,
-                );
-                Ok(spec)
-            },
-            "make_batch_partition_spec",
-            |_, span| span.set_property("view", &*view)
+        let view_meta = ViewMetadata {
+            view_set_name: self.get_view_set_name(),
+            view_instance_id: self.get_view_instance_id(),
+            file_schema_hash: self.get_file_schema_hash(),
+        };
+        let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
+        let ctx = make_session_context(
+            lakehouse,
+            partitions_in_range.clone(),
+            SessionRange::Snapshot,
+            self.view_factory.clone(),
+            self.session_configurator.clone(),
+            CallerContext::maintenance(),
         )
         .await
+        .with_context(|| "make_session_context")?;
+
+        let count_src_sql = self
+            .count_src_query
+            .replace("{begin}", &insert_range.begin.to_rfc3339())
+            .replace("{end}", &insert_range.end.to_rfc3339());
+
+        let extract_sql = self
+            .extract_query
+            .replace("{begin}", &insert_range.begin.to_rfc3339())
+            .replace("{end}", &insert_range.end.to_rfc3339());
+
+        Ok(Arc::new(
+            fetch_sql_partition_spec(
+                ctx,
+                Arc::new(TrivialRecordBatchTransformer {}),
+                self.get_time_bounds(),
+                self.schema.clone(),
+                count_src_sql,
+                extract_sql,
+                view_meta,
+                insert_range,
+                self.sort_order
+                    .as_ref()
+                    .map(|columns| columns.iter().map(|c| c.to_string()).collect()),
+            )
+            .await
+            .with_context(|| "fetch_sql_partition_spec")?,
+        ))
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
