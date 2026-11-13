@@ -20,7 +20,6 @@ pub enum PartitionCreationStrategy {
 
 // verify_overlapping_partitions returns true to continue and make a new partition,
 // returns false to abort (existing partition is up to date or there is a problem)
-#[span_fn]
 async fn verify_overlapping_partitions(
     existing_partitions_all_views: &PartitionCache,
     insert_range: TimeRange,
@@ -30,74 +29,82 @@ async fn verify_overlapping_partitions(
     source_data_hash: &[u8],
     logger: Arc<dyn Logger>,
 ) -> Result<PartitionCreationStrategy> {
-    let desc = format!(
-        "[{}, {}] {view_set_name} {view_instance_id}",
-        insert_range.begin.to_rfc3339(),
-        insert_range.end.to_rfc3339()
-    );
-    if source_data_hash.len() != std::mem::size_of::<i64>() {
-        anyhow::bail!("Source data hash should be a i64");
-    }
-    let nb_source_events = hash_to_object_count(source_data_hash)?;
-    let filtered = existing_partitions_all_views.filter(
-        view_set_name,
-        view_instance_id,
-        file_schema_hash,
-        insert_range,
-    );
-    if filtered.partitions.is_empty() {
-        logger
-            .write_log_entry(format!("{desc}: matching partitions not found"))
-            .await?;
-        return Ok(PartitionCreationStrategy::CreateFromSource);
-    }
-    let mut existing_source_hash: i64 = 0;
-    let nb_existing_partitions = filtered.partitions.len();
-    for part in &filtered.partitions {
-        let begin = part.begin_insert_time();
-        let end = part.end_insert_time();
-        if begin < insert_range.begin || end > insert_range.end {
+    let view_name = view_set_name;
+    instrument_named!(
+        async {
+            let desc = format!(
+                "[{}, {}] {view_set_name} {view_instance_id}",
+                insert_range.begin.to_rfc3339(),
+                insert_range.end.to_rfc3339()
+            );
+            if source_data_hash.len() != std::mem::size_of::<i64>() {
+                anyhow::bail!("Source data hash should be a i64");
+            }
+            let nb_source_events = hash_to_object_count(source_data_hash)?;
+            let filtered = existing_partitions_all_views.filter(
+                view_set_name,
+                view_instance_id,
+                file_schema_hash,
+                insert_range,
+            );
+            if filtered.partitions.is_empty() {
+                logger
+                    .write_log_entry(format!("{desc}: matching partitions not found"))
+                    .await?;
+                return Ok(PartitionCreationStrategy::CreateFromSource);
+            }
+            let mut existing_source_hash: i64 = 0;
+            let nb_existing_partitions = filtered.partitions.len();
+            for part in &filtered.partitions {
+                let begin = part.begin_insert_time();
+                let end = part.end_insert_time();
+                if begin < insert_range.begin || end > insert_range.end {
+                    logger
+                        .write_log_entry(format!(
+                            "{desc}: found overlapping partition [{}, {}], aborting the update",
+                            begin.to_rfc3339(),
+                            end.to_rfc3339()
+                        ))
+                        .await?;
+                    return Ok(PartitionCreationStrategy::Abort);
+                }
+                if part.source_data_hash.len() == std::mem::size_of::<i64>() {
+                    existing_source_hash += hash_to_object_count(&part.source_data_hash)?
+                } else {
+                    // old hash that does not represent the number of events
+                    logger
+                        .write_log_entry(format!(
+                            "{desc}: found partition with incompatible source hash: recreate"
+                        ))
+                        .await?;
+                    return Ok(PartitionCreationStrategy::CreateFromSource);
+                }
+            }
+
+            if nb_source_events != existing_source_hash {
+                logger
+                    .write_log_entry(format!(
+                        "{desc}: existing partitions do not match source data ({nb_source_events} vs {existing_source_hash}) : creating a new partition"
+                    ))
+                    .await?;
+                return Ok(PartitionCreationStrategy::CreateFromSource);
+            }
+
+            if nb_existing_partitions > 1 {
+                return Ok(PartitionCreationStrategy::MergeExisting(Arc::new(filtered)));
+            }
+
             logger
                 .write_log_entry(format!(
-                    "{desc}: found overlapping partition [{}, {}], aborting the update",
-                    begin.to_rfc3339(),
-                    end.to_rfc3339()
+                    "{desc}: already up to date, nb_source_events={nb_source_events}"
                 ))
                 .await?;
-            return Ok(PartitionCreationStrategy::Abort);
-        }
-        if part.source_data_hash.len() == std::mem::size_of::<i64>() {
-            existing_source_hash += hash_to_object_count(&part.source_data_hash)?
-        } else {
-            // old hash that does not represent the number of events
-            logger
-                .write_log_entry(format!(
-                    "{desc}: found partition with incompatible source hash: recreate"
-                ))
-                .await?;
-            return Ok(PartitionCreationStrategy::CreateFromSource);
-        }
-    }
-
-    if nb_source_events != existing_source_hash {
-        logger
-            .write_log_entry(format!(
-                "{desc}: existing partitions do not match source data ({nb_source_events} vs {existing_source_hash}) : creating a new partition"
-            ))
-            .await?;
-        return Ok(PartitionCreationStrategy::CreateFromSource);
-    }
-
-    if nb_existing_partitions > 1 {
-        return Ok(PartitionCreationStrategy::MergeExisting(Arc::new(filtered)));
-    }
-
-    logger
-        .write_log_entry(format!(
-            "{desc}: already up to date, nb_source_events={nb_source_events}"
-        ))
-        .await?;
-    Ok(PartitionCreationStrategy::Abort)
+            Ok(PartitionCreationStrategy::Abort)
+        },
+        "verify_overlapping_partitions",
+        |_, span| span.set_property("view", view_name)
+    )
+    .await
 }
 
 /// Re-checks the same partial-overlap condition `verify_overlapping_partitions` guards, without
