@@ -142,13 +142,22 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
 3. `rust/tracing/proc-macros/src/lib.rs`:
    - Extend `TraceArgs` with `properties: Vec<(PropKey, Expr)>` where `PropKey` is an `Ident` or
      `LitStr`; parse as described above.
+   - Parse the leading alternative name as a `syn::LitStr` and use `.value()`. Today it is a
+     `proc_macro2::Literal` whose `to_string()` keeps the quotes, so `#[span_fn("foo")]` yields the
+     span name `module::"foo"`; this also strips those stray quotes from existing
+     `#[span_fn("x")]` span names (a span rename, observable in data).
    - In each of the three cases, branch on `properties.is_empty()`: keep today's expansion when
      empty, emit the property forms otherwise.
    - Add a "Span Properties" section to the `span_fn` doc comment with an example (async and
      sync), and note values are evaluated at entry and recorded on the span's end event.
-4. `rust/analytics/src/lakehouse/batch_update.rs`: add `view = view.get_view_set_name()` to the
+4. `rust/tracing/src/lib.rs`: add a short mention of the `#[span_fn(key = expr)]` form to the
+   crate-level "# Span properties" section.
+5. `rust/tracing/Cargo.toml`: add dev-dependency `async-trait.workspace = true`; then write the
+   tests in `rust/tracing/tests/span_properties_tests.rs` (see Testing Strategy).
+6. `rust/analytics/src/lakehouse/batch_update.rs`: add `view = view.get_view_set_name()` to the
    four materialization spans.
-5. `CHANGELOG.md`: Unreleased entry under **Tracing**.
+7. `CHANGELOG.md`: Unreleased entry under **Tracing**, including that `#[span_fn("x")]` span names
+   no longer contain stray quote characters.
 
 ## Files to Modify
 
@@ -170,7 +179,7 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
   prelude or hard-coded crate paths.
 - **Always `%` (Display) vs. passing the user's value tokens through verbatim.** The issue asks for
   `impl Display` values with plain `key = expr` syntax; verbatim pass-through would make a bare
-  value require `PropertyValue` (an `Arc<String>` does not implement it) and expose `%`/`?`/`static`
+  value require `PropertyValue` (e.g. a type implementing only `Display` would be rejected) and expose `%`/`?`/`static`
   sigils. Literal values lose interning under `%`, which only matters for constant properties that
   are better put in the name.
 - **New `EntryProperties` hook vs. a closure `move |_, span| *span = props`.** A closure would work
@@ -185,9 +194,14 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
   `verify_overlapping_partitions`, `create_merged_partition`, `SqlPartitionSpec::write`) where
   the function has a view name in its arguments.
 
+- Stripping the stray quotes from `#[span_fn("x")]` span names is accepted as a rename: the
+  quotes are a bug and the only in-repo user is `rust/tracing/tests/test_macros.rs:103`.
+
 ## Documentation
 
 - `span_fn` doc comment in `rust/tracing/proc-macros/src/lib.rs` (acceptance criterion).
+- Crate-level "# Span properties" section of `rust/tracing/src/lib.rs`: mention the
+  `#[span_fn(key = expr)]` form.
 - `CHANGELOG.md` entry. No `mkdocs/` page documents `#[span_fn]`'s arguments.
 
 ## Testing Strategy
@@ -217,5 +231,5 @@ Checks the daemon wiring end to end, which unit tests cannot reach:
 
 1. `python3 local_test_env/ai_scripts/start_services.py`, let the maintenance daemon materialize
    for a few minutes.
-2. `micromegas-query "SELECT name, property_get(properties, 'view') AS view, count(*) FROM view_instance('thread_spans', '<daemon process id>') WHERE name LIKE '%materialize_partition%' GROUP BY 1, 2" --begin 1h`
+2. `micromegas-query "SELECT name, property_get(properties, 'view') AS view, count(*) FROM process_spans('<daemon process id>', 'async') WHERE name LIKE '%partition%' GROUP BY 1, 2" --begin 1h`
    → rows carry the view set names (e.g. `log_entries`, `measures`).
