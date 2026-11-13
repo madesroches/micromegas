@@ -397,6 +397,7 @@ fn partition_set_stats(
 }
 
 /// Creates a merged partition from a set of existing partitions.
+#[span_fn]
 pub async fn create_merged_partition(
     partitions_to_merge: Arc<PartitionCache>,
     partitions_all_views: Arc<PartitionCache>,
