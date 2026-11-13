@@ -157,7 +157,7 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
 6. `rust/analytics/src/lakehouse/batch_update.rs`: add `view = view.get_view_set_name()` to the
    four materialization spans.
 7. `CHANGELOG.md`: Unreleased entry under **Tracing**, including that `#[span_fn("x")]` span names
-   no longer contain stray quote characters.
+   no longer contain stray quote characters. No `mkdocs/` page documents `#[span_fn]`'s arguments.
 
 ## Files to Modify
 
@@ -183,17 +183,13 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
 - Stripping the stray quotes from `#[span_fn("x")]` span names is accepted as a rename: the
   quotes are a bug and the only in-repo user is `rust/tracing/tests/test_macros.rs:103`.
 
-## Documentation
-
-- `span_fn` doc comment in `rust/tracing/proc-macros/src/lib.rs` (acceptance criterion).
-- Crate-level "# Span properties" section of `rust/tracing/src/lib.rs`: mention the
-  `#[span_fn(key = expr)]` form.
-- `CHANGELOG.md` entry. No `mkdocs/` page documents `#[span_fn]`'s arguments.
-
 ## Testing Strategy
 
 Unit tests in `rust/tracing/tests/span_properties_tests.rs`, using `init_in_memory_tracing` and
-the existing `thread_ends`/`sorted`/`owned` helpers, `#[serial]`:
+the existing `sorted`/`owned` helpers, `#[serial]`. `thread_ends` only matches thread-span ends
+and returns no names, so the async and alt-name tests match `TaggedEndAsyncSpanEvent` /
+`EndAsyncSpanEvent` (and the thread tagged end) directly, as
+`instrument_with_emits_a_tagged_unnamed_end` does, reading the span name from the event's desc:
 
 - **sync**: `#[span_fn(id = id, kind = "x")] fn f(id: u32)` → one `TaggedEndThreadSpanEvent` with
   `[("id", "7"), ("kind", "x")]`.
@@ -205,7 +201,8 @@ the existing `thread_ends`/`sorted`/`owned` helpers, `#[serial]`:
   and carries `k`.
 - **no properties**: extend `nothing_set_emits_the_plain_end_and_old_forms_are_unchanged`
   with calls to `#[span_fn]`, `#[span_fn("alt")]` and an async `#[span_fn]`, asserting plain
-  `EndThreadSpanEvent` / `EndAsyncSpanEvent` ends.
+  `EndThreadSpanEvent` / `EndAsyncSpanEvent` ends. The async call needs a current-thread tokio
+  runtime, and the end/begin count assertions are updated for the added calls.
 - **argument not consumed**: a sync fn using a `String` argument as a property and then moving it
   in the body compiles (covered by writing the test that way).
 
