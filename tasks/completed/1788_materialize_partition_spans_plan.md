@@ -26,22 +26,19 @@ DataFusion runs its plans on other tasks, so waiting on a query shows up as a ga
 
 ## Design
 
-Use the existing macros from `micromegas_tracing::prelude::*`: `#[span_fn]` for whole functions and
-`instrument_named!(future, "name")` for awaited sections (precedent: `metadata.rs:300`).
+Use `#[span_fn]` from `micromegas_tracing::prelude::*`. Scopes inside a function become small helper
+functions carrying the attribute, so no function body is wrapped or re-indented.
 
-- `fetch_sql_partition_spec`: `#[span_fn]`, plus `instrument_named!` around the count query's
-  `ctx.sql(..)` + `df.collect()` as `count_query`.
+- `fetch_sql_partition_spec`: `#[span_fn]`, plus a `count_query` helper (`ctx.sql(..)` + `df.collect()`).
 - `SqlBatchView::make_batch_partition_spec`: `#[span_fn]`.
 - `verify_overlapping_partitions`: `#[span_fn]`.
-- `SqlPartitionSpec::write`: `#[span_fn]`, plus `instrument_named!` spans `extract_plan` (around
-  `ctx.sql` and `execute_extract_query`) and `extract_stream` (around the stream-consume loop,
-  including the final `join_handle.await`).
+- `SqlPartitionSpec::write`: `#[span_fn]`, plus `extract_plan` (`ctx.sql` and `execute_extract_query`)
+  and `extract_stream` (the stream-consume loop, including the final `join_handle.await`) helpers.
 - `create_merged_partition`: `#[span_fn]`.
 
-Every new span records the view name as a `view` span property (set through the `instrument_named!`
-end hook). `#[span_fn]` cannot carry properties, so the whole-function spans are written as
-`instrument_named!` around the function body instead of the attribute. If the new spans show that per-bucket `filter_insert_range` cloning is significant, that
-is a follow-up issue, not part of this change.
+`#[span_fn]` cannot carry properties, so the spans have no `view` property; they nest under the
+already-instrumented `materialize_partition`. If the new spans show that per-bucket `filter_insert_range`
+cloning is significant, that is a follow-up issue, not part of this change.
 
 ## Implementation Steps
 

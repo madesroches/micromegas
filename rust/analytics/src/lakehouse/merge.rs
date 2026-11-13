@@ -397,6 +397,7 @@ fn partition_set_stats(
 }
 
 /// Creates a merged partition from a set of existing partitions.
+#[span_fn]
 pub async fn create_merged_partition(
     partitions_to_merge: Arc<PartitionCache>,
     partitions_all_views: Arc<PartitionCache>,
@@ -405,122 +406,112 @@ pub async fn create_merged_partition(
     insert_range: TimeRange,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let view_name = view.get_view_set_name();
-    instrument_named!(
-        async {
-            let view_set_name = &view.get_view_set_name();
-            let view_instance_id = &view.get_view_instance_id();
-            let desc = format!(
-                "[{}, {}] {view_set_name} {view_instance_id}",
-                insert_range.begin.to_rfc3339(),
-                insert_range.end.to_rfc3339()
-            );
-            // we are not looking for intersecting partitions, but only those that fit completely in the range
-            // otherwise we'd get duplicated records
-            let mut filtered_partitions = partitions_to_merge
-                .filter_inside_range(view_set_name, view_instance_id, insert_range)
-                .partitions;
-            if filtered_partitions.len() != partitions_to_merge.len() {
-                warn!("partitions_to_merge was not filtered properly");
-            }
-            if filtered_partitions.len() < 2 {
-                logger
-                    .write_log_entry(format!("{desc}: not enough partitions to merge"))
-                    .await
-                    .with_context(|| "writing log")?;
-                return Ok(());
-            }
-            let (sum_size, source_hash) = partition_set_stats(view.clone(), &filtered_partitions)
-                .with_context(|| "partition_set_stats")?;
+    let view_set_name = &view.get_view_set_name();
+    let view_instance_id = &view.get_view_instance_id();
+    let desc = format!(
+        "[{}, {}] {view_set_name} {view_instance_id}",
+        insert_range.begin.to_rfc3339(),
+        insert_range.end.to_rfc3339()
+    );
+    // we are not looking for intersecting partitions, but only those that fit completely in the range
+    // otherwise we'd get duplicated records
+    let mut filtered_partitions = partitions_to_merge
+        .filter_inside_range(view_set_name, view_instance_id, insert_range)
+        .partitions;
+    if filtered_partitions.len() != partitions_to_merge.len() {
+        warn!("partitions_to_merge was not filtered properly");
+    }
+    if filtered_partitions.len() < 2 {
+        logger
+            .write_log_entry(format!("{desc}: not enough partitions to merge"))
+            .await
+            .with_context(|| "writing log")?;
+        return Ok(());
+    }
+    let (sum_size, source_hash) = partition_set_stats(view.clone(), &filtered_partitions)
+        .with_context(|| "partition_set_stats")?;
+    logger
+        .write_log_entry(format!(
+            "{desc}: merging {} partitions sum_size={sum_size}",
+            filtered_partitions.len()
+        ))
+        .await
+        .with_context(|| "write_log_entry")?;
+    let merge_start = Instant::now();
+    filtered_partitions.sort_by_key(|p| p.begin_insert_time());
+    // Computed before merge_partitions runs: a pure function of the input slice alone.
+    let merged_sort_order = view.get_merged_partition_sort_order(&filtered_partitions);
+    let merge_result = view
+        .merge_partitions(
+            lakehouse.clone(),
+            Arc::new(filtered_partitions),
+            partitions_all_views,
+            insert_range,
+        )
+        .await
+        .with_context(|| "view.merge_partitions")?;
+    // A defeated ordering elision (ordering_honored: false) is already warned about, with the
+    // offending plan, inside QueryMerger::execute_merge_query.
+    let mut merged_stream = merge_result.stream;
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let view_copy = view.clone();
+    let lake = lakehouse.lake().clone();
+    let join_handle = spawn_with_context(write_partition_from_rows(
+        lake,
+        view_copy.get_meta(),
+        view_copy.get_file_schema(),
+        insert_range,
+        source_hash.to_le_bytes().to_vec(),
+        merged_sort_order,
+        RetireMatch::Containment,
+        Vec::new(),
+        rx,
+        logger.clone(),
+    ));
+    let compute_time_bounds = view.get_time_bounds();
+    let ctx =
+        SessionContext::new_with_config_rt(SessionConfig::default(), lakehouse.runtime().clone());
+    let stream_result: Result<()> = async {
+        while let Some(rb_res) = merged_stream.next().await {
+            let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
+            let event_time_range = compute_time_bounds
+                .get_time_bounds(ctx.read_batch(rb.clone()).with_context(|| "read_batch")?)
+                .await?;
+            tx.send(Ok(PartitionRowSet::new(event_time_range, rb, None)))
+                .await
+                .with_context(|| "sending partition row set")?;
+        }
+        Ok(())
+    }
+    .await;
+
+    match stream_result {
+        Ok(()) => {
+            drop(tx);
+            join_handle.await??;
             logger
                 .write_log_entry(format!(
-                    "{desc}: merging {} partitions sum_size={sum_size}",
-                    filtered_partitions.len()
+                    "{desc}: merge completed in {:.3}s",
+                    merge_start.elapsed().as_secs_f64()
                 ))
                 .await
                 .with_context(|| "write_log_entry")?;
-            let merge_start = Instant::now();
-            filtered_partitions.sort_by_key(|p| p.begin_insert_time());
-            // Computed before merge_partitions runs: a pure function of the input slice alone.
-            let merged_sort_order = view.get_merged_partition_sort_order(&filtered_partitions);
-            let merge_result = view
-                .merge_partitions(
-                    lakehouse.clone(),
-                    Arc::new(filtered_partitions),
-                    partitions_all_views,
-                    insert_range,
-                )
-                .await
-                .with_context(|| "view.merge_partitions")?;
-            // A defeated ordering elision (ordering_honored: false) is already warned about, with the
-            // offending plan, inside QueryMerger::execute_merge_query.
-            let mut merged_stream = merge_result.stream;
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
-            let view_copy = view.clone();
-            let lake = lakehouse.lake().clone();
-            let join_handle = spawn_with_context(write_partition_from_rows(
-                lake,
-                view_copy.get_meta(),
-                view_copy.get_file_schema(),
-                insert_range,
-                source_hash.to_le_bytes().to_vec(),
-                merged_sort_order,
-                RetireMatch::Containment,
-                Vec::new(),
-                rx,
-                logger.clone(),
-            ));
-            let compute_time_bounds = view.get_time_bounds();
-            let ctx = SessionContext::new_with_config_rt(
-                SessionConfig::default(),
-                lakehouse.runtime().clone(),
-            );
-            let stream_result: Result<()> = async {
-                while let Some(rb_res) = merged_stream.next().await {
-                    let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
-                    let event_time_range = compute_time_bounds
-                        .get_time_bounds(ctx.read_batch(rb.clone()).with_context(|| "read_batch")?)
-                        .await?;
-                    tx.send(Ok(PartitionRowSet::new(event_time_range, rb, None)))
-                        .await
-                        .with_context(|| "sending partition row set")?;
+            Ok(())
+        }
+        Err(e) => {
+            warn!("aborting merge partition write for {desc}: {e:?}");
+            let _ = tx.send(Err(anyhow::anyhow!("merge stream aborted"))).await;
+            drop(tx);
+            match join_handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(writer_err)) => {
+                    debug!("merge writer task error during abort: {writer_err:?}");
                 }
-                Ok(())
-            }
-            .await;
-
-            match stream_result {
-                Ok(()) => {
-                    drop(tx);
-                    join_handle.await??;
-                    logger
-                        .write_log_entry(format!(
-                            "{desc}: merge completed in {:.3}s",
-                            merge_start.elapsed().as_secs_f64()
-                        ))
-                        .await
-                        .with_context(|| "write_log_entry")?;
-                    Ok(())
-                }
-                Err(e) => {
-                    warn!("aborting merge partition write for {desc}: {e:?}");
-                    let _ = tx.send(Err(anyhow::anyhow!("merge stream aborted"))).await;
-                    drop(tx);
-                    match join_handle.await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(writer_err)) => {
-                            debug!("merge writer task error during abort: {writer_err:?}");
-                        }
-                        Err(join_err) => {
-                            warn!("merge writer task panicked during abort: {join_err:?}");
-                        }
-                    }
-                    Err(e)
+                Err(join_err) => {
+                    warn!("merge writer task panicked during abort: {join_err:?}");
                 }
             }
-        },
-        "create_merged_partition",
-        |_, span| span.set_property("view", view_name)
-    )
-    .await
+            Err(e)
+        }
+    }
 }
