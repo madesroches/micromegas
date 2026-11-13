@@ -27,7 +27,7 @@ use datafusion::{
     prelude::*,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::error;
+use micromegas_tracing::{error, prelude::*};
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
@@ -261,6 +261,7 @@ impl View for SqlBatchView {
         self.view_instance_id.clone()
     }
 
+    #[span_fn]
     async fn make_batch_partition_spec(
         &self,
         lakehouse: Arc<LakehouseContext>,

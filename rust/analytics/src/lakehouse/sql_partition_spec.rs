@@ -164,6 +164,7 @@ impl PartitionSpec for SqlPartitionSpec {
         self.record_count.to_le_bytes().to_vec()
     }
 
+    #[span_fn]
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
         // Allow empty record_count - write_partition_from_rows will create
         // an empty partition record if no data is sent through the channel
@@ -175,8 +176,7 @@ impl PartitionSpec for SqlPartitionSpec {
             self.insert_range.end.to_rfc3339()
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
-        let df = self.ctx.sql(&self.extract_query).await?;
-        let mut stream = self.execute_extract_query(df).await?;
+        let stream = self.extract_plan().await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let join_handle = spawn_with_context(write_partition_from_rows(
@@ -192,6 +192,25 @@ impl PartitionSpec for SqlPartitionSpec {
             logger.clone(),
         ));
 
+        self.extract_stream(stream, tx, join_handle).await
+    }
+}
+
+impl SqlPartitionSpec {
+    #[span_fn]
+    async fn extract_plan(&self) -> Result<SendableRecordBatchStream> {
+        let df = self.ctx.sql(&self.extract_query).await?;
+        self.execute_extract_query(df).await
+    }
+
+    // Takes `tx` by value so the writer task sees the channel close before it is awaited.
+    #[span_fn]
+    async fn extract_stream(
+        &self,
+        mut stream: SendableRecordBatchStream,
+        tx: tokio::sync::mpsc::Sender<Result<PartitionRowSet>>,
+        join_handle: tokio::task::JoinHandle<Result<()>>,
+    ) -> Result<()> {
         while let Some(rb_res) = stream.next().await {
             let rb = self.transformer.transform(rb_res?).await?;
             let event_time_range = self
@@ -211,6 +230,7 @@ impl PartitionSpec for SqlPartitionSpec {
 /// declares the ordering the resulting partition's rows are guaranteed to satisfy (see
 /// `SqlBatchView::with_merge_sort_order`); pass `None` for views that make no such guarantee.
 #[expect(clippy::too_many_arguments)]
+#[span_fn]
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
     transformer: Arc<dyn RecordBatchTransformer>,
@@ -222,8 +242,7 @@ pub async fn fetch_sql_partition_spec(
     insert_range: TimeRange,
     sort_order: Option<Vec<String>>,
 ) -> Result<SqlPartitionSpec> {
-    let df = ctx.sql(&count_src_sql).await?;
-    let batches: Vec<RecordBatch> = df.collect().await?;
+    let batches = count_query(&ctx, &count_src_sql).await?;
     if batches.len() != 1 {
         anyhow::bail!("fetch_sql_partition_spec: query should return a single batch");
     }
@@ -250,4 +269,10 @@ pub async fn fetch_sql_partition_spec(
         count,
         sort_order,
     ))
+}
+
+#[span_fn]
+async fn count_query(ctx: &SessionContext, count_src_sql: &str) -> Result<Vec<RecordBatch>> {
+    let df = ctx.sql(count_src_sql).await?;
+    Ok(df.collect().await?)
 }

@@ -20,6 +20,7 @@ pub enum PartitionCreationStrategy {
 
 // verify_overlapping_partitions returns true to continue and make a new partition,
 // returns false to abort (existing partition is up to date or there is a problem)
+#[span_fn]
 async fn verify_overlapping_partitions(
     existing_partitions_all_views: &PartitionCache,
     insert_range: TimeRange,
