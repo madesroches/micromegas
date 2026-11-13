@@ -186,6 +186,8 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
 - Stripping the stray quotes from `#[span_fn("x")]` span names is accepted as a rename: the
   quotes are a bug and the only in-repo user is `rust/tracing/tests/test_macros.rs:103`.
 
+- AFK: Manual Verification step 2 adds `--begin 1h` to its `micromegas-query` command, since the CLI rejects queries with neither `--begin` nor `--all`; matches step 3.
+
 ## Testing Strategy
 
 Unit tests in `rust/tracing/tests/span_properties_tests.rs`, using `init_in_memory_tracing` and
@@ -215,6 +217,6 @@ Checks the daemon wiring end to end, which unit tests cannot reach:
 
 1. `python3 local_test_env/ai_scripts/start_services.py`, let the maintenance daemon materialize
    for a few minutes.
-2. Find the daemon process id: `micromegas-query "SELECT process_id FROM processes WHERE exe LIKE '%telemetry-maintenance-srv%' ORDER BY start_time DESC LIMIT 1"`.
+2. Find the daemon process id: `micromegas-query "SELECT process_id FROM processes WHERE exe LIKE '%telemetry-maintenance-srv%' ORDER BY start_time DESC LIMIT 1" --begin 1h`.
 3. `micromegas-query "SELECT name, property_get(properties, 'view') AS view, count(*) FROM process_spans('<daemon process id>', 'async') WHERE name LIKE '%partition%' GROUP BY 1, 2" --begin 1h`
    → rows carry the view set names (e.g. `log_entries`, `measures`).
