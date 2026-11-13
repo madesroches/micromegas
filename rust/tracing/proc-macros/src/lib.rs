@@ -143,6 +143,27 @@ fn is_future_type(ty: &Type) -> bool {
     }
 }
 
+/// Picks the property-carrying `span_fn_future!` form only when properties exist, so functions
+/// without properties keep the static-descriptor expansion unchanged.
+fn instrument_future(
+    name: &str,
+    fut: proc_macro2::TokenStream,
+    props: &[proc_macro2::TokenStream],
+) -> proc_macro2::TokenStream {
+    if props.is_empty() {
+        quote! {
+            {
+                static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #name));
+                InstrumentedFuture::new(#fut, &_SCOPE_DESC)
+            }
+        }
+    } else {
+        quote! {
+            span_fn_future!(concat!(module_path!(), "::", #name), #fut, #(#props),*)
+        }
+    }
+}
+
 /// Instruments a function with automatic span tracing.
 ///
 /// This is the primary macro for instrumenting both sync and async functions in micromegas.
@@ -228,6 +249,10 @@ fn is_future_type(ty: &Type) -> bool {
 /// }
 /// ```
 ///
+/// `#[async_trait]` renames arguments that are not plain identifiers (for example destructuring
+/// patterns) to `__argN` in the outer signature, so span properties can only use `self` and
+/// arguments bound to plain identifiers.
+///
 /// # How It Works
 ///
 /// For **async functions**, the macro:
@@ -278,53 +303,26 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         {
             let async_block = &call_expr.args[0];
 
-            // Replace the function body with instrumented version
-            if has_props {
-                function.block = parse_quote! {
-                    {
-                        Box::pin(span_fn_future!(
-                            concat!(module_path!(), "::", #function_name),
-                            #async_block,
-                            #(#props),*
-                        ))
-                    }
-                };
-            } else {
-                function.block = parse_quote! {
-                    {
-                        static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                        Box::pin(InstrumentedFuture::new(
-                            #async_block,
-                            &_SCOPE_DESC
-                        ))
-                    }
-                };
-            }
+            let instrumented = instrument_future(&function_name, quote! { #async_block }, &props);
+            function.block = parse_quote! {
+                {
+                    Box::pin(#instrumented)
+                }
+            };
         } else {
             // For complex async functions that don't match the simple Box::pin pattern,
             // wrap the entire body in an async block and instrument it
             let original_block = &function.block;
-            if has_props {
-                function.block = parse_quote! {
-                    {
-                        Box::pin(span_fn_future!(
-                            concat!(module_path!(), "::", #function_name),
-                            async move #original_block,
-                            #(#props),*
-                        ))
-                    }
-                };
-            } else {
-                function.block = parse_quote! {
-                    {
-                        static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                        Box::pin(InstrumentedFuture::new(
-                            async move #original_block,
-                            &_SCOPE_DESC
-                        ))
-                    }
-                };
-            }
+            let instrumented = instrument_future(
+                &function_name,
+                quote! { async move #original_block },
+                &props,
+            );
+            function.block = parse_quote! {
+                {
+                    Box::pin(#instrumented)
+                }
+            };
         }
     } else if function.sig.asyncness.is_some() {
         // Case 2: Regular async function
@@ -337,25 +335,16 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         // Remove async and change return type to impl Future
         function.sig.asyncness = None;
         function.sig.output = parse_quote! { -> impl std::future::Future<Output = #output_type> };
-        if has_props {
-            function.block = parse_quote! {
-                {
-                    span_fn_future!(
-                        concat!(module_path!(), "::", #function_name),
-                        async move #original_block,
-                        #(#props),*
-                    )
-                }
-            };
-        } else {
-            function.block = parse_quote! {
-                {
-                    static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                    let fut = async move #original_block;
-                    InstrumentedFuture::new(fut, &_SCOPE_DESC)
-                }
-            };
-        }
+        let instrumented = instrument_future(
+            &function_name,
+            quote! { async move #original_block },
+            &props,
+        );
+        function.block = parse_quote! {
+            {
+                #instrumented
+            }
+        };
     } else {
         // Case 3: Regular sync function
         let guard_stmt: syn::Stmt = if has_props {

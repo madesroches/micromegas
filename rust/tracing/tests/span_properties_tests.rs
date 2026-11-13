@@ -121,10 +121,7 @@ fn nothing_set_emits_the_plain_end_and_old_forms_are_unchanged() {
     }
     plain_fn();
     plain_alt_fn();
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("runtime");
-    rt.block_on(plain_async_fn());
+    current_thread_runtime().block_on(plain_async_fn());
     let blocks = blocks(&guard);
     let ends = thread_ends(&blocks[0]);
     assert_eq!(
