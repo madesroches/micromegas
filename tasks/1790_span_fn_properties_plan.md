@@ -78,7 +78,8 @@ rather than re-implemented. With no properties, every case expands exactly as to
   `span_fn_future!(concat!(..), async move #body, #(#props),*)`.
 - **async-trait method**: the extracted `async move {..}` block (or `async move #body` fallback)
   goes through the same `span_fn_future!`, wrapped in `Box::pin(..)`. The properties are evaluated
-  in the outer, synchronous body, where the method's arguments (including `self`) are in scope.
+  in the outer, synchronous body, where `self` and arguments bound to plain identifiers are in scope (destructured arguments
+  are not, since async-trait renames them).
 
 `span_fn_future!` is a new `#[doc(hidden)] #[macro_export]` declarative macro in
 `rust/tracing/src/macros.rs`, re-exported from the prelude so the proc macro can name it
@@ -150,8 +151,9 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
      empty, emit the property forms otherwise.
    - Add a "Span Properties" section to the `span_fn` doc comment with an example (async and
      sync), and note values are evaluated at entry and recorded on the span's end event.
-4. `rust/tracing/src/lib.rs`: add a short mention of the `#[span_fn(key = expr)]` form to the
-   crate-level "# Span properties" section.
+4. `rust/tracing/src/lib.rs` and `rust/tracing/README.md`: add a short mention of the
+   `#[span_fn(key = expr)]` form to the crate-level "# Span properties" section and to the README
+   sentence that introduces `#[span_fn]` and span properties.
 5. `rust/tracing/Cargo.toml`: add dev-dependency `async-trait.workspace = true`; then write the
    tests in `rust/tracing/tests/span_properties_tests.rs` (see Testing Strategy).
 6. `rust/analytics/src/lakehouse/batch_update.rs`: add `view = view.get_view_set_name()` to the
@@ -164,6 +166,7 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
 - `rust/tracing/proc-macros/src/lib.rs`
 - `rust/tracing/src/macros.rs`
 - `rust/tracing/src/lib.rs`
+- `rust/tracing/README.md`
 - `rust/tracing/src/spans/instrumented_future.rs`
 - `rust/tracing/Cargo.toml` (dev-dependency `async-trait.workspace = true`)
 - `rust/tracing/tests/span_properties_tests.rs`
