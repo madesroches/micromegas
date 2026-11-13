@@ -5,7 +5,7 @@
 ## Overview
 
 Let `#[span_fn]` attach properties to the span it creates, with values computed from the
-function's arguments when the span begins:
+function's arguments when the function is called:
 
 ```rust
 #[span_fn(view = view.get_view_set_name())]
@@ -136,7 +136,7 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
 ## Implementation Steps
 
 1. `rust/tracing/src/spans/instrumented_future.rs`: add `EntryProperties` and
-   `InstrumentedFuture::with_properties`; export `EntryProperties` from `spans` alongside `NoHook`.
+   `InstrumentedFuture::with_properties`.
 2. `rust/tracing/src/macros.rs`: add the `[future ..]` arm to `__span_guard_call!` and the
    `span_fn_future!` macro; add `span_fn_future` to the prelude in `rust/tracing/src/lib.rs`.
 3. `rust/tracing/proc-macros/src/lib.rs`:
@@ -164,29 +164,15 @@ Add `view = view.get_view_set_name()` to the four `#[span_fn]` materialization f
 - `rust/tracing/proc-macros/src/lib.rs`
 - `rust/tracing/src/macros.rs`
 - `rust/tracing/src/lib.rs`
-- `rust/tracing/src/spans/instrumented_future.rs` (and `spans/mod.rs` export if needed)
+- `rust/tracing/src/spans/instrumented_future.rs`
 - `rust/tracing/Cargo.toml` (dev-dependency `async-trait.workspace = true`)
 - `rust/tracing/tests/span_properties_tests.rs`
 - `rust/analytics/src/lakehouse/batch_update.rs`
 - `CHANGELOG.md`
 
-## Trade-offs
-
-- **Forward to `__props!` vs. emitting `set_property` calls directly from the proc macro.**
-  Forwarding reuses key validation and `__prop_key!`, and keeps all expansion paths under
-  `$crate::`, so the proc macro only needs the prelude-exported `span_scope!`/`span_fn_future!`.
-  Emitting raw calls would need `SpanProperties`, `PropertySet` and `ThreadSpanGuard` in the
-  prelude or hard-coded crate paths.
-- **Always `%` (Display) vs. passing the user's value tokens through verbatim.** The issue asks for
-  `impl Display` values with plain `key = expr` syntax; verbatim pass-through would make a bare
-  value require `PropertyValue` (e.g. a type implementing only `Display` would be rejected) and expose `%`/`?`/`static`
-  sigils. Literal values lose interning under `%`, which only matters for constant properties that
-  are better put in the name.
-- **New `EntryProperties` hook vs. a closure `move |_, span| *span = props`.** A closure would work
-  but needs annotated argument types to infer the higher-ranked signature, and replaces the
-  `SpanProperties` wholesale; a named hook is explicit and matches `NoHook`.
-
 ## Decisions
+
+- Property values always go through `%` (Display), so literal values are not interned.
 
 - The #1788 spans (PR #1789) are not on `main`; this branch adds `view` to the four
   materialization spans already on `main`. Whichever of #1789 and this PR merges second adds
@@ -217,13 +203,11 @@ the existing `thread_ends`/`sorted`/`owned` helpers, `#[serial]`:
   property (proves `self` is reachable and the future is `Send`).
 - **alternative name + properties**: `#[span_fn("alt", k = 1)]` → the span's name ends in `::alt`
   and carries `k`.
-- **no properties**: existing `#[span_fn]` forms still emit plain ends (extend the existing
-  "old forms are unchanged" test).
+- **no properties**: extend `nothing_set_emits_the_plain_end_and_old_forms_are_unchanged`
+  with calls to `#[span_fn]`, `#[span_fn("alt")]` and an async `#[span_fn]`, asserting plain
+  `EndThreadSpanEvent` / `EndAsyncSpanEvent` ends.
 - **argument not consumed**: a sync fn using a `String` argument as a property and then moving it
   in the body compiles (covered by writing the test that way).
-
-A `compile_fail` doctest on `span_fn_future!` is not needed; `name` as a key already fails in
-`__props!`.
 
 ## Manual Verification
 
@@ -231,5 +215,6 @@ Checks the daemon wiring end to end, which unit tests cannot reach:
 
 1. `python3 local_test_env/ai_scripts/start_services.py`, let the maintenance daemon materialize
    for a few minutes.
-2. `micromegas-query "SELECT name, property_get(properties, 'view') AS view, count(*) FROM process_spans('<daemon process id>', 'async') WHERE name LIKE '%partition%' GROUP BY 1, 2" --begin 1h`
+2. Find the daemon process id: `micromegas-query "SELECT process_id FROM processes WHERE exe LIKE '%telemetry-maintenance-srv%' ORDER BY start_time DESC LIMIT 1"`.
+3. `micromegas-query "SELECT name, property_get(properties, 'view') AS view, count(*) FROM process_spans('<daemon process id>', 'async') WHERE name LIKE '%partition%' GROUP BY 1, 2" --begin 1h`
    → rows carry the view set names (e.g. `log_entries`, `measures`).
