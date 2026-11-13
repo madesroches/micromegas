@@ -4136,6 +4136,7 @@ name = "micromegas-tracing"
 version = "0.34.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bumpalo",
  "chrono",
  "criterion",

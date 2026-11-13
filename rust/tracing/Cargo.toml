@@ -45,6 +45,7 @@ js-sys = "0.3"
 winapi.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 criterion = "0.5"
 futures = "0.3"
 log.workspace = true

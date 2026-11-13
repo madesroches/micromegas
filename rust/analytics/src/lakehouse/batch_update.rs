@@ -138,7 +138,7 @@ fn verify_force_regeneration_alignment(
     Ok(())
 }
 
-#[span_fn]
+#[span_fn(view = view.get_view_set_name())]
 async fn materialize_partition(
     existing_partitions_all_views: Arc<PartitionCache>,
     lakehouse: Arc<LakehouseContext>,
@@ -230,7 +230,7 @@ async fn materialize_partition(
 }
 
 /// Materializes partitions within a given time range.
-#[span_fn]
+#[span_fn(view = view.get_view_set_name())]
 pub async fn materialize_partition_range(
     existing_partitions_all_views: Arc<PartitionCache>,
     lakehouse: Arc<LakehouseContext>,
@@ -277,7 +277,7 @@ pub async fn materialize_partition_range(
 /// `lakehouse_partitions_no_overlap` exclusion constraint, which makes the insert fail loudly if
 /// a conflicting partition was committed concurrently (e.g. by the maintenance daemon merging
 /// buckets after the snapshot was taken).
-#[span_fn]
+#[span_fn(view = view.get_view_set_name())]
 pub async fn regenerate_partition_range(
     existing_partitions_all_views: Arc<PartitionCache>,
     lakehouse: Arc<LakehouseContext>,
@@ -327,7 +327,7 @@ pub async fn regenerate_partition_range(
 /// aborts on freshness -- and never subdivides: the bucket is exactly one partition. The
 /// transactional retire+insert in the write path replaces the old partition(s) atomically, so a
 /// failure rolls back and leaves the existing partition untouched.
-#[span_fn]
+#[span_fn(view = view.get_view_set_name())]
 async fn regenerate_partition(
     existing_partitions_all_views: Arc<PartitionCache>,
     lakehouse: Arc<LakehouseContext>,
