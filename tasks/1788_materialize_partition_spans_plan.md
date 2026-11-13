@@ -38,8 +38,9 @@ Use the existing macros from `micromegas_tracing::prelude::*`: `#[span_fn]` for 
   including the final `join_handle.await`).
 - `create_merged_partition`: `#[span_fn]`.
 
-No span properties are added: the existing `materialize_partition` log lines already carry the view
-and range. If the new spans show that per-bucket `filter_insert_range` cloning is significant, that
+Every new span records the view name as a `view` span property (set through the `instrument_named!`
+end hook). `#[span_fn]` cannot carry properties, so the whole-function spans are written as
+`instrument_named!` around the function body instead of the attribute. If the new spans show that per-bucket `filter_insert_range` cloning is significant, that
 is a follow-up issue, not part of this change.
 
 ## Implementation Steps
