@@ -129,6 +129,14 @@
 //! span.set_property("cache", if hit { "hit" } else { "miss" });
 //! ```
 //!
+//! `#[span_fn(key = expr, ..)]` attaches properties to a whole-function span; the values are
+//! evaluated from the arguments when the function is called and recorded on the end event:
+//!
+//! ```rust,ignore
+//! #[span_fn(view = view.get_view_set_name())]
+//! async fn materialize(view: Arc<dyn View>) -> Result<()> { /* ... */ }
+//! ```
+//!
 //! An async span takes a closure that receives the output of the future:
 //!
 //! ```rust,ignore
@@ -334,9 +342,9 @@ pub mod prelude {
     pub use crate::time::*;
     pub use crate::{
         debug, error, fatal, fmetric, fmetric_dyn, imetric, imetric_dyn, info, instrument_named,
-        instrument_named_dyn, log, log_enabled, span_async_named, span_async_named_dyn, span_scope,
-        span_scope_named, span_scope_named_dyn, static_span_desc, static_span_location, trace,
-        warn,
+        instrument_named_dyn, log, log_enabled, span_async_named, span_async_named_dyn,
+        span_fn_future, span_scope, span_scope_named, span_scope_named_dyn, static_span_desc,
+        static_span_location, trace, warn,
     };
     pub use micromegas_tracing_proc_macros::*;
 }

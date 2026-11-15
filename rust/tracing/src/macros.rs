@@ -1071,6 +1071,12 @@ macro_rules! __span_guard_call {
         $crate::__span_set_properties!(properties $($d)*);
         $crate::guards::ThreadSpanGuard::with_properties(&_METADATA_NAMED, properties)
     }};
+    ([future $name:expr, $future:expr] $set:expr, [$($d:tt)*]) => {{
+        $crate::static_span_desc!(_METADATA_NAMED, $name);
+        let mut properties = $crate::spans::SpanProperties::new($set);
+        $crate::__span_set_properties!(properties $($d)*);
+        $crate::spans::InstrumentedFuture::with_properties($future, &_METADATA_NAMED, properties)
+    }};
     ([named $name:expr] $set:expr, [$($d:tt)*]) => {{
         $crate::__span_guard_call!(@loc _LOCATION);
         let mut properties = $crate::spans::SpanProperties::new($set);
@@ -1099,6 +1105,15 @@ macro_rules! __span_guard_call {
             file: file!(),
             line: line!(),
         };
+    };
+}
+
+/// Expansion of `#[span_fn]` with properties on an async function.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! span_fn_future {
+    ($name:expr, $future:expr, $($props:tt)+) => {
+        $crate::__props!(@m span [future $name, $future] [] [] [] [] [] $($props)+)
     };
 }
 

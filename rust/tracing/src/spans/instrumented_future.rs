@@ -148,6 +148,19 @@ where
     }
 }
 
+/// The end hook of a future whose properties were computed when it was created.
+pub struct EntryProperties(SpanProperties);
+
+impl<O> SpanEndHook<O> for EntryProperties {
+    fn properties_at_end(self, _output: &O) -> Option<SpanProperties> {
+        if self.0.is_empty() {
+            None
+        } else {
+            Some(self.0)
+        }
+    }
+}
+
 /// Trait for adding instrumentation to futures
 pub trait InstrumentFuture: Future + Sized {
     /// Instrument this future with the given span metadata
@@ -258,6 +271,18 @@ impl<F> InstrumentedFuture<F> {
     /// Create a new instrumented future
     pub fn new(future: F, desc: &'static SpanMetadata) -> Self {
         Self::with_hook(future, desc, NoHook)
+    }
+}
+
+impl<F> InstrumentedFuture<F, EntryProperties> {
+    /// Create an instrumented future whose end event carries `properties`, computed by the caller
+    /// before the future first runs.
+    pub fn with_properties(
+        future: F,
+        desc: &'static SpanMetadata,
+        properties: SpanProperties,
+    ) -> Self {
+        Self::with_hook(future, desc, EntryProperties(properties))
     }
 }
 

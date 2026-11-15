@@ -119,18 +119,167 @@ fn nothing_set_emits_the_plain_end_and_old_forms_are_unchanged() {
     {
         span_scope!("y");
     }
+    plain_fn();
+    plain_alt_fn();
+    current_thread_runtime().block_on(plain_async_fn());
     let blocks = blocks(&guard);
     let ends = thread_ends(&blocks[0]);
     assert_eq!(
         ends.iter().map(|e| e.0).collect::<Vec<_>>(),
-        vec!["plain", "plain"]
+        vec!["plain"; 4]
     );
+    let plain_async_ends = blocks[0]
+        .events
+        .iter()
+        .filter(|e| matches!(e, ThreadEventQueueAny::EndAsyncSpanEvent(_)))
+        .count();
+    assert_eq!(plain_async_ends, 1);
     let begins = blocks[0]
         .events
         .iter()
         .filter(|e| matches!(e, ThreadEventQueueAny::BeginThreadSpanEvent(_)))
         .count();
-    assert_eq!(begins, 2);
+    assert_eq!(begins, 4);
+}
+
+#[span_fn]
+fn plain_fn() {}
+
+#[span_fn("alt")]
+fn plain_alt_fn() {}
+
+#[span_fn]
+async fn plain_async_fn() {}
+
+#[span_fn(id = id, kind = "x")]
+fn sync_with_props(id: u32) {
+    let _ = id;
+}
+
+#[span_fn(label = label, len = label.len())]
+fn sync_consumes_argument(label: String) -> String {
+    label
+}
+
+#[span_fn(view = name)]
+async fn async_with_props(name: &str) -> usize {
+    name.len()
+}
+
+#[span_fn("alt", k = 1, "http.method" = "GET",)]
+fn alt_with_props() {}
+
+#[span_fn("alt_async", k = 1)]
+async fn alt_async_with_props() {}
+
+#[async_trait::async_trait]
+trait Counter {
+    async fn count(&self) -> u32;
+}
+
+struct Holder {
+    n: u32,
+}
+
+#[async_trait::async_trait]
+impl Counter for Holder {
+    #[span_fn(n = self.n)]
+    async fn count(&self) -> u32 {
+        self.n
+    }
+}
+
+fn tagged_async_ends(block: &ThreadBlock) -> Vec<(String, Vec<(String, String)>)> {
+    block
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            ThreadEventQueueAny::TaggedEndAsyncSpanEvent(e) => Some((
+                e.span_desc.name.to_owned(),
+                sorted(block.dyn_deps.set_properties(e.properties)),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn current_thread_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("runtime")
+}
+
+#[test]
+#[serial]
+fn span_fn_sync_records_properties() {
+    let guard = init_in_memory_tracing();
+    micromegas_tracing::dispatch::init_thread_stream();
+    sync_with_props(7);
+    let blocks = blocks(&guard);
+    let ends = thread_ends(&blocks[0]);
+    assert_eq!(ends.len(), 1);
+    assert_eq!(ends[0].0, "tagged");
+    assert_eq!(ends[0].1, owned(&[("id", "7"), ("kind", "x")]));
+}
+
+#[test]
+#[serial]
+fn span_fn_sync_argument_is_not_consumed() {
+    let guard = init_in_memory_tracing();
+    micromegas_tracing::dispatch::init_thread_stream();
+    assert_eq!(sync_consumes_argument("abc".to_owned()), "abc");
+    let blocks = blocks(&guard);
+    let ends = thread_ends(&blocks[0]);
+    assert_eq!(ends[0].1, owned(&[("label", "abc"), ("len", "3")]));
+}
+
+#[test]
+#[serial]
+fn span_fn_async_records_properties_and_returns_output() {
+    let guard = init_in_memory_tracing();
+    micromegas_tracing::dispatch::init_thread_stream();
+    let out = current_thread_runtime().block_on(async_with_props("log_entries"));
+    assert_eq!(out, 11);
+    let blocks = blocks(&guard);
+    let ends = tagged_async_ends(&blocks[0]);
+    assert_eq!(ends.len(), 1);
+    assert!(ends[0].0.ends_with("::async_with_props"));
+    assert_eq!(ends[0].1, owned(&[("view", "log_entries")]));
+}
+
+#[test]
+#[serial]
+fn span_fn_async_trait_method_records_properties() {
+    let guard = init_in_memory_tracing();
+    micromegas_tracing::dispatch::init_thread_stream();
+    let holder = Holder { n: 4 };
+    let out = current_thread_runtime().block_on(holder.count());
+    assert_eq!(out, 4);
+    let blocks = blocks(&guard);
+    let ends = tagged_async_ends(&blocks[0]);
+    assert_eq!(ends.len(), 1);
+    assert_eq!(ends[0].1, owned(&[("n", "4")]));
+}
+
+#[test]
+#[serial]
+fn span_fn_alternative_name_with_properties() {
+    let guard = init_in_memory_tracing();
+    micromegas_tracing::dispatch::init_thread_stream();
+    alt_with_props();
+    current_thread_runtime().block_on(alt_async_with_props());
+    let blocks = blocks(&guard);
+    let ends = thread_ends(&blocks[0]);
+    assert_eq!(ends[0].1, owned(&[("http.method", "GET"), ("k", "1")]));
+    let thread_name_ok = blocks[0].events.iter().any(|e| match e {
+        ThreadEventQueueAny::BeginThreadSpanEvent(e) => e.thread_span_desc.name.ends_with("::alt"),
+        _ => false,
+    });
+    assert!(thread_name_ok);
+    let async_ends = tagged_async_ends(&blocks[0]);
+    assert_eq!(async_ends.len(), 1);
+    assert!(async_ends[0].0.ends_with("::alt_async"));
+    assert_eq!(async_ends[0].1, owned(&[("k", "1")]));
 }
 
 fn early_return(fail: bool) -> Result<(), ()> {

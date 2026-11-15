@@ -45,29 +45,67 @@
 mod log_impl;
 
 use proc_macro::TokenStream;
-use proc_macro2::Literal;
-use quote::quote;
+use proc_macro2::Ident;
+use quote::{ToTokens, quote};
 use syn::{
-    ItemFn, ReturnType, Type, TypePath,
+    Expr, ItemFn, LitStr, ReturnType, Token, Type, TypePath,
     parse::{Parse, ParseStream, Result},
     parse_macro_input, parse_quote,
 };
 
+enum PropKey {
+    Ident(Ident),
+    Str(LitStr),
+}
+
+impl Parse for PropKey {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        if input.peek(LitStr) {
+            Ok(Self::Str(input.parse()?))
+        } else {
+            Ok(Self::Ident(input.parse()?))
+        }
+    }
+}
+
+impl ToTokens for PropKey {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        match self {
+            Self::Ident(ident) => ident.to_tokens(tokens),
+            Self::Str(lit) => lit.to_tokens(tokens),
+        }
+    }
+}
+
 struct TraceArgs {
-    alternative_name: Option<Literal>,
+    alternative_name: Option<LitStr>,
+    properties: Vec<(PropKey, Expr)>,
 }
 
 impl Parse for TraceArgs {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        if input.is_empty() {
-            Ok(Self {
-                alternative_name: None,
-            })
-        } else {
-            Ok(Self {
-                alternative_name: Some(Literal::parse(input)?),
-            })
+        let mut alternative_name = None;
+        // A leading string literal followed by `=` is a property key, not the name.
+        if input.peek(LitStr) && !input.peek2(Token![=]) {
+            alternative_name = Some(input.parse()?);
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
         }
+        let mut properties = Vec::new();
+        while !input.is_empty() {
+            let key: PropKey = input.parse()?;
+            input.parse::<Token![=]>()?;
+            let value: Expr = input.parse()?;
+            properties.push((key, value));
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(Self {
+            alternative_name,
+            properties,
+        })
     }
 }
 
@@ -102,6 +140,27 @@ fn is_future_type(ty: &Type) -> bool {
             false
         }),
         _ => false,
+    }
+}
+
+/// Picks the property-carrying `span_fn_future!` form only when properties exist, so functions
+/// without properties keep the static-descriptor expansion unchanged.
+fn instrument_future(
+    name: &str,
+    fut: proc_macro2::TokenStream,
+    props: &[proc_macro2::TokenStream],
+) -> proc_macro2::TokenStream {
+    if props.is_empty() {
+        quote! {
+            {
+                static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #name));
+                InstrumentedFuture::new(#fut, &_SCOPE_DESC)
+            }
+        }
+    } else {
+        quote! {
+            span_fn_future!(concat!(module_path!(), "::", #name), #fut, #(#props),*)
+        }
     }
 }
 
@@ -147,6 +206,26 @@ fn is_future_type(ty: &Type) -> bool {
 /// }
 /// ```
 ///
+/// # Span Properties
+///
+/// `key = expr` pairs attach properties to the span. Each value is any expression whose type
+/// implements `Display`; it is evaluated once when the function is called, so it can reference
+/// the arguments (borrowed, not moved), and is recorded on the span's end event. A key is an
+/// identifier or a string literal, and a leading string literal followed by a comma is still the
+/// custom name:
+///
+/// ```rust,ignore
+/// #[span_fn(view = view.get_view_set_name())]
+/// async fn materialize(view: Arc<dyn View>) -> Result<()> {
+///     Ok(())
+/// }
+///
+/// #[span_fn("lookup", id = id, "http.method" = "GET")]
+/// fn find(id: u32) -> Option<Row> {
+///     None
+/// }
+/// ```
+///
 /// # With Async Traits
 ///
 /// When using `#[async_trait]`, place `#[span_fn]` on the method *after* the
@@ -169,6 +248,10 @@ fn is_future_type(ty: &Type) -> bool {
 ///     }
 /// }
 /// ```
+///
+/// `#[async_trait]` renames arguments that are not plain identifiers (for example destructuring
+/// patterns) to `__argN` in the outer signature, so span properties can only use `self` and
+/// arguments bound to plain identifiers.
 ///
 /// # How It Works
 ///
@@ -200,7 +283,13 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let function_name = args
         .alternative_name
-        .map_or(function.sig.ident.to_string(), |n| n.to_string());
+        .map_or(function.sig.ident.to_string(), |n| n.value());
+    let props: Vec<_> = args
+        .properties
+        .iter()
+        .map(|(key, value)| quote! { #key = %(#value) })
+        .collect();
+    let has_props = !props.is_empty();
 
     if returns_future(&function) {
         // Case 1: Async trait method (after #[async_trait] transformation)
@@ -214,27 +303,24 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         {
             let async_block = &call_expr.args[0];
 
-            // Replace the function body with instrumented version
+            let instrumented = instrument_future(&function_name, quote! { #async_block }, &props);
             function.block = parse_quote! {
                 {
-                    static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                    Box::pin(InstrumentedFuture::new(
-                        #async_block,
-                        &_SCOPE_DESC
-                    ))
+                    Box::pin(#instrumented)
                 }
             };
         } else {
             // For complex async functions that don't match the simple Box::pin pattern,
             // wrap the entire body in an async block and instrument it
             let original_block = &function.block;
+            let instrumented = instrument_future(
+                &function_name,
+                quote! { async move #original_block },
+                &props,
+            );
             function.block = parse_quote! {
                 {
-                    static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                    Box::pin(InstrumentedFuture::new(
-                        async move #original_block,
-                        &_SCOPE_DESC
-                    ))
+                    Box::pin(#instrumented)
                 }
             };
         }
@@ -249,21 +335,31 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         // Remove async and change return type to impl Future
         function.sig.asyncness = None;
         function.sig.output = parse_quote! { -> impl std::future::Future<Output = #output_type> };
+        let instrumented = instrument_future(
+            &function_name,
+            quote! { async move #original_block },
+            &props,
+        );
         function.block = parse_quote! {
             {
-                static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                let fut = async move #original_block;
-                InstrumentedFuture::new(fut, &_SCOPE_DESC)
+                #instrumented
             }
         };
     } else {
         // Case 3: Regular sync function
-        function.block.stmts.insert(
-            0,
+        let guard_stmt: syn::Stmt = if has_props {
+            parse_quote! {
+                let __span_fn_guard = span_scope!(
+                    name = concat!(module_path!(), "::", #function_name),
+                    #(#props),*
+                );
+            }
+        } else {
             parse_quote! {
                 span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
-            },
-        );
+            }
+        };
+        function.block.stmts.insert(0, guard_stmt);
     }
 
     TokenStream::from(quote! {
