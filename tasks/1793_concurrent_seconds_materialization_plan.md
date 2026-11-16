@@ -180,6 +180,8 @@ Both metrics are emitted in `EverySecondTask::run`, the only task the change tar
 - The lake pool size (sqlx default of 10) is left unchanged. The default concurrency of 8 stays
   under it in steady state, and connections are held only for short queries. If acquire waits
   show up under overlap, making the pool size configurable is a follow-up.
+- AFK: Pool size and default concurrency stay unchanged for the monolith too, where ingestion, FlightSQL and the daemon share one pool (30 s acquire timeout) and up to 5 x 8 = 40 views can be in flight; the risk is accepted and documented, and Manual Verification checks FlightSQL latency in `--monolith` mode. Operators can lower `MICROMEGAS_SECONDS_MATERIALIZATION_CONCURRENCY` if contention shows.
+- AFK: `every_second_task_delay` is kept as is: the existing `task_tick_delay` has no task-name property, so it cannot isolate the every-second task, and changing the cron_task metrics is out of scope for this issue.
 - Default concurrency of 8 confirmed by the user.
 - Concurrency is an env var rather than a DB setting, matching `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`.
 - `max_parallelism` stays 5, so in-flight view work is bounded by 5 x concurrency.
@@ -192,6 +194,8 @@ Both metrics are emitted in `EverySecondTask::run`, the only task the change tar
   - Add a row for `MICROMEGAS_SECONDS_MATERIALIZATION_CONCURRENCY` to the env table: default
     `8`, every-second task only, views in one update group run concurrently up to this limit,
     and with up to 5 overlapping passes the in-flight view work is bounded by 5 × this value.
+    In the monolith, all in-flight work shares the single lake connection pool with ingestion
+    and FlightSQL, so lower the value if queries or ingestion slow down during materialization.
   - In the "What it does" table, add to the "Every second" row that views of one update group
     are materialized concurrently.
   - Add a short section for `every_second_task_delay` and `every_second_pass_duration` next to
@@ -243,4 +247,8 @@ I/O latency, so no unit test can show it.
 3. Run `micromegas-query "SELECT max(value) FROM measures WHERE name = 'every_second_task_delay'" --begin 5m`.
    Expected: well under 10 000 ms. Also check `/tmp/daemon.log` for `materialize_all_views`
    errors or pool acquire timeouts. Expected: none.
+4. Monolith: repeat step 2 with `start_services.py --monolith` and, while the every-second pass
+   runs, time a FlightSQL query (e.g. `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`)
+   and check `/tmp/monolith.log` for pool acquire timeouts. Expected: latency comparable to
+   concurrency 1 and no timeouts.
 
