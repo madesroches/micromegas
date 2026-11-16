@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
+use futures::{FutureExt, StreamExt};
 use micromegas_analytics::audience::audience_column_mismatch;
 use micromegas_analytics::delete::delete_old_data;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
@@ -15,13 +16,14 @@ use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
 use micromegas_tracing::prelude::*;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::{JoinError, JoinSet};
 
 use super::cron_task::{CronTask, TaskCallback};
 use super::pg_stats::PgStatsTask;
-use crate::settings::{ServiceRole, SettingsDataFusionConfig, SettingsSource};
+use crate::settings::{ServiceRole, SettingsDataFusionConfig, SettingsSource, resolve_u64_env};
 
 /// Resolves and sorts the view-carrying task's per-tick view list from `registry.current()`: the
 /// base plus every DDL-defined view with an `update_group`, sorted by that group. Computed fresh
@@ -33,10 +35,56 @@ fn sorted_views_from_registry(registry: &ViewRegistry) -> Arc<Vec<Arc<dyn View>>
     Arc::new(views)
 }
 
+/// Runs `run` over `items`, grouped by contiguous runs of equal `group_of`, with at most
+/// `concurrency` items in flight. Each group starts after the previous one has fully finished,
+/// and gets a fresh `fetch_group_context()` result.
+/// Returns per-item failures (global index, error) in input order. A `fetch_group_context`
+/// error aborts the pass.
+pub async fn run_update_groups<T, K, C, FetchFut, RunFut>(
+    items: &[T],
+    group_of: impl Fn(&T) -> K,
+    concurrency: NonZeroUsize,
+    mut fetch_group_context: impl FnMut() -> FetchFut,
+    run: impl Fn(&T, Arc<C>) -> RunFut,
+) -> Result<Vec<(usize, anyhow::Error)>>
+where
+    K: PartialEq,
+    FetchFut: Future<Output = Result<C>>,
+    RunFut: Future<Output = Result<()>>,
+{
+    let mut failures = Vec::new();
+    let mut offset = 0;
+    for group in items.chunk_by(|a, b| group_of(a) == group_of(b)) {
+        let ctx = Arc::new(fetch_group_context().await?);
+        // Futures are built eagerly (they are lazy until polled) so the stream does not carry a
+        // closure borrowing the items, which breaks the `Send` proof for spawned callers.
+        let futs: Vec<_> = group
+            .iter()
+            .enumerate()
+            .map(|(i, item)| run(item, ctx.clone()).map(move |r| (offset + i, r)))
+            .collect();
+        let results: Vec<(usize, Result<()>)> = futures::stream::iter(futs)
+            .buffer_unordered(concurrency.get())
+            .collect()
+            .await;
+        failures.extend(
+            results
+                .into_iter()
+                .filter_map(|(i, r)| r.err().map(|e| (i, e))),
+        );
+        offset += group.len();
+    }
+    // buffer_unordered completes in any order; sorting keeps the error text deterministic.
+    failures.sort_by_key(|(i, _)| *i);
+    Ok(failures)
+}
+
 /// Materializes all views within a given time range.
 ///
 /// This function iterates through the provided views, materializing partitions
 /// for each view within the specified `insert_range` and `partition_time_delta`.
+/// Views within an update group may run concurrently, up to `concurrency`; the
+/// group boundary is a barrier.
 ///
 /// Per-view failures are isolated: a view whose `materialize_partition_range`
 /// call errors is logged, counted (`materialize_view_failure`), and skipped —
@@ -55,61 +103,63 @@ pub async fn materialize_all_views(
     views: Arc<Vec<Arc<dyn View>>>,
     insert_range: TimeRange,
     partition_time_delta: TimeDelta,
+    concurrency: NonZeroUsize,
 ) -> Result<()> {
-    // A DDL-defined view set can be dropped between one tick and the next, so `views` is no
-    // longer guaranteed non-empty the way it was when computed once at daemon startup.
-    if views.is_empty() {
-        return Ok(());
-    }
-    let mut last_group = views.first().unwrap().get_update_group();
-    let mut partitions_all_views = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
-            .await?,
-    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
-    let mut failures = Vec::new();
-    for view in &*views {
-        if view.get_update_group() != last_group {
-            // Views in the same update group have no inter-dependencies: a
-            // SqlBatchView whose count_src_query/extract_query reads another
-            // registered view must put that view in an *earlier* group (see
-            // SqlBatchView::new's view_factory), so same-group views can
-            // always be materialized independently, in any order, with one's
-            // failure isolated from the other's.
-            last_group = view.get_update_group();
-            partitions_all_views = Arc::new(
-                PartitionCache::fetch_overlapping_insert_range(
-                    // we are fetching more partitions than we need, could be optimized
-                    &lakehouse.lake().db_pool,
+    // Views in the same update group have no inter-dependencies: built-in factories are
+    // restricted to earlier-group sources and `validate_view_definition` rejects a DDL view
+    // reading a view of its own or a later group, so same-group views can be materialized
+    // independently, in any order, with one's failure isolated from the other's.
+    let failed = run_update_groups(
+        &views,
+        |v| v.get_update_group(),
+        concurrency,
+        || PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range),
+        |view, partitions_all_views| {
+            let view = view.clone();
+            let lakehouse = lakehouse.clone();
+            let null_response_writer = null_response_writer.clone();
+            async move {
+                let view_set_name = view.get_view_set_name();
+                let view_instance_id = view.get_view_instance_id();
+                let res = materialize_partition_range(
+                    partitions_all_views,
+                    lakehouse,
+                    view,
                     insert_range,
+                    partition_time_delta,
+                    null_response_writer,
                 )
-                .await?,
-            );
-        }
-        let view_set_name = view.get_view_set_name();
-        let view_instance_id = view.get_view_instance_id();
-        if let Err(e) = materialize_partition_range(
-            partitions_all_views.clone(),
-            lakehouse.clone(),
-            view.clone(),
-            insert_range,
-            partition_time_delta,
-            null_response_writer.clone(),
-        )
-        .await
-        {
-            error!("materialize_all_views: {view_set_name} {view_instance_id} failed: {e:?}");
-            imetric!(
-                "materialize_view_failure",
-                "count",
-                view_set_name = view_set_name,
-                view_instance_id = view_instance_id,
-                1
-            );
-            failures.push(format!("{view_set_name} {view_instance_id}"));
-        }
-    }
-    if !failures.is_empty() {
+                .await;
+                if let Err(e) = &res {
+                    error!(
+                        "materialize_all_views: {view_set_name} {view_instance_id} failed: {e:?}"
+                    );
+                    imetric!(
+                        "materialize_view_failure",
+                        "count",
+                        view_set_name = view_set_name,
+                        view_instance_id = view_instance_id,
+                        1
+                    );
+                }
+                res
+            }
+        },
+    )
+    .await?;
+    if !failed.is_empty() {
+        let failures: Vec<String> = failed
+            .iter()
+            .map(|(i, _)| {
+                let view = &views[*i];
+                format!(
+                    "{} {}",
+                    view.get_view_set_name(),
+                    view.get_view_instance_id()
+                )
+            })
+            .collect();
         anyhow::bail!(
             "materialize_all_views: {} view(s) failed:\n{}",
             failures.len(),
@@ -139,6 +189,7 @@ impl TaskCallback for EveryDayTask {
             views,
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
+            NonZeroUsize::MIN,
         )
         .await
     }
@@ -246,6 +297,7 @@ impl TaskCallback for EveryHourTask {
             views,
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
+            NonZeroUsize::MIN,
         )
         .await
     }
@@ -272,15 +324,23 @@ impl TaskCallback for EveryMinuteTask {
             views,
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
+            NonZeroUsize::MIN,
         )
         .await
     }
 }
 
+/// Environment variable bounding how many views of one update group the every-second pass
+/// materializes at once.
+pub const SECONDS_MATERIALIZATION_CONCURRENCY_ENV: &str =
+    "MICROMEGAS_SECONDS_MATERIALIZATION_CONCURRENCY";
+pub const DEFAULT_SECONDS_MATERIALIZATION_CONCURRENCY: u64 = 8;
+
 /// task running once a second to materialize newest partitions
 pub struct EverySecondTask {
     pub lakehouse: Arc<LakehouseContext>,
     pub view_registry: Arc<ViewRegistry>,
+    pub concurrency: NonZeroUsize,
 }
 
 #[async_trait]
@@ -288,6 +348,11 @@ impl TaskCallback for EverySecondTask {
     #[span_fn]
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         let delay = Utc::now() - task_scheduled_time;
+        imetric!(
+            "every_second_task_delay",
+            "ms",
+            delay.num_milliseconds() as u64
+        );
         if delay > TimeDelta::seconds(10) {
             // we don't want to accumulate too much delay - the minutes task will fill the missing data
             warn!("skipping `seconds` task, delay={delay}");
@@ -299,13 +364,22 @@ impl TaskCallback for EverySecondTask {
         // we only try to process a single partition per view
         let end_range = trunc_task_time - partition_time_delta;
         let views = sorted_views_from_registry(&self.view_registry);
-        materialize_all_views(
+        let pass_begin = Utc::now();
+        let res = materialize_all_views(
             self.lakehouse.clone(),
             views,
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
+            self.concurrency,
         )
-        .await
+        .await;
+        let elapsed = Utc::now() - pass_begin;
+        imetric!(
+            "every_second_pass_duration",
+            "ms",
+            elapsed.num_milliseconds() as u64
+        );
+        res
     }
 }
 
@@ -496,6 +570,11 @@ where
             lakehouse: lakehouse.clone(),
         }),
     )?;
+    let seconds_concurrency = NonZeroUsize::new(resolve_u64_env(
+        SECONDS_MATERIALIZATION_CONCURRENCY_ENV,
+        DEFAULT_SECONDS_MATERIALIZATION_CONCURRENCY,
+    ) as usize)
+    .unwrap_or(NonZeroUsize::MIN);
     let every_second = CronTask::new(
         String::from("every second"),
         TimeDelta::seconds(1),
@@ -503,6 +582,7 @@ where
         Arc::new(EverySecondTask {
             lakehouse,
             view_registry: view_registry.clone(),
+            concurrency: seconds_concurrency,
         }),
     )?;
 

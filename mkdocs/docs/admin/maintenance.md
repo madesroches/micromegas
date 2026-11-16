@@ -20,6 +20,7 @@ It reads the lake from the environment:
 | `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` | No | Cap on total spill-file bytes across all concurrent work, in MB; default 100 GB (DataFusion's own default), far larger than a typical Fargate container's local disk. Applies the same way as on `flight-sql-srv`: exceeding the cap fails whichever task's spill write pushes past it, process-wide and shared across all concurrent work, not necessarily the task that consumed most of the budget |
 | `MICROMEGAS_STATIC_TABLES_URL` | No | Auto-discovery source for static JSON/CSV tables (see [FlightSQL](flight-sql.md); URI forms in [Object Storage](object-storage.md)). Set it identically on every role that builds a lakehouse — this daemon resolves it too, so a [materialized view](materialized-views.md) whose extract query reads a static table builds the same way here as it does on `flight-sql-srv` |
 | `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` | No | How often the daemon reloads [DDL-defined materialized views](materialized-views.md) from Postgres (default `60`). The daemon now picks up a view set created, replaced, or dropped by `CREATE`/`DROP MATERIALIZED VIEW` without a restart, bounded by this interval |
+| `MICROMEGAS_SECONDS_MATERIALIZATION_CONCURRENCY` | No | How many views of one update group the every-second task materializes concurrently (default `8`; `0` is treated as `1`). The minute, hour and day tasks stay serial. Up to 5 every-second passes can overlap, so in-flight view work is bounded by 5 × this value. In the [monolith](monolith.md), all in-flight work shares the single lake connection pool with ingestion and FlightSQL, so lower the value if queries or ingestion slow down during materialization |
 
 Lakehouse schema migrations run automatically at service startup. The v7
 migration runs `CREATE EXTENSION IF NOT EXISTS btree_gist` (required by the
@@ -58,7 +59,8 @@ materialized in the same pass. A failing view is logged and counted (see
 [`materialize_view_failure`](#materialize_view_failure) below); if any view
 failed, the pass as a whole is still reported as failed so the failure
 surfaces in the daemon's logs, but that failure is attributed per view rather
-than to whichever view happened to fail first.
+than to whichever view happened to fail first. Views of one update group may run concurrently; the semantics
+are unchanged and every failed view is still listed.
 
 ### `materialize_view_failure`
 
@@ -67,6 +69,14 @@ Each of the four materialization tasks (every second/minute/hour/day) emits
 view_instance_id}`) as one event with `value = 1` per failed view per
 materialization pass. To count failures over a window, use `count(*)` or
 `sum(value)`.
+
+### `every_second_task_delay` and `every_second_pass_duration`
+
+The every-second task emits `every_second_task_delay` (`ms`) on every tick, including
+skipped ones: the time between the scheduled and the actual start. A pass is skipped
+when this exceeds 10 000 ms, so alert on it approaching that value.
+`every_second_pass_duration` (`ms`) is the wall time of one materialization pass, emitted
+whether it succeeded or failed.
 
 Run a **single** `telemetry-maintenance-srv` instance per lake. The scheduled
 tasks are not partitioned across instances, so multiple daemons would
@@ -83,7 +93,7 @@ consolidated into coarser ones:
 
 | Task | Period | Work |
 |---|---|---|
-| Every second | 1 s | Materialize the newest 1-second partitions. Skipped when the daemon is more than 10 s behind — the minute task backfills the gap. |
+| Every second | 1 s | Materialize the newest 1-second partitions; the views of one update group are materialized concurrently. Skipped when the daemon is more than 10 s behind — the minute task backfills the gap. |
 | Every minute | 1 min | Materialize 1-minute partitions. |
 | pg_stats | 1 min | Sample the metadata Postgres's `pg_stat_*` views (see [below](#metadata-postgres-self-observability)). |
 | Every hour | 1 h | Retention cleanup (see below), the `blocks`/`streams`/`audience` integrity counts (see [below](#block_stream_process_id_mismatch)), then materialize 1-hour partitions. |
