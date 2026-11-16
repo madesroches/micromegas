@@ -196,6 +196,7 @@ Both metrics are emitted in `EverySecondTask::run`, the only task the change tar
 - The lake pool size (sqlx default of 10) is left unchanged. The default concurrency of 8 stays
   under it in steady state, and connections are held only for short queries. If acquire waits
   show up under overlap, making the pool size configurable is a follow-up.
+- Default concurrency of 8 confirmed by the user.
 
 ## Documentation
 
@@ -257,8 +258,3 @@ I/O latency, so no unit test can show it.
    Expected: well under 10 000 ms. Also check `/tmp/daemon.log` for `materialize_all_views`
    errors or pool acquire timeouts. Expected: none.
 
-## Open Questions
-
-- Is 8 the right default for the production-sized daemon (about 23 views across a few groups)?
-  The largest group's size is the real ceiling. If one group holds most views, 8 gives most of
-  the gain. Revisit with the `every_second_pass_duration` data.
