@@ -59,8 +59,9 @@ materialized in the same pass. A failing view is logged and counted (see
 [`materialize_view_failure`](#materialize_view_failure) below); if any view
 failed, the pass as a whole is still reported as failed so the failure
 surfaces in the daemon's logs, but that failure is attributed per view rather
-than to whichever view happened to fail first. Views of one update group may run concurrently; the semantics
-are unchanged and every failed view is still listed.
+than to whichever view happened to fail first. Views of one update group may
+run concurrently; the semantics are unchanged and every failed view is still
+listed.
 
 ### `materialize_view_failure`
 
@@ -72,11 +73,11 @@ materialization pass. To count failures over a window, use `count(*)` or
 
 ### `every_second_task_delay` and `every_second_pass_duration`
 
-The every-second task emits `every_second_task_delay` (`ms`) on every tick, including
-skipped ones: the time between the scheduled and the actual start. A pass is skipped
-when this exceeds 10 000 ms, so alert on it approaching that value.
-`every_second_pass_duration` (`ms`) is the wall time of one materialization pass, emitted
-whether it succeeded or failed.
+The every-second task emits `every_second_task_delay` (`ms`) on every tick,
+including skipped ones: the time between the scheduled and the actual start.
+A pass is skipped when this exceeds 10 000 ms, so alert on it approaching that
+value. `every_second_pass_duration` (`ms`) is the wall time of one
+materialization pass, emitted whether it succeeded or failed.
 
 Run a **single** `telemetry-maintenance-srv` instance per lake. The scheduled
 tasks are not partitioned across instances, so multiple daemons would
