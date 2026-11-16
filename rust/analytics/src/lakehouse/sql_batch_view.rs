@@ -261,7 +261,7 @@ impl View for SqlBatchView {
         self.view_instance_id.clone()
     }
 
-    #[span_fn]
+    #[span_fn(view = self.get_view_set_name())]
     async fn make_batch_partition_spec(
         &self,
         lakehouse: Arc<LakehouseContext>,

@@ -164,7 +164,7 @@ impl PartitionSpec for SqlPartitionSpec {
         self.record_count.to_le_bytes().to_vec()
     }
 
-    #[span_fn]
+    #[span_fn(view = self.view_metadata.view_set_name)]
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
         // Allow empty record_count - write_partition_from_rows will create
         // an empty partition record if no data is sent through the channel
@@ -197,14 +197,14 @@ impl PartitionSpec for SqlPartitionSpec {
 }
 
 impl SqlPartitionSpec {
-    #[span_fn]
+    #[span_fn(view = self.view_metadata.view_set_name)]
     async fn extract_plan(&self) -> Result<SendableRecordBatchStream> {
         let df = self.ctx.sql(&self.extract_query).await?;
         self.execute_extract_query(df).await
     }
 
     // Takes `tx` by value so the writer task sees the channel close before it is awaited.
-    #[span_fn]
+    #[span_fn(view = self.view_metadata.view_set_name)]
     async fn extract_stream(
         &self,
         mut stream: SendableRecordBatchStream,
@@ -230,7 +230,7 @@ impl SqlPartitionSpec {
 /// declares the ordering the resulting partition's rows are guaranteed to satisfy (see
 /// `SqlBatchView::with_merge_sort_order`); pass `None` for views that make no such guarantee.
 #[expect(clippy::too_many_arguments)]
-#[span_fn]
+#[span_fn(view = view_metadata.view_set_name)]
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
     transformer: Arc<dyn RecordBatchTransformer>,
@@ -242,7 +242,7 @@ pub async fn fetch_sql_partition_spec(
     insert_range: TimeRange,
     sort_order: Option<Vec<String>>,
 ) -> Result<SqlPartitionSpec> {
-    let batches = count_query(&ctx, &count_src_sql).await?;
+    let batches = count_query(&ctx, &count_src_sql, &view_metadata.view_set_name).await?;
     if batches.len() != 1 {
         anyhow::bail!("fetch_sql_partition_spec: query should return a single batch");
     }
@@ -271,8 +271,12 @@ pub async fn fetch_sql_partition_spec(
     ))
 }
 
-#[span_fn]
-async fn count_query(ctx: &SessionContext, count_src_sql: &str) -> Result<Vec<RecordBatch>> {
+#[span_fn(view = view_set_name)]
+async fn count_query(
+    ctx: &SessionContext,
+    count_src_sql: &str,
+    view_set_name: &str,
+) -> Result<Vec<RecordBatch>> {
     let df = ctx.sql(count_src_sql).await?;
     Ok(df.collect().await?)
 }
