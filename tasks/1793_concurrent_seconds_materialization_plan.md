@@ -28,11 +28,18 @@ can be measured and the skip threshold can be alerted on.
 - `daemon()` (`maintenance.rs:434`) builds the tasks and runs the seconds task with
   `run_tasks_forever(vec![every_second], 5, ...)`. Up to 5 passes can be in flight at once.
 - `materialize_partition_range` only reads `existing_partitions_all_views: Arc<PartitionCache>`.
-  Same-group views have no inter-dependencies (documented in `materialize_all_views`, and enforced
-  by `SqlBatchView::new`'s view factory, which only resolves views from earlier groups).
+  Same-group views have no inter-dependencies (documented in `materialize_all_views`). This is
+  enforced by restricted view factories for the built-ins (`processes` and `streams` get
+  `ViewFactory::new(vec![blocks_view])`, `view_factory.rs:329,337`) and, for DDL views, by
+  `validate_view_definition` (`view_definition.rs:290-345, 546-561`), which rejects an
+  `update_group` <= the max read group.
 - Postgres: the lake pool comes from `pool_options(policy).connect(..)`
-  (`rust/ingestion/src/data_lake_connection.rs:347`) with sqlx's default `max_connections` (10)
-  and acquire timeout (30 s). Each view holds a connection only for short queries. The advisory
+  (`rust/ingestion/src/data_lake_connection.rs:347`) or, in the monolith, from
+  `read_write_pool_options` (`rust/ingestion/src/remote_data_lake.rs:57`), with sqlx's default
+  `max_connections` (10) and acquire timeout (30 s). Each view holds a connection only for short
+  queries, except the blocks view (`MetadataPartitionSpec::write`), which holds one pooled
+  connection for its whole streaming write. It is alone in group 1000, so in-group concurrency
+  does not worsen that. The advisory
   lock in `insert_partition_transaction` (`write_partition.rs:489`) is held only for the
   retire + insert transaction, after the parquet file has been written. Its key is per
   `(view_set, instance, range)`, so different views in one pass never contend on it.
@@ -77,19 +84,14 @@ Logic:
   already sorted by group).
 - For each group: `let ctx = Arc::new(fetch_group_context().await?);` then
   `futures::stream::iter(group.iter().enumerate()).map(|(i, item)| run(item, ctx.clone()).map(move |r| (offset + i, r))).buffer_unordered(concurrency.get())`,
-  and collect the `Err`s with their global index.
+  and collect the `Err`s with their global index. `offset` is the running sum of the lengths of the
+  earlier groups. The file needs `futures::{FutureExt, StreamExt}` imported.
 - Sort the failures by index before returning. `buffer_unordered` finishes them in any order,
   and sorting keeps the aggregated error text the same as the serial path.
 
 With `concurrency == 1`, `buffer_unordered(1)` polls exactly one future at a time in input order.
 That is the current serial loop, so the minute, hourly and daily tasks keep their behavior with no
 separate code path.
-
-`buffer_unordered` rather than `tokio::spawn` / `JoinSet`: the work is mostly I/O bound, there is
-no `'static` bound on the context or items, and the futures stay under the `materialize_all_views`
-span. DataFusion spawns parquet encoding and block decoding, but SQL planning, the count query,
-stream polling, merge streaming and the blocks view row loop run on the shared task. That is
-acceptable for 1 s buckets.
 
 ### 2. `materialize_all_views` gets a `concurrency` parameter
 
@@ -105,7 +107,7 @@ pub async fn materialize_all_views(
 
 The body becomes:
 
-- `run_update_groups(&views, |v| v.get_update_group(), concurrency, || PartitionCache::fetch_overlapping_insert_range(&pool, insert_range), |view, cache| { let (view, lakehouse, ..) = (view.clone(), lakehouse.clone(), ..); async move { ... } })`.
+- `run_update_groups(&views, |v| v.get_update_group(), concurrency, || PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range), |view, cache| { let (view, lakehouse, ..) = (view.clone(), lakehouse.clone(), ..); async move { ... } })`.
   The closure clones the view (`Arc<dyn View>`), the lakehouse and the response writer per call
   into the `async move` block, so the future owns everything and the closure stays `Fn`.
 - The `run` closure calls `materialize_partition_range` and, on error, does the existing `error!`
@@ -116,7 +118,8 @@ The body becomes:
 - The empty-views early return disappears, because `chunk_by` on an empty slice yields no groups
   and so no cache fetch happens. Keep the doc comment's failure-policy paragraph. Add one sentence
   saying that views within a group may run concurrently and that the group boundary is a barrier.
-  Move the inline "no inter-dependencies" comment onto `run_update_groups`'s call site.
+  Move the inline "no inter-dependencies" comment onto `run_update_groups`'s call site, reworded to
+  name that enforcement (restricted factories and `validate_view_definition`).
 
 The parameter is a `NonZeroUsize` with no default, so the compiler lists every caller (the four
 tasks and the ignored live test). This is a Rust API break, recorded in the changelog.
@@ -130,14 +133,7 @@ tasks and the ignored live test). This is a Rust API break, recorded in the chan
   tasks pass `NonZeroUsize::MIN`.
 - The monolith runs `daemon()`, so it picks up the setting with no extra work.
 
-### 4. `max_parallelism` stays at 5
-
-Total in-flight view work is at most `5 × concurrency` (40 with the default). In steady state a
-concurrent pass should fit in its 1 s period, so overlap rarely engages and only about
-`concurrency` views run at a time. The 5-slot overlap stays as a buffer for a slow pass, for
-example an object-store hiccup. The product is documented rather than tuned.
-
-### 5. Telemetry
+### 4. Telemetry
 
 Both metrics are emitted in `EverySecondTask::run`, the only task the change targets:
 
@@ -155,7 +151,7 @@ Both metrics are emitted in `EverySecondTask::run`, the only task the change tar
    - Rewrite `materialize_all_views` on top of it with the new `concurrency` parameter (section 2).
    - Add the env const and default, `EverySecondTask.concurrency`, the read in `daemon()`, and
      `NonZeroUsize::MIN` in the other three tasks (section 3).
-   - Add the two metrics in `EverySecondTask::run` (section 5).
+   - Add the two metrics in `EverySecondTask::run` (section 4).
 2. `rust/public/tests/materialize_fail_isolation_tests.rs`: pass `NonZeroUsize::new(2).unwrap()` so
    that the existing live test also runs the two failing views concurrently.
 3. New `rust/public/tests/run_update_groups_tests.rs` with the unit tests below.
@@ -174,23 +170,6 @@ Both metrics are emitted in `EverySecondTask::run`, the only task the change tar
 - `mkdocs/docs/admin/maintenance.md`
 - `CHANGELOG.md`
 
-## Trade-offs
-
-- **Env var vs. a registered DB setting (`SETTINGS` / `DbOverrides`).** A DB setting could be
-  tuned from Admin → Settings without a restart. However, it needs a new `SettingKind` range,
-  `DbOverrides` field, loader and accessor, and the daemon would be its only reader. An env var
-  read at startup matches `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` and the other daemon knobs.
-  It can be promoted later if runtime tuning turns out to be needed.
-- **Raise `max_parallelism` instead.** That adds more overlapping passes but does not shorten any
-  of them. Overlapping passes of the same view also serialize on that view's advisory lock and
-  redo each other's freshness checks. Concurrency within a pass fixes the pass duration itself.
-- **`buffer_unordered` vs. `buffered`.** `buffered` keeps output order but counts finished,
-  unyielded results against the limit, so one slow view would hold up the next ones. Sorting the
-  failures afterwards gives deterministic error text without that cost.
-- **Concurrency for the minute, hourly and daily tasks too.** Not done: their buckets are much
-  larger, so concurrent merges and extracts need much more memory. That is a separate decision to
-  make with memory data, as the issue states.
-
 ## Decisions
 
 - No new live-DB test for "concurrent views produce the same partitions as the serial path":
@@ -201,6 +180,10 @@ Both metrics are emitted in `EverySecondTask::run`, the only task the change tar
   under it in steady state, and connections are held only for short queries. If acquire waits
   show up under overlap, making the pool size configurable is a follow-up.
 - Default concurrency of 8 confirmed by the user.
+- Concurrency is an env var rather than a DB setting, matching `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`.
+- `max_parallelism` stays 5, so in-flight view work is bounded by 5 x concurrency.
+- `buffer_unordered` rather than `tokio::spawn` / `JoinSet` (no `'static` bound needed on the context or items) or `buffered` (finished results would count against the limit). Some DataFusion work (planning, count query, stream polling) runs on the shared task.
+- The minute, hourly and daily tasks stay at concurrency 1 until there is memory data.
 
 ## Documentation
 
@@ -242,10 +225,6 @@ of hanging.
   the second group runs.
 - **Empty input:** no fetch, no failures.
 
-Existing `materialize_fail_isolation_tests.rs` (ignored, live DB), run at concurrency 2: it shows
-that the real `View` / `PartitionCache` wiring still isolates and reports both failures when they
-run concurrently. A fake cannot reproduce that wiring.
-
 ## Manual Verification
 
 Performance acceptance (a pass costs about the slowest view, not the sum) depends on real
@@ -258,6 +237,8 @@ I/O latency, so no unit test can show it.
    Expected: roughly the sum of per-view costs (the current baseline).
 2. Stop the services, restart with the variable unset (default 8), and run the same query.
    Expected: a clearly lower average, close to the slowest view plus one cache fetch per group.
+   Wait more than 5 minutes after the restart before querying, or filter to the new daemon's
+   process_id, so the window does not mix concurrency-1 and concurrency-8 samples.
 3. Run `micromegas-query "SELECT max(value) FROM measures WHERE name = 'every_second_task_delay'" --begin 5m`.
    Expected: well under 10 000 ms. Also check `/tmp/daemon.log` for `materialize_all_views`
    errors or pool acquire timeouts. Expected: none.
