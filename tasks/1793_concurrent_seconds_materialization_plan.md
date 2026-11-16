@@ -51,7 +51,7 @@ can be measured and the skip threshold can be alerted on.
 
 Pull the group/barrier/fan-out logic out of `materialize_all_views` into a `pub` generic
 function in `maintenance.rs`. Nothing in it is specific to views, so it can be unit-tested with
-plain values and fake futures, with no DB:
+plain values and fake futures, with no DB (the real cache fetch needs Postgres):
 
 ```rust
 /// Runs `run` over `items`, grouped by contiguous runs of equal `group_of`, with at most
@@ -85,10 +85,11 @@ With `concurrency == 1`, `buffer_unordered(1)` polls exactly one future at a tim
 That is the current serial loop, so the minute, hourly and daily tasks keep their behavior with no
 separate code path.
 
-`buffer_unordered` rather than `tokio::spawn` / `JoinSet`: the work is I/O bound, the futures
-borrow `group` and the closures (no `'static` bound), and they stay under the
-`materialize_all_views` span. DataFusion still spawns its own tasks for execution, so the CPU part
-of each view is not serialized on this task.
+`buffer_unordered` rather than `tokio::spawn` / `JoinSet`: the work is mostly I/O bound, there is
+no `'static` bound on the context or items, and the futures stay under the `materialize_all_views`
+span. DataFusion spawns parquet encoding and block decoding, but SQL planning, the count query,
+stream polling, merge streaming and the blocks view row loop run on the shared task. That is
+acceptable for 1 s buckets.
 
 ### 2. `materialize_all_views` gets a `concurrency` parameter
 
@@ -104,7 +105,9 @@ pub async fn materialize_all_views(
 
 The body becomes:
 
-- `run_update_groups(&views, |v| v.get_update_group(), concurrency, || PartitionCache::fetch_overlapping_insert_range(&pool, insert_range), |view, cache| async { ... })`.
+- `run_update_groups(&views, |v| v.get_update_group(), concurrency, || PartitionCache::fetch_overlapping_insert_range(&pool, insert_range), |view, cache| { let (view, lakehouse, ..) = (view.clone(), lakehouse.clone(), ..); async move { ... } })`.
+  The closure clones the view (`Arc<dyn View>`), the lakehouse and the response writer per call
+  into the `async move` block, so the future owns everything and the closure stays `Fn`.
 - The `run` closure calls `materialize_partition_range` and, on error, does the existing `error!`
   and `imetric!("materialize_view_failure", ...)` before returning the error. The metric and log
   are emitted when the view fails, as they are today.
@@ -138,10 +141,11 @@ example an object-store hiccup. The product is documented rather than tuned.
 
 Both metrics are emitted in `EverySecondTask::run`, the only task the change targets:
 
-- `imetric!("every_second_task_delay", "ms", delay)`, emitted before the skip check so that
-  skipped passes are reported too. This is the value the 10 s threshold applies to, so alerts
-  should use it.
-- `imetric!("every_second_pass_duration", "ms", elapsed)` around `materialize_all_views`,
+- `imetric!("every_second_task_delay", "ms", delay.num_milliseconds() as u64)`, emitted before
+  the skip check so that skipped passes are reported too. This is the value the 10 s threshold
+  applies to, so alerts should use it. The existing cron_task `task_tick_delay` /
+  `task_tick_latency` metrics are not split per task.
+- `imetric!("every_second_pass_duration", "ms", elapsed.num_milliseconds() as u64)` around `materialize_all_views`,
   emitted on success and on failure. This measures the effect of the change.
 
 ## Implementation Steps
@@ -152,17 +156,21 @@ Both metrics are emitted in `EverySecondTask::run`, the only task the change tar
    - Add the env const and default, `EverySecondTask.concurrency`, the read in `daemon()`, and
      `NonZeroUsize::MIN` in the other three tasks (section 3).
    - Add the two metrics in `EverySecondTask::run` (section 5).
-2. `rust/public/tests/materialize_fail_isolation_tests.rs`: pass `NonZeroUsize::new(2)` so that
-   the existing live test also runs the two failing views concurrently.
+2. `rust/public/tests/materialize_fail_isolation_tests.rs`: pass `NonZeroUsize::new(2).unwrap()` so
+   that the existing live test also runs the two failing views concurrently.
 3. New `rust/public/tests/run_update_groups_tests.rs` with the unit tests below.
-4. Docs and changelog (see Documentation).
-5. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas`.
+4. `rust/public/Cargo.toml`: register the new test with
+   `[[test]] name = "run_update_groups_tests" path = "tests/run_update_groups_tests.rs" required-features = ["server"]`,
+   like the `materialize_fail_isolation_tests` entry.
+5. Docs and changelog (see Documentation).
+6. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas --features server`.
 
 ## Files to Modify
 
 - `rust/public/src/servers/maintenance.rs`
 - `rust/public/tests/materialize_fail_isolation_tests.rs`
 - `rust/public/tests/run_update_groups_tests.rs` (new)
+- `rust/public/Cargo.toml`
 - `mkdocs/docs/admin/maintenance.md`
 - `CHANGELOG.md`
 
@@ -179,10 +187,6 @@ Both metrics are emitted in `EverySecondTask::run`, the only task the change tar
 - **`buffer_unordered` vs. `buffered`.** `buffered` keeps output order but counts finished,
   unyielded results against the limit, so one slow view would hold up the next ones. Sorting the
   failures afterwards gives deterministic error text without that cost.
-- **Generic `run_update_groups` vs. testing `materialize_all_views` directly.** Testing it directly
-  needs a live Postgres (the cache fetch) and real views. With the generic core, the concurrency,
-  barrier and failure-ordering logic is fully covered by no-DB tests. The view-specific shell
-  that is left is thin.
 - **Concurrency for the minute, hourly and daily tasks too.** Not done: their buckets are much
   larger, so concurrent merges and extracts need much more memory. That is a separate decision to
   make with memory data, as the issue states.
