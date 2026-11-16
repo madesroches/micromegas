@@ -19,6 +19,7 @@ use micromegas::ingestion::data_lake_connection::{
 use micromegas::servers::maintenance::materialize_all_views;
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::prelude::*;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 /// A view whose `count_src_query` always errors (selects from a nonexistent
@@ -121,9 +122,15 @@ async fn materialize_all_views_isolates_same_group_failures() -> Result<()> {
     let insert_range = TimeRange::new(begin_range, end_range);
     let views = Arc::new(vec![first_view, second_view]);
 
-    let err = materialize_all_views(lakehouse, views, insert_range, TimeDelta::minutes(1))
-        .await
-        .expect_err("both views should fail to materialize");
+    let err = materialize_all_views(
+        lakehouse,
+        views,
+        insert_range,
+        TimeDelta::minutes(1),
+        NonZeroUsize::new(2).expect("2 is non-zero"),
+    )
+    .await
+    .expect_err("both views should fail to materialize");
     let message = format!("{err:?}");
     assert!(
         message.contains("materialize_fail_isolation_first_view"),
