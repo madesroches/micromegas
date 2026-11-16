@@ -43,8 +43,9 @@ can be measured and the skip threshold can be alerted on.
   lock in `insert_partition_transaction` (`write_partition.rs:489`) is held only for the
   retire + insert transaction, after the parquet file has been written. Its key is per
   `(view_set, instance, range)`, so different views in one pass never contend on it.
-- `#[span_fn]` async spans set up their context on every poll (`SpanContextFuture`,
-  `rust/tracing/src/spans/instrumented_future.rs`), so futures that interleave on one task keep
+- `#[span_fn]` async spans wrap the body in `InstrumentedFuture`
+  (`rust/tracing/src/spans/instrumented_future.rs`), which captures the parent at construction
+  and pushes/pops its span on every poll, so futures that interleave on one task keep
   correct nesting. `block_partition_spec.rs:148` already uses `buffer_unordered` under spans.
 - Existing coverage: `rust/public/tests/materialize_fail_isolation_tests.rs` (`#[ignore]`,
   live DB) checks that two failing same-group views are both reported.
