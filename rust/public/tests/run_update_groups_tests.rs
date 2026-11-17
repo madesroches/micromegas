@@ -325,12 +325,7 @@ async fn panicking_item_is_a_failure() -> Result<()> {
     assert_eq!(ran.load(Ordering::SeqCst), 4);
     let idx: Vec<usize> = failures.iter().map(|(i, _)| *i).collect();
     assert_eq!(idx, vec![1]);
-    assert!(
-        failures[0]
-            .1
-            .to_string()
-            .contains("view update task failed")
-    );
+    assert!(failures[0].1.to_string().contains("update task failed"));
     Ok(())
 }
 

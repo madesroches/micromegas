@@ -73,8 +73,8 @@ where
     let mut offset = 0;
     for group in items.chunk_by(|a, b| group_of(a) == group_of(b)) {
         let ctx = Arc::new(fetch_group_context().await?);
-        // Futures are lazy until spawned, so building them all now only keeps the borrow of
-        // `items` out of the spawning loop.
+        // Build the futures eagerly so the queue holds no closure borrowing `items`/`run`
+        // across awaits, which breaks the `Send` proof for spawned callers.
         let mut queue = group
             .iter()
             .enumerate()
@@ -96,7 +96,7 @@ where
                 Some((_, Ok(Ok(())))) => {}
                 Some((i, Ok(Err(e)))) => failures.push((i, e)),
                 Some((i, Err(e))) => {
-                    failures.push((i, anyhow!("view update task failed: {e}")));
+                    failures.push((i, anyhow!("update task failed: {e}")));
                 }
                 None => break,
             }
