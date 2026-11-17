@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
+use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use micromegas_analytics::audience::audience_column_mismatch;
 use micromegas_analytics::delete::delete_old_data;
@@ -19,7 +20,7 @@ use std::future::Future;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::{JoinError, JoinSet};
+use tokio::task::{AbortHandle, JoinError, JoinSet};
 
 use super::cron_task::{CronTask, TaskCallback};
 use super::pg_stats::PgStatsTask;
@@ -35,9 +36,24 @@ fn sorted_views_from_registry(registry: &ViewRegistry) -> Arc<Vec<Arc<dyn View>>
     Arc::new(views)
 }
 
+/// Aborts the spawned tasks it tracks when dropped, so cancelling a pass cancels its in-flight work.
+struct AbortOnDrop(Vec<AbortHandle>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        for handle in &self.0 {
+            handle.abort();
+        }
+    }
+}
+
 /// Runs `run` over `items`, grouped by contiguous runs of equal `group_of`, with at most
 /// `concurrency` items in flight. Each group starts after the previous one has fully finished,
 /// and gets a fresh `fetch_group_context()` result.
+///
+/// Each item runs as its own spawned task so CPU-bound work spreads across runtime workers;
+/// items start in input order and dropping the returned future aborts the in-flight tasks.
+/// A task that panics is reported as a failure of its item, like an `Err`.
 /// Returns per-item failures (global index, error) in input order. A `fetch_group_context`
 /// error aborts the pass.
 pub async fn run_update_groups<T, K, C, FetchFut, RunFut>(
@@ -49,32 +65,45 @@ pub async fn run_update_groups<T, K, C, FetchFut, RunFut>(
 ) -> Result<Vec<(usize, anyhow::Error)>>
 where
     K: PartialEq,
+    C: Send + Sync + 'static,
     FetchFut: Future<Output = Result<C>>,
-    RunFut: Future<Output = Result<()>>,
+    RunFut: Future<Output = Result<()>> + Send + 'static,
 {
     let mut failures = Vec::new();
     let mut offset = 0;
     for group in items.chunk_by(|a, b| group_of(a) == group_of(b)) {
         let ctx = Arc::new(fetch_group_context().await?);
-        // Futures are built eagerly (they are lazy until polled) so the stream does not carry a
-        // closure borrowing the items, which breaks the `Send` proof for spawned callers.
-        let futs: Vec<_> = group
+        // Build the futures eagerly so the queue holds no closure borrowing `items`/`run`
+        // across awaits, which breaks the `Send` proof for spawned callers.
+        let mut queue = group
             .iter()
             .enumerate()
-            .map(|(i, item)| run(item, ctx.clone()).map(move |r| (offset + i, r)))
-            .collect();
-        let results: Vec<(usize, Result<()>)> = futures::stream::iter(futs)
-            .buffer_unordered(concurrency.get())
-            .collect()
-            .await;
-        failures.extend(
-            results
-                .into_iter()
-                .filter_map(|(i, r)| r.err().map(|e| (i, e))),
-        );
+            .map(|(i, item)| (offset + i, run(item, ctx.clone())))
+            .collect::<Vec<_>>()
+            .into_iter();
+        let mut guard = AbortOnDrop(Vec::new());
+        let mut running = FuturesUnordered::new();
+        loop {
+            while running.len() < concurrency.get() {
+                let Some((i, fut)) = queue.next() else {
+                    break;
+                };
+                let handle = spawn_with_context(fut);
+                guard.0.push(handle.abort_handle());
+                running.push(handle.map(move |r| (i, r)));
+            }
+            match running.next().await {
+                Some((_, Ok(Ok(())))) => {}
+                Some((i, Ok(Err(e)))) => failures.push((i, e)),
+                Some((i, Err(e))) => {
+                    failures.push((i, anyhow!("update task failed: {e}")));
+                }
+                None => break,
+            }
+        }
         offset += group.len();
     }
-    // buffer_unordered completes in any order; sorting keeps the error text deterministic.
+    // Items complete in any order; sorting keeps the error text deterministic.
     failures.sort_by_key(|(i, _)| *i);
     Ok(failures)
 }
