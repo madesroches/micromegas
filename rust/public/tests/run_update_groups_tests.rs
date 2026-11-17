@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
 fn nz(n: usize) -> NonZeroUsize {
@@ -266,5 +266,105 @@ async fn empty_input_does_nothing() -> Result<()> {
     .await?;
     assert!(failures.is_empty());
     assert_eq!(fetches.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn items_run_on_separate_workers() -> Result<()> {
+    const N: usize = 3;
+    let arrived = Arc::new(AtomicUsize::new(0));
+    let items: Vec<i32> = (0..N as i32).collect();
+    let failures = run_update_groups(
+        &items,
+        |_| 0,
+        nz(N),
+        || async { Ok(()) },
+        |_, _| {
+            let arrived = arrived.clone();
+            async move {
+                arrived.fetch_add(1, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                // No `.await` here: only items on separate workers can all arrive.
+                while arrived.load(Ordering::SeqCst) < N {
+                    if Instant::now() > deadline {
+                        return Err(anyhow!("items did not run in parallel"));
+                    }
+                    std::hint::spin_loop();
+                }
+                Ok(())
+            }
+        },
+    )
+    .await?;
+    assert!(failures.is_empty(), "{failures:?}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn panicking_item_is_a_failure() -> Result<()> {
+    let ran = Arc::new(AtomicUsize::new(0));
+    let items: Vec<(i32, i32)> = vec![(0, 0), (0, 1), (0, 2), (1, 3)];
+    let failures = run_update_groups(
+        &items,
+        |(g, _)| *g,
+        nz(2),
+        || async { Ok(()) },
+        |(_, i), _| {
+            let ran = ran.clone();
+            let i = *i;
+            async move {
+                ran.fetch_add(1, Ordering::SeqCst);
+                if i == 1 {
+                    panic!("item {i} panicked");
+                }
+                Ok(())
+            }
+        },
+    )
+    .await?;
+    assert_eq!(ran.load(Ordering::SeqCst), 4);
+    let idx: Vec<usize> = failures.iter().map(|(i, _)| *i).collect();
+    assert_eq!(idx, vec![1]);
+    assert!(
+        failures[0]
+            .1
+            .to_string()
+            .contains("view update task failed")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_the_pass_aborts_in_flight_items() -> Result<()> {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (alive_tx, alive_rx) = tokio::sync::oneshot::channel::<()>();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let alive_tx = Arc::new(Mutex::new(Some(alive_tx)));
+    let items = vec![0];
+    let pass = tokio::spawn(async move {
+        run_update_groups(
+            &items,
+            |_| 0,
+            nz(1),
+            || async { Ok(()) },
+            |_, _| {
+                let started_tx = started_tx.clone();
+                let alive_tx = alive_tx.clone();
+                async move {
+                    let _alive = alive_tx.lock().expect("alive").take();
+                    if let Some(tx) = started_tx.lock().expect("started").take() {
+                        let _ = tx.send(());
+                    }
+                    std::future::pending::<()>().await;
+                    Ok(())
+                }
+            },
+        )
+        .await
+    });
+    started_rx.await?;
+    pass.abort();
+    let res = tokio::time::timeout(Duration::from_secs(10), alive_rx).await?;
+    assert!(res.is_err(), "sender should be dropped by the abort");
     Ok(())
 }
