@@ -41,7 +41,7 @@ MCP is mounted:
 
 ```json
 {
-  "resource": "https://analytics.example.com/micromegas/mcp",
+  "resource": "https://analytics.example.com/mcp",
   "authorization_servers": ["<first configured issuer>"],
   "bearer_methods_supported": ["header"]
 }
@@ -71,10 +71,9 @@ OAuth metadata (unit tests, future embedders) it keeps today's constant challeng
 ### Route placement
 
 The metadata route sits outside the bearer middleware, next to the `/mcp` route in
-`build_mcp_routes`, and is absent when MCP is not mounted (no new surface when disabled). It is
-under `{base_path}`, which the 401 challenge names explicitly; a client that probes only the
-RFC 9728 root path works only when `base_path` is empty and the reverse proxy forwards
-`/.well-known/`. When MCP is disabled the metadata path would otherwise fall through to the SPA
+`build_mcp_routes`. It is under `{base_path}` and is found through the 401 challenge's
+`resource_metadata` parameter; it is not at the RFC 9728 well-known locations, so clients that
+ignore the header will not find it. When MCP is disabled the metadata path would otherwise fall through to the SPA
 fallback (200 `index.html`), so the disabled branch registers an explicit 404 for it as well.
 
 ### Client setup (documented)
@@ -114,7 +113,11 @@ fallback (200 `index.html`), so the disabled branch registers an explicit 404 fo
 
 1. `analytics-web-srv/src/mcp_auth.rs`: add `McpOAuthMetadata` (new, body, challenge builder) and
    a `metadata_handler`; give `mcp_bearer_middleware` state `{ provider, challenge }`.
-2. `analytics-web-srv/src/web_server.rs`: pass `&OidcClientConfig` into `build_mcp_mount`, taken
+2. `analytics-web-srv/src/web_server.rs`: add an `oauth: Option<McpOAuthMetadata>` field to
+   `McpMount` (`web_server.rs:540-545`), filled by `build_mcp_mount`; `build_mcp_routes` mounts
+   the metadata route and uses the OAuth challenge only when it is `Some`, else keeps today's
+   constant challenge. Existing `McpMount` literals in `tests/mcp_routes_tests.rs` must set the
+   field. Pass `&OidcClientConfig` into `build_mcp_mount`, taken
    from `auth_state` (`auth_state.as_ref().map(|s| &s.config)`, always `Some` when MCP mounts)
    rather than calling `from_env()` again; resolve the public URL (honour
    `MICROMEGAS_MCP_PUBLIC_URL`) and build `McpOAuthMetadata`; add the metadata route in
@@ -142,7 +145,7 @@ fallback (200 `index.html`), so the disabled branch registers an explicit 404 fo
 
 - **Metadata document vs. only a doc'd `authServerMetadataUrl`.** The override alone would work
   for Claude Code, but other MCP clients rely on discovery; the document is ~30 lines and makes
-  the server spec-conformant.
+  the server meet the MCP discovery requirement via the `resource_metadata` challenge.
 - **Proxying or hosting an authorization server ourselves** (so Google-style providers work) was
   rejected: it makes micromegas an OAuth server, a large security surface for one provider's
   limitation.
@@ -173,14 +176,13 @@ No-DB tests in `analytics-web-srv/tests/mcp_routes_tests.rs`:
    `start_services.py` passes `--disable-auth` and `/mcp` 404s).
 2. `curl -i http://127.0.0.1:3000/mcp` and check the `resource_metadata` parameter; `curl` that
    URL and check the JSON.
-3. Add the server with the `.mcp.json` above, run `/mcp` in Claude Code, complete the browser
+3. Add the server with the `.mcp.json` above (`url` set to `http://localhost:3000/mcp`, since the
+   advertised resource host comes from the redirect URI, which is localhost), run `/mcp` in Claude Code, complete the browser
    sign-in, then run `list_views`. Expected: the tools work and no token was typed. The IdP-side
    behavior (token type presented, `resource` parameter, discovery fallback) is not documented by
    the client; this is the check. It needs a real IdP and a real client, so it is not automated.
 
 ## Open Questions
 
-- Whether Claude Code accepts the access token or ID token it obtains as the bearer for each
-  target IdP; Manual Verification step 3 settles it per provider.
 - Whether to add a `micromegas-token` command (prints the cached OIDC token) so Google
   deployments can use `headersHelper`. Not needed for providers with JWT access tokens.
