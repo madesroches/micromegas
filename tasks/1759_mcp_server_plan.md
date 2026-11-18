@@ -118,7 +118,10 @@ Parse with `sqlparser` (via the `datafusion::sql::sqlparser` re-export) and reje
   statements, `CREATE/DROP MATERIALIZED VIEW`);
 - calls to a deny list of mutating table functions and scalar UDFs (`retire_partitions`,
   `materialize_partitions`, `regenerate_partitions`, `deny_queries`, and the admin-only scalar
-  UDFs `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial`).
+  UDFs `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial`), plus
+  every other admin-only function registered under `lakehouse_admin` (`list_query_denials`,
+  `list_view_set_definitions`, `check_view_merge`, ...): no admin features are exposed through MCP,
+  read-only or not. A test iterates the registered admin function names and asserts each is denied.
   `read_only.rs` matches function-call expressions as well as table factors.
   `MUTATING_TABLE_FUNCTIONS` in `view_definition.rs:280` covers table functions only and also holds
   read-only functions banned from stored scans (`view_instance`, `process_spans`,
@@ -204,9 +207,9 @@ right place for them.
   - they require `AuthType::Oidc` on the `AuthContext`. `ValidatedUser::from` also succeeds for an
     analytics key (subject = key name, no email), so the provider must check `auth_type` itself; a
     key gets the read tools only;
-  - `update_screen` and `delete_screen` refuse a screen whose `managed_by` is set, since a CLI
-    keeps those in sync from git and an agent edit would be overwritten or cause drift. This
-    refusal is new MCP-only behavior; the HTTP `update_screen` does not refuse.
+  - `managed_by` screens are editable like any other: their source of truth is backed up in git,
+    so an edit is recoverable and no MCP-specific refusal is added. The tools leave `managed_by`
+    unchanged.
 - **Attribution.** `created_by`/`updated_by` get the caller's email as in the UI, falling back to `subject` when
   the email is absent, as the HTTP handlers do. The info log
   line for each mutation also records the MCP client agent, since the row does not.
@@ -264,14 +267,15 @@ right place for them.
 
 ## Decisions
 
-- Screen write tools are opt-in, OIDC-only, and never touch `managed_by` screens (analytics keys do not write).
+- Screen write tools are opt-in and OIDC-only (analytics keys do not write); `managed_by` screens are editable because they are backed up in git.
 - The FlightSQL target is fixed by server config (`MICROMEGAS_MCP_FLIGHTSQL_URL` or the default data source); callers never choose one.
 - Folder rename/delete are out of scope.
 - No MCP-layer rate limiting in v1; FlightSQL admission and the scan cap apply.
 - The MCP route validates tokens itself (user call: screen management needs the identity) and
   still forwards the token so FlightSQL remains the enforcement point for queries.
-- The MCP layer rejects mutating SQL even for admin keys; it is not a security boundary for
-  non-admin callers (FlightSQL still is).
+- The MCP layer rejects mutating SQL and all admin-only functions even for admin callers; it is
+  not a security boundary for non-admin callers (FlightSQL still is).
+- The `micromegas-notebooks` skill stays in this plan.
 - Export of large results is deferred to a follow-up.
 
 ## Documentation
@@ -290,7 +294,7 @@ No-DB unit tests (the default tier):
   case/quoting variants, and nested calls inside subqueries.
 - `render`: row cap, byte cap, truncation message, empty result, wide/NULL/nested types,
   stops consuming the stream at the cap (use a counting stream).
-- `screens` (no-DB: store functions behind a trait seam with canned data): `list_screens` omits config; `create_screen` defaults config from the type; `update_screen` honors `expected_updated_at` and refuses `managed_by` rows; `delete_screen` refuses `managed_by`; write tools absent when the flag is off or the caller is an analytics key; invalid name/folder/type map to `isError`.
+- `screens` (no-DB: store functions behind a trait seam with canned data): `list_screens` omits config; `create_screen` defaults config from the type; `update_screen` honors `expected_updated_at`; write tools absent when the flag is off or the caller is an analytics key; invalid name/folder/type map to `isError`.
 - Existing `screens_tests.rs`/`folders_tests.rs` are `#[ignore]` live-DB tests, so they don't prove the extraction; the new no-DB store-function tests do.
 - `config`: hard maxima clamp a larger env value; `limit` defaults to the default row cap and clamps to the hard row maximum.
 - Tool layer against a fake FlightSQL seam returning canned `FlightInfo`/streams: over-cap hint,
