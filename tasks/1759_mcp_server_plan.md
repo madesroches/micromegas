@@ -106,7 +106,7 @@ requires). No CORS is added for `/mcp`; the global `CorsLayer` stays as is.
   maxima are configurable via env, and the config cannot exceed the compiled-in absolute limits.
   The byte cap is the binding one for wide rows (long `msg` values), so it is checked per row.
 - **Errors**: FlightSQL `Status` becomes a tool result with `isError: true` and the message;
-  `Unauthenticated` becomes HTTP 401 at the transport level so clients re-auth.
+  that includes `Unauthenticated` (HTTP 401 comes only from the up-front bearer check).
 - **No paging in v1**: the agent aggregates or filters (answers the issue's paging question).
   No process convenience tools in v1 either.
 
@@ -296,7 +296,7 @@ No-DB unit tests (the default tier):
 - Existing `screens_tests.rs`/`folders_tests.rs` are `#[ignore]` live-DB tests, so they don't prove the extraction; the new no-DB store-function tests do.
 - `config`: hard maxima clamp a larger env value; `limit` defaults to the default row cap and clamps to the hard row maximum.
 - Tool layer against a fake FlightSQL seam returning canned `FlightInfo`/streams: over-cap hint,
-  opaque-without-range hint, `Status` -> `isError`, `Unauthenticated` -> 401, same arguments accepted by prepare and execute.
+  opaque-without-range hint, `Status` (including `Unauthenticated`) -> `isError`, same arguments accepted by prepare and execute.
   Degraded case (no #1760): estimate fields absent/"unknown", only MCP caps applied.
 - Router test (no DB, lazily-connected state): missing bearer -> 401 with `WWW-Authenticate`;
   disabled flag -> explicit 404 handler; disallowed `Host`/`Origin` -> 403; `initialize` returns `instructions` and the skills capability.
