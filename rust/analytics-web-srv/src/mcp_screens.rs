@@ -273,7 +273,8 @@ impl ToolProvider for ScreenToolProvider {
                     "update_screen",
                     format!(
                         "Replace a screen's config and/or move it. Pass expected_updated_at \
-                         (the updated_at from get_screen) to refuse the update if someone else \
+                         (the updated_at from list_screens, or from get_screen when its \
+                         config was not truncated) to refuse the update if someone else \
                          changed the screen meanwhile. {NOTEBOOK_POINTER}"
                     ),
                     input_schema(

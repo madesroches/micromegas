@@ -16,8 +16,8 @@ The route is off by default. Set on `analytics-web-srv` (or the monolith):
 | `MICROMEGAS_MCP_DEFAULT_ROWS` | `1000` | Rows returned when a call gives no `limit`. |
 | `MICROMEGAS_MCP_MAX_ROWS` | `10000` | Largest accepted `limit`. |
 | `MICROMEGAS_MCP_MAX_BYTES` | `131072` | Byte cap on a rendered result. |
-| `MICROMEGAS_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Comma-separated `Host` allowlist; requests for another host get 403. Set it to the public hostname. |
-| `MICROMEGAS_MCP_ALLOWED_ORIGINS` | empty | Comma-separated `Origin` allowlist (with scheme). Empty disables Origin validation. No CORS headers are added to `/mcp`. |
+| `MICROMEGAS_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Comma-separated `Host` allowlist; requests for another host get 403. Set it to the public hostname. Setting it to an empty value disables Host validation. |
+| `MICROMEGAS_MCP_ALLOWED_ORIGINS` | empty | Comma-separated `Origin` allowlist (with scheme). Empty disables Origin validation. The route is not given its own CORS headers, but it sits under the web app's CORS layer, so `MICROMEGAS_WEB_CORS_ORIGIN` applies to it. |
 | `MICROMEGAS_MCP_PUBLIC_URL` | origin of `MICROMEGAS_AUTH_REDIRECT_URI` + the MCP path | Full external URL of the MCP route, for deployments where it differs from the redirect URI's origin. Its path must end in `/mcp` (it need not include the base path); otherwise the route is not mounted. |
 | `MICROMEGAS_MCP_SKILLS_DIR` | unset | Directory of extra skills (`<name>/SKILL.md`), read once at startup. Symlinks are not followed. |
 
@@ -99,7 +99,7 @@ The `initialize` result carries the mandatory query rules as server `instruction
 
 ## Attribution in the audit log
 
-Every FlightSQL call made on behalf of an MCP request carries `x-client-type: mcp`, `x-client-agent` (the MCP client's `User-Agent`, or `unknown`), a fresh `x-request-id` and the caller's IP (from `X-Forwarded-For` / `X-Real-IP` when present, so a trusted proxy is assumed, as for FlightSQL). The audit record's `client` identifies `mcp`:
+Every FlightSQL call made on behalf of an MCP request carries `x-client-type: mcp`, `x-client-agent` (the MCP client's `User-Agent`, or `unknown`), a fresh `x-request-id` and the caller's IP (from `X-Forwarded-For` / `X-Real-IP` when present, so a trusted proxy is assumed, as for FlightSQL). The MCP server forwards that IP to FlightSQL as the `X-Forwarded-For` header, so FlightSQL's IP allowlist check and the audit record's client address see the agent's address. This holds when the MCP server reaches FlightSQL directly; a proxy in between that appends its own address would be seen instead. The audit record's `client` identifies `mcp`:
 
 ```sql
 SELECT msg FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY time DESC LIMIT 10

@@ -274,8 +274,8 @@ fn check_no_volatile_functions(plan: &LogicalPlan, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// Functions that change state: the four mutating table functions (admin-gated, or
-/// unconditionally registered) and the three admin-only scalar UDFs. Anything exposing a
+/// Functions that change state: the four mutating table functions (all admin-gated)
+/// and the three admin-only scalar UDFs. Anything exposing a
 /// read-only surface (such as the MCP server) must refuse every name here.
 pub const MUTATING_FUNCTIONS: &[&str] = &[
     "retire_partitions",

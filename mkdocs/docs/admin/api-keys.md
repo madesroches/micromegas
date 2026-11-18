@@ -313,7 +313,7 @@ is the way to discover a `key_id` to revoke.
 
 ## Using an analytics key with MCP
 
-An analytics key can be the `Authorization: Bearer` credential of an MCP client (see [MCP Server](mcp.md)). It gets the query and read-only screen tools; the screen write tools need an OIDC identity.
+An analytics key can be the `Authorization: Bearer` credential of an MCP client (see [MCP Server](mcp.md)). It gets the query and read-only screen tools; the screen write tools need an OIDC identity. A key's [IP allowlist](#ip-allowlisting) is checked against the MCP client's address, which the MCP server forwards to FlightSQL as `X-Forwarded-For`.
 
 ## IP allowlisting
 

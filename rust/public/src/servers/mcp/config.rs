@@ -1,3 +1,4 @@
+use micromegas_tracing::prelude::*;
 use std::path::PathBuf;
 
 /// Compiled-in ceilings: configuration can lower these but never exceed them.
@@ -80,7 +81,16 @@ impl McpConfig {
             .map(|v| parse_bool(&v))
             .unwrap_or(false);
         config.flightsql_url = lookup("MICROMEGAS_MCP_FLIGHTSQL_URL").filter(|v| !v.is_empty());
-        let number = |key: &str| lookup(key).and_then(|v| v.trim().parse::<usize>().ok());
+        let number = |key: &str| {
+            let raw = lookup(key)?;
+            match raw.trim().parse::<usize>() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    warn!("Invalid {key} value '{raw}', using default");
+                    None
+                }
+            }
+        };
         if let Some(n) = number("MICROMEGAS_MCP_MAX_ROWS") {
             config.max_rows = n;
         }

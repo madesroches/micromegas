@@ -22,13 +22,13 @@ and `get_screen` before inventing a layout. Reuse its queries rather than rewrit
 ## Workflow
 
 1. `list_screens` (optionally with `folder_path`) to find an existing notebook close to the request.
-2. `get_screen` to read its `config`. Large configs are truncated: ask for a smaller folder or reuse
-   only the cells you need.
+2. `get_screen` to read its `config`. Large configs are truncated, in which case reuse only the
+   cells you can see.
 3. Develop and test each cell's SQL with `prepare_query` then `execute_query`, following the
    `micromegas-query` rules (bounded time range, `LIMIT`, per-view `description`). Notebook macros
    such as `$from` are not understood by the query tools: substitute concrete values while testing.
-4. `create_screen` (new) or `update_screen` (existing). Pass `expected_updated_at` from the last
-   `get_screen` so a concurrent edit is not overwritten. Writes may be disabled on the server.
+4. `create_screen` (new) or `update_screen` (existing). Pass `expected_updated_at` from `list_screens` (or from `get_screen`
+   when the config was not truncated, since truncation drops `updated_at`) so a concurrent edit is not overwritten. Writes may be disabled on the server.
 
 ## Cells
 
