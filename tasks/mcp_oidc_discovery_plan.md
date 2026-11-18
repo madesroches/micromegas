@@ -61,6 +61,11 @@ public_url` resolves it; the metadata URL is derived from the public URL by swap
 `/mcp` for `/.well-known/oauth-protected-resource`. `McpOAuthMetadata::new(public_url, issuer)`
 builds the resource URL, the metadata URL and the JSON body. Both are unit-testable.
 
+The resolution function returns `Result` and `McpOAuthMetadata::new` checks the challenge header
+value up front. On any failure (unparseable or non-http(s) URL, path not ending in the MCP path,
+invalid header value) `build_mcp_mount` logs a `warn!` and returns `Ok(None)`, matching its
+existing convention: every reason for not mounting is logged and none stops the web server.
+
 ### Challenge
 
 Every 401 from the middleware becomes
@@ -117,11 +122,11 @@ fallback (200 `index.html`), so the disabled branch registers an explicit 404 fo
    `McpMount` (`web_server.rs:540-545`), filled by `build_mcp_mount`; `build_mcp_routes` mounts
    the metadata route and uses the OAuth challenge only when it is `Some`, else keeps today's
    constant challenge. Existing `McpMount` literals in `tests/mcp_routes_tests.rs` must set the
-   field. Pass `&OidcClientConfig` into `build_mcp_mount`, taken
-   from `auth_state` (`auth_state.as_ref().map(|s| &s.config)`, always `Some` when MCP mounts)
-   rather than calling `from_env()` again; resolve the public URL (honour
-   `MICROMEGAS_MCP_PUBLIC_URL`) and build `McpOAuthMetadata`; add the metadata route in
-   `build_mcp_routes`; in the disabled branch keep the explicit 404 for `/mcp` and add one for
+   field. `build_mcp_mount` takes an
+   `Option<&OidcClientConfig>` (from `auth_state.as_ref().map(|s| &s.config)`) and unwraps it
+   after the `disable_auth` early return, where `None` cannot happen, rather than calling
+   `from_env()` again; resolve the public URL (honour
+   `MICROMEGAS_MCP_PUBLIC_URL`) and build `McpOAuthMetadata`; in the disabled branch keep the explicit 404 for `/mcp` and add one for
    the metadata path.
 3. Tests (below).
 4. Docs: rework the `## Client configuration` section of `mkdocs/docs/admin/mcp.md` with the
@@ -129,7 +134,8 @@ fallback (200 `index.html`), so the disabled branch registers an explicit 404 fo
    `MICROMEGAS_MCP_PUBLIC_URL`; update the MCP bearer paragraph in
    `mkdocs/docs/admin/authentication.md`; add the unauthenticated metadata route to the API
    Routes list in `mkdocs/docs/admin/web-app.md`.
-5. `CHANGELOG.md` entry; SQL schemas unchanged.
+5. `CHANGELOG.md` entry; SQL schemas unchanged; **Minor breaking change:** `McpMount` gains an
+   `oauth: Option<McpOAuthMetadata>` field.
 
 ## Files to Modify
 
@@ -161,7 +167,8 @@ fallback (200 `index.html`), so the disabled branch registers an explicit 404 fo
 No-DB tests in `analytics-web-srv/tests/mcp_routes_tests.rs`:
 
 - The public-URL resolution function yields the redirect-URI-derived URL by default and the
-  override when set; `McpOAuthMetadata::new` produces the expected resource URL, metadata URL
+  override when set, and fails for an override whose path does not end in the MCP path;
+  `McpOAuthMetadata::new` produces the expected resource URL, metadata URL
   and body.
 - A request without a token gets 401 whose `WWW-Authenticate` contains `resource_metadata`;
   with a rejected token it also contains `error="invalid_token"`.
