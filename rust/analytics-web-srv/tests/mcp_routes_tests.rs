@@ -173,9 +173,13 @@ fn public_url_override_wins_and_must_end_in_mcp_path() {
         "https://public.example.com/xmcp",
         "not a url",
         "ftp://x.example.com/mcp",
+        "https://public.example.com/mcp?x=1",
+        "https://public.example.com/mcp#f",
     ] {
         assert!(resolve_public_url("http://localhost:3000/callback", "/mcp", Some(bad)).is_err());
     }
+    assert!(resolve_public_url("ftp://localhost/callback", "/mcp", None).is_err());
+    assert!(resolve_public_url("not a url", "/mcp", None).is_err());
 }
 
 #[test]
@@ -194,6 +198,7 @@ fn metadata_has_expected_urls_and_body() {
         })
     );
     assert!(McpOAuthMetadata::new("https://x.example.com/other", "i").is_err());
+    assert!(McpOAuthMetadata::new("https://x.example.com/a\"b/mcp", "i").is_err());
 }
 
 #[tokio::test]

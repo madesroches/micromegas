@@ -7,7 +7,9 @@ use crate::data_source_cache::DataSourceCache;
 use crate::groups;
 use crate::ingestion_keys;
 use crate::maps;
-use crate::mcp_auth::{METADATA_SUFFIX, McpOAuthMetadata, resolve_public_url};
+use crate::mcp_auth::{
+    METADATA_SUFFIX, McpAuthState, McpOAuthMetadata, metadata_path, resolve_public_url,
+};
 use crate::settings;
 use crate::stream_query;
 use crate::{analytics_keys, data_sources, folders, screens};
@@ -582,7 +584,7 @@ pub fn build_mcp_routes(base_path: &str, mount: Option<McpMount>) -> Result<Rout
     let router =
         micromegas::servers::mcp::register_routes(Router::new(), &mount.config, mount.providers)?;
     let mut router = router.layer(middleware::from_fn_with_state(
-        crate::mcp_auth::McpAuthState {
+        McpAuthState {
             provider: mount.auth_provider,
             oauth: oauth.clone(),
         },
@@ -590,8 +592,8 @@ pub fn build_mcp_routes(base_path: &str, mount: Option<McpMount>) -> Result<Rout
     ));
     // Outside the bearer middleware: a client reads it before it has a token.
     if let Some(oauth) = oauth {
-        let path = crate::mcp_auth::metadata_path(&mount.config.path)
-            .context("the MCP route path does not end in /mcp")?;
+        let path =
+            metadata_path(&mount.config.path).context("the MCP route path does not end in /mcp")?;
         router = router.merge(
             Router::new()
                 .route(&path, get(crate::mcp_auth::metadata_handler))
