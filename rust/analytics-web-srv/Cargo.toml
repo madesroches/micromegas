@@ -16,6 +16,7 @@ micromegas = { workspace = true, features = ["server", "jemalloc-metrics"] }
 anyhow.workspace = true
 arrow-ipc.workspace = true
 async-stream.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 axum-extra = { version = "0.10", features = ["cookie"] }
 base64.workspace = true
@@ -29,6 +30,7 @@ http.workspace = true
 moka.workspace = true
 object_store.workspace = true
 openidconnect.workspace = true
+rmcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

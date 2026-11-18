@@ -56,6 +56,9 @@ pub mod query_audit;
 /// FlightSQL server builder
 pub mod flight_sql_server;
 
+/// MCP server exposing guarded query tools to agents
+pub mod mcp;
+
 /// web server for perfetto traces
 pub mod perfetto;
 

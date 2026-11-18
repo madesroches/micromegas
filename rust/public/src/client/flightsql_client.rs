@@ -16,6 +16,18 @@ pub struct PreparedStatement {
     pub query: String,
 }
 
+/// What the server reports about a query before running it.
+#[derive(Debug)]
+pub struct QueryEstimate {
+    pub schema: SchemaRef,
+    /// Estimated bytes the query will scan; `None` when the server reports no estimate.
+    pub total_bytes: Option<u64>,
+    /// How the estimate was obtained (e.g. `footer`, `file_size_share`, `opaque`).
+    pub estimate_precision: Option<String>,
+    /// Whether the estimate is within the caller's scan cap; `None` when not reported.
+    pub within_scan_cap: Option<bool>,
+}
+
 /// Micromegas FlightSQL client
 pub struct Client {
     inner: FlightSqlServiceClient<Channel>,
@@ -107,6 +119,39 @@ impl Client {
         Ok(PreparedStatement {
             schema: Arc::new(prepared.dataset_schema()?.clone()),
             query: sql,
+        })
+    }
+
+    /// Plans a query without running it: returns its schema and the server's scan estimate.
+    ///
+    /// The estimate fields come from `FlightInfo.total_bytes` (negative means unknown) and an
+    /// optional JSON `app_metadata` object with `estimate_precision` and `within_scan_cap`.
+    /// A server that reports none of them yields `None` for each.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL query string to plan.
+    /// * `query_range` - An optional `TimeRange` the query would run over.
+    pub async fn prepare_query(
+        &mut self,
+        sql: String,
+        query_range: Option<TimeRange>,
+    ) -> Result<QueryEstimate> {
+        self.set_query_range(query_range);
+        let prepared = self.inner.prepare(sql.clone(), None).await?;
+        let schema = Arc::new(prepared.dataset_schema()?.clone());
+        let info = self.inner.execute(sql, None).await?;
+        let total_bytes = u64::try_from(info.total_bytes).ok();
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&info.app_metadata).unwrap_or(serde_json::Value::Null);
+        Ok(QueryEstimate {
+            schema,
+            total_bytes,
+            estimate_precision: metadata
+                .get("estimate_precision")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            within_scan_cap: metadata.get("within_scan_cap").and_then(|v| v.as_bool()),
         })
     }
 }

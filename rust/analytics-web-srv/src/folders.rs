@@ -43,6 +43,17 @@ pub enum FolderError {
     Database(sqlx::Error),
 }
 
+impl FolderError {
+    /// One-line description for callers that do not speak HTTP (the MCP tools).
+    pub fn describe(&self) -> String {
+        match self {
+            FolderError::NotFound(path) => format!("Folder '{path}' not found"),
+            FolderError::BadRequest(err) => format!("{}: {}", err.code, err.message),
+            FolderError::Database(_) => "Internal database error".to_string(),
+        }
+    }
+}
+
 impl IntoResponse for FolderError {
     fn into_response(self) -> Response {
         match self {
@@ -72,7 +83,7 @@ impl From<ValidationError> for FolderError {
     }
 }
 
-type FolderResult<T> = Result<T, FolderError>;
+pub type FolderResult<T> = Result<T, FolderError>;
 
 /// Query params for `DELETE /folders`.
 #[derive(Debug, Deserialize)]
@@ -170,42 +181,30 @@ async fn folder_exists(
     .await
 }
 
-// ============================================================================
-// Handlers
-// ============================================================================
-
-/// GET /folders — list all folders (explicit + implicit), with derived counts.
-#[span_fn]
-pub async fn list_folders(
-    Extension(pool): Extension<PgPool>,
-) -> FolderResult<Json<Vec<FolderInfo>>> {
+/// Lists all folders (explicit + implicit), with derived counts.
+pub async fn list_folder_infos(pool: &PgPool) -> FolderResult<Vec<FolderInfo>> {
     let folder_paths = instrument_named!(
-        sqlx::query_scalar::<_, String>("SELECT path FROM folders").fetch_all(&pool),
+        sqlx::query_scalar::<_, String>("SELECT path FROM folders").fetch_all(pool),
         "sql_select_folders"
     )
     .await?;
 
     let screen_folder_paths = instrument_named!(
-        sqlx::query_scalar::<_, String>("SELECT folder_path FROM screens").fetch_all(&pool),
+        sqlx::query_scalar::<_, String>("SELECT folder_path FROM screens").fetch_all(pool),
         "sql_select_screen_folder_paths"
     )
     .await?;
 
-    Ok(Json(compute_folder_infos(
-        &folder_paths,
-        &screen_folder_paths,
-    )))
+    Ok(compute_folder_infos(&folder_paths, &screen_folder_paths))
 }
 
-/// POST /folders — create a folder. Idempotent: creating an already-existing
-/// path is a no-op, not an error.
-#[span_fn]
-pub async fn create_folder(
-    Extension(pool): Extension<PgPool>,
-    Extension(user): Extension<ValidatedUser>,
-    Json(request): Json<CreateFolderRequest>,
-) -> FolderResult<(StatusCode, Json<Folder>)> {
-    validate_folder_path(&request.path)?;
+/// Creates a folder. Idempotent: creating an already-existing path is a no-op, not an error.
+pub async fn insert_folder(
+    pool: &PgPool,
+    user: &ValidatedUser,
+    path: &str,
+) -> FolderResult<Folder> {
+    validate_folder_path(path)?;
 
     let user_id = user.email.as_deref().unwrap_or(&user.subject);
 
@@ -217,7 +216,7 @@ pub async fn create_folder(
     // implicitly (via `compute_folder_infos`'s prefix derivation). Locked
     // shortest-prefix-first (root-to-leaf), matching `update_folder`'s
     // deadlock-avoidance convention.
-    for lock_path in expand_path_prefixes(&request.path, false) {
+    for lock_path in expand_path_prefixes(path, false) {
         instrument_named!(
             sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
                 .bind(&lock_path)
@@ -231,7 +230,7 @@ pub async fn create_folder(
         sqlx::query(
             "INSERT INTO folders (path, created_by) VALUES ($1, $2) ON CONFLICT (path) DO NOTHING"
         )
-        .bind(&request.path)
+        .bind(path)
         .bind(user_id)
         .execute(&mut *tx),
         "sql_insert_folder"
@@ -240,8 +239,34 @@ pub async fn create_folder(
 
     tx.commit().await?;
 
-    info!("Created folder: {} by {}", request.path, user_id);
-    Ok((StatusCode::CREATED, Json(Folder { path: request.path })))
+    info!("Created folder: {} by {}", path, user_id);
+    Ok(Folder {
+        path: path.to_string(),
+    })
+}
+
+// ============================================================================
+// Handlers
+// ============================================================================
+
+/// GET /folders — list all folders (explicit + implicit), with derived counts.
+#[span_fn]
+pub async fn list_folders(
+    Extension(pool): Extension<PgPool>,
+) -> FolderResult<Json<Vec<FolderInfo>>> {
+    Ok(Json(list_folder_infos(&pool).await?))
+}
+
+/// POST /folders — create a folder. Idempotent: creating an already-existing
+/// path is a no-op, not an error.
+#[span_fn]
+pub async fn create_folder(
+    Extension(pool): Extension<PgPool>,
+    Extension(user): Extension<ValidatedUser>,
+    Json(request): Json<CreateFolderRequest>,
+) -> FolderResult<(StatusCode, Json<Folder>)> {
+    let folder = insert_folder(&pool, &user, &request.path).await?;
+    Ok((StatusCode::CREATED, Json(folder)))
 }
 
 /// PUT /folders — rename/move a folder (materialized-path prefix rewrite).
