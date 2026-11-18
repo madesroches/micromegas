@@ -34,7 +34,7 @@ audience scoping, deny list, admission, scan cap and audit apply.
   `sort_order` to `list_view_sets()`. These back `list_views` / `describe_view`.
 - Mutating table functions are registered in `register_lakehouse_functions`
   (`rust/analytics/src/lakehouse/query.rs:143`, names at ~L237) and a name list already exists
-  at `view_definition.rs:281` (`retire_partitions`, `materialize_partitions`, ...).
+  at `view_definition.rs:280` (`retire_partitions`, `materialize_partitions`, ...).
 - No MCP code or `rmcp` dependency exists.
 
 ## Design
@@ -53,10 +53,10 @@ audience scoping, deny list, admission, scan cap and audit apply.
   `MembershipProvider` so admin/group membership resolves as it does for the cookie path). The web
   server's existing validator is OIDC-only (`OidcConfig::from_env()` in `auth/state.rs`) and does
   not read `MICROMEGAS_ANALYTICS_*`, so the MCP route builds its own provider with
-  `ProviderBuilder` plus a DB key store built with
-  `dedicated_key_store_pool(&analytics_keys_pool)` (the existing lazy pool over
-  `MICROMEGAS_SQL_CONNECTION_STRING`, `web_server.rs`; `with_db_key_store` expects the dedicated
-  pool, not the raw one), and attaches a group store so `compose()` wraps the chain in
+  `ProviderBuilder::new("MICROMEGAS_ANALYTICS")` plus a DB key store; the MCP setup itself calls
+  `dedicated_key_store_pool(&analytics_keys_pool)` (`analytics_keys_pool` is the existing lazy
+  pool over `MICROMEGAS_SQL_CONNECTION_STRING` in `web_server.rs`; `with_db_key_store` expects the
+  dedicated pool, not the raw one), and attaches a group store so `compose()` wraps the chain in
   `MembershipProvider`. It returns 401 +
   `WWW-Authenticate` on a missing or invalid token and puts the resulting `AuthContext` in
   request extensions. The validated token is also forwarded to FlightSQL, which re-validates it
@@ -121,7 +121,7 @@ Parse with `sqlparser` (via the `datafusion::sql::sqlparser` re-export) and reje
   UDFs `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial`), plus
   every other admin-only function registered under `lakehouse_admin` (`list_query_denials`,
   `list_view_set_definitions`, `check_view_merge`, ...): no admin features are exposed through MCP,
-  read-only or not. A test iterates the registered admin function names and asserts each is denied.
+  read-only or not. A test builds one `SessionContext` with `is_admin=true` and one with `is_admin=false` and asserts every function present only in the admin context is denied by `read_only`.
   `read_only.rs` matches function-call expressions as well as table factors.
   `MUTATING_TABLE_FUNCTIONS` in `view_definition.rs:280` covers table functions only and also holds
   read-only functions banned from stored scans (`view_instance`, `process_spans`,
@@ -136,12 +136,10 @@ The same check gates `prepare_query` and `execute_query`.
 1. **Server `instructions`** in the initialize result: the short mandatory rule list.
 2. **Tool descriptions** repeat the critical rules on `prepare_query`/`execute_query`.
 3. **Skills over MCP** (`io.modelcontextprotocol/skills`): serve the built-in `micromegas-query`
-   skill by `include_str!` of the existing shipped
-   `claude-plugin/skills/micromegas-query/SKILL.md` (single source), with a digest
-   manifest computed at startup. `rust/public` (`micromegas`) is published to crates.io and
-   `include_str!` outside the crate directory breaks `cargo publish`, so keep the skill files
-   inside the crate (e.g. `rust/public/src/servers/mcp/skills/`) and make `claude-plugin/skills/`
-   a symlink or build-time copy of them. Extra skills are loaded from `MICROMEGAS_MCP_SKILLS_DIR` (read
+   skill and the notebooks skill by `include_str!` of the canonical files in
+   `rust/public/src/servers/mcp/skills/`, with a digest manifest computed at startup. `rust/public` (`micromegas`) is published to crates.io and
+   `include_str!` outside the crate directory breaks `cargo publish`, so the canonical skill files live
+   inside the crate, and `claude-plugin/skills/` is a build-time copy of them (not a symlink). Extra skills are loaded from `MICROMEGAS_MCP_SKILLS_DIR` (read
    once at startup, files only, no symlink escape). Layers 1 and 2 must stand alone because
    client support for layer 3 is partial.
 
@@ -236,7 +234,7 @@ right place for them.
    (query tools as one provider), `mcp/server.rs` (`ServerHandler`, instructions, skills resources),
    `mcp/mod.rs::register_routes(router, McpConfig, providers)`.
 7a. Extract shared screen/folder store functions from `screens.rs`/`folders.rs`; HTTP handlers call them (existing handler tests must still pass unchanged).
-8. Mount in `analytics-web-srv/src/web_server.rs`; build the `MultiAuthProvider` (`ProviderBuilder` + DB key store via `dedicated_key_store_pool(&analytics_keys_pool)`, plus a group store for `MembershipProvider`) and the bearer validation middleware.
+8. Mount in `analytics-web-srv/src/web_server.rs`; build the `MultiAuthProvider` (`ProviderBuilder::new("MICROMEGAS_ANALYTICS")` + DB key store, calling `dedicated_key_store_pool(&analytics_keys_pool)` here, plus a group store for `MembershipProvider`) and the bearer validation middleware.
 8b. `mcp_screens.rs` provider and registration behind `MICROMEGAS_MCP_SCREEN_WRITES`; notebooks skill.
 9. Docs, CHANGELOG.
 
@@ -251,7 +249,7 @@ right place for them.
 - `rust/analytics-web-srv/src/web_server.rs` — mount `/mcp`.
 - `rust/analytics-web-srv/src/{screens,folders}.rs` — extract shared store functions used by the HTTP handlers and the MCP tools.
 - `rust/analytics-web-srv/src/mcp_screens.rs` — new, the screens/folders `ToolProvider`.
-- `claude-plugin/skills/` (or `rust/public/src/servers/mcp/skills/`) — notebooks authoring skill.
+- `rust/public/src/servers/mcp/skills/` — canonical `micromegas-query` skill (moved) and the new notebooks authoring skill; `claude-plugin/skills/` — build-time copies.
 - `mkdocs/docs/admin/` — new `mcp.md`; `mkdocs/mkdocs.yml` nav; `CHANGELOG.md`.
 
 ## Trade-offs
