@@ -34,6 +34,10 @@ fn header(schema: &SchemaRef) -> String {
     format!("| {} |\n| {rule} |\n", names.join(" | "))
 }
 
+fn truncation_footer(rows: usize) -> String {
+    format!("\ntruncated at {rows} rows, add filters or aggregate\n")
+}
+
 fn cut_at_char_boundary(text: &str, max: usize) -> &str {
     let mut end = max.min(text.len());
     while !text.is_char_boundary(end) {
@@ -53,12 +57,23 @@ where
     let mut rows = 0usize;
     let mut truncated = false;
     let mut header_written = false;
+    // The footer is part of the output, so the body budget leaves room for it. `rows` never
+    // exceeds `max_rows`, which bounds the footer's digit count.
+    let body_cap = limits
+        .max_bytes
+        .saturating_sub(truncation_footer(limits.max_rows).len());
 
     'batches: while let Some(batch) = stream.next().await {
         let batch = batch?;
         if !header_written {
-            text.push_str(&header(&batch.schema()));
+            let header = header(&batch.schema());
             header_written = true;
+            if header.len() > body_cap {
+                text.push_str(cut_at_char_boundary(&header, body_cap));
+                truncated = true;
+                break 'batches;
+            }
+            text.push_str(&header);
         }
         if batch.num_rows() == 0 {
             continue;
@@ -81,11 +96,11 @@ where
                 })
                 .collect();
             let mut line = format!("| {} |\n", cells.join(" | "));
-            if text.len() + line.len() > limits.max_bytes {
+            if text.len() + line.len() > body_cap {
                 if rows == 0 {
                     // A first row that alone exceeds the cap is cut rather than dropped, so the
                     // caller sees something of the result.
-                    let room = limits.max_bytes.saturating_sub(text.len());
+                    let room = body_cap.saturating_sub(text.len() + "…\n".len());
                     line = format!("{}…\n", cut_at_char_boundary(&line, room));
                     text.push_str(&line);
                     rows += 1;
@@ -106,9 +121,9 @@ where
         });
     }
     if truncated {
-        text.push_str(&format!(
-            "\ntruncated at {rows} rows, add filters or aggregate\n"
-        ));
+        text.push_str(&truncation_footer(rows));
+        // Only reachable when max_bytes is too small for even the header and footer.
+        text.truncate(cut_at_char_boundary(&text, limits.max_bytes).len());
     }
     Ok(Rendered {
         text,

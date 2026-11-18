@@ -91,6 +91,7 @@ async fn first_row_larger_than_cap_is_cut() {
         .expect("render");
     assert_eq!(r.rows, 1);
     assert!(r.truncated);
+    assert!(r.text.len() <= 100);
 }
 
 #[tokio::test]
