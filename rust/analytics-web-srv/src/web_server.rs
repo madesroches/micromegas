@@ -21,11 +21,17 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use http::{HeaderValue, Method, header};
+use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
+use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::auth::groups::{ADMINS_GROUP, DbGroupsConfig, DbGroupsSource};
-use micromegas::auth::types::{AuthContext, AuthType};
+use micromegas::auth::types::{AuthContext, AuthProvider, AuthType};
 use micromegas::ingestion::data_lake_connection::read_write_pool_options;
 use micromegas::ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas::servers::axum_utils::{auth_observability_middleware, observability_middleware};
+use micromegas::servers::mcp::config::McpConfig;
+use micromegas::servers::mcp::flight::{FixedUrl, FlightUrlResolver, GrpcFlightBackend};
+use micromegas::servers::mcp::provider::ToolProvider;
+use micromegas::servers::mcp::tools::QueryToolProvider;
 use micromegas::servers::shutdown::serve_axum_with_graceful_shutdown;
 use micromegas::settings::{EnvFallbacks, SettingsSource, resolve_bool_env};
 use micromegas::tracing::prelude::*;
@@ -527,6 +533,128 @@ fn build_protected_maps_blob_route(
 }
 
 // ---------------------------------------------------------------------------
+// MCP route
+// ---------------------------------------------------------------------------
+
+/// Everything the `/mcp` route needs once it is enabled and resolvable.
+pub struct McpMount {
+    pub config: McpConfig,
+    /// Validates the bearer token of every MCP request.
+    pub auth_provider: Arc<dyn AuthProvider>,
+    pub providers: Vec<Arc<dyn ToolProvider>>,
+}
+
+/// Sends queries to the data source flagged as default, looked up on each call so a change of
+/// default takes effect without a restart.
+struct DefaultDataSourceResolver {
+    cache: DataSourceCache,
+}
+
+#[async_trait::async_trait]
+impl FlightUrlResolver for DefaultDataSourceResolver {
+    async fn resolve(&self) -> Result<String> {
+        self.cache
+            .resolve_default()
+            .await?
+            .map(|c| c.url)
+            .context("no default data source is configured")
+    }
+}
+
+/// Mounts `/mcp` when a mount is given. Otherwise answers 404 explicitly, because the SPA
+/// fallback would reply `200 index.html` to an unmatched path.
+pub fn build_mcp_routes(base_path: &str, mount: Option<McpMount>) -> Result<Router> {
+    let Some(mount) = mount else {
+        return Ok(Router::new().route(
+            &format!("{base_path}/mcp"),
+            any(|| async { StatusCode::NOT_FOUND }),
+        ));
+    };
+    let router =
+        micromegas::servers::mcp::register_routes(Router::new(), &mount.config, mount.providers)?;
+    Ok(router.layer(middleware::from_fn_with_state(
+        mount.auth_provider,
+        crate::mcp_auth::mcp_bearer_middleware,
+    )))
+}
+
+/// Decides whether the MCP route can be mounted and builds what it needs. Every reason for not
+/// mounting is logged; none of them stops the web server.
+async fn build_mcp_mount(
+    config: &WebServerConfig,
+    analytics_keys_pool: &Option<PgPool>,
+    app_db_pool: &PgPool,
+    data_source_cache: &DataSourceCache,
+) -> Result<Option<McpMount>> {
+    let mcp_config = McpConfig::from_env(&config.base_path);
+    if !mcp_config.enabled {
+        return Ok(None);
+    }
+    if config.disable_auth {
+        warn!("MICROMEGAS_MCP_ENABLED is set but /mcp is not mounted under --disable-auth");
+        return Ok(None);
+    }
+    let Some(pool) = analytics_keys_pool else {
+        warn!(
+            "MICROMEGAS_MCP_ENABLED is set but no telemetry-DB pool is configured, /mcp is not mounted"
+        );
+        return Ok(None);
+    };
+    let resolver: Arc<dyn FlightUrlResolver> = match &mcp_config.flightsql_url {
+        Some(url) => Arc::new(FixedUrl(url.clone())),
+        None => {
+            match data_source_cache.resolve_default().await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    warn!(
+                        "MICROMEGAS_MCP_ENABLED is set but neither MICROMEGAS_MCP_FLIGHTSQL_URL \
+                         nor a default data source exists, /mcp is not mounted"
+                    );
+                    return Ok(None);
+                }
+                Err(e) => {
+                    warn!("could not look up the default data source, /mcp is not mounted: {e:#}");
+                    return Ok(None);
+                }
+            }
+            Arc::new(DefaultDataSourceResolver {
+                cache: data_source_cache.clone(),
+            })
+        }
+    };
+    // Same chain as FlightSQL's analytics role, wrapped in the group-membership provider, so a
+    // token accepted here is accepted there with the same identity.
+    let auth_provider = ProviderBuilder::new("MICROMEGAS_ANALYTICS")
+        .with_db_key_store(dedicated_key_store_pool(pool), ApiKeyTable::Analytics)
+        .with_group_store(dedicated_key_store_pool(pool))
+        .build_chain()
+        .await
+        .context("building the MCP auth provider")?;
+    let screen_writes = resolve_bool_env("MICROMEGAS_MCP_SCREEN_WRITES", false);
+    let providers: Vec<Arc<dyn ToolProvider>> = vec![
+        Arc::new(QueryToolProvider::new(
+            Arc::new(GrpcFlightBackend::new(resolver)),
+            mcp_config.clone(),
+        )),
+        Arc::new(crate::mcp_screens::ScreenToolProvider::new(
+            Arc::new(crate::mcp_screens::PgScreenStore::new(app_db_pool.clone())),
+            screen_writes,
+            mcp_config.max_bytes,
+        )),
+    ];
+    info!(
+        "MCP enabled at {} (screen writes {})",
+        mcp_config.path,
+        if screen_writes { "on" } else { "off" }
+    );
+    Ok(Some(McpMount {
+        config: mcp_config,
+        auth_provider,
+        providers,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Frontend / SPA
 // ---------------------------------------------------------------------------
 
@@ -851,6 +979,15 @@ pub async fn run_web_server(
 
     let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));
 
+    let mcp_mount = build_mcp_mount(
+        &config,
+        &analytics_keys_pool,
+        &app_db_pool,
+        &data_source_cache,
+    )
+    .await?;
+    let mcp_routes = build_mcp_routes(&config.base_path, mcp_mount)?;
+
     let app = Router::new()
         .merge(build_public_routes(&config.base_path, readiness_state))
         .merge(build_protected_routes(
@@ -867,7 +1004,8 @@ pub async fn run_web_server(
                 settings: settings_state,
             },
         ))
-        .merge(build_auth_routes(&config.base_path, &auth_state));
+        .merge(build_auth_routes(&config.base_path, &auth_state))
+        .merge(mcp_routes);
 
     let index_state = IndexState {
         frontend_dir: config.frontend_dir.clone(),

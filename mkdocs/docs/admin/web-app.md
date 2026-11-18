@@ -405,11 +405,15 @@ With `MICROMEGAS_BASE_PATH="/analytics"`, all routes are prefixed (e.g., `/analy
 - Add the redirect URI to allowed callbacks
 - For Google: Cloud Console → APIs & Services → Credentials
 
+## MCP route
+
+Set `MICROMEGAS_MCP_ENABLED=true` to serve an MCP endpoint at `{base_path}/mcp` for agents without a shell. See [MCP Server](mcp.md).
+
 ## Architecture
 
 - **Frontend**: Vite/React SPA on port 3000 (dev) or served by backend (prod)
 - **Backend**: Rust (`analytics-web-srv`) on port 3000 (default); the dev start script uses 8000 to avoid conflicting with the Vite dev server
-- **Auth**: OIDC (ID tokens via httpOnly cookies)
+- **Auth**: OIDC (ID tokens via httpOnly cookies); the optional `/mcp` route instead validates a bearer token (OIDC or analytics key), see [MCP Server](mcp.md)
 - **Data**: FlightSQL queries to analytics service
 
 Backend proxies FlightSQL with user's ID token. No direct data access.

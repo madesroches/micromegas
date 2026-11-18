@@ -21,6 +21,7 @@ client = [
     "dep:async-trait",
     "dep:futures",
     "dep:http",
+    "dep:serde_json",
     "dep:tonic",
 ]
 server = [
@@ -42,6 +43,7 @@ server = [
     "dep:object_store",
     "dep:once_cell",
     "dep:prost",
+    "dep:rmcp",
     "dep:serde_json",
     "dep:sqlx",
     "dep:thiserror",
@@ -90,6 +92,7 @@ moka = { workspace = true, features = ["sync"], optional = true }
 object_store = { workspace = true, optional = true }
 once_cell = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
+rmcp = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
@@ -104,6 +107,7 @@ flate2.workspace = true
 opentelemetry-proto.workspace = true
 reqwest.workspace = true
 serial_test = "3.2"
+tempfile = "3.14"
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = "0.6"
 
@@ -213,4 +217,34 @@ required-features = ["server"]
 [[test]]
 name = "settings_tests"
 path = "tests/settings_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "mcp_config_tests"
+path = "tests/mcp_config_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "mcp_read_only_tests"
+path = "tests/mcp_read_only_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "mcp_render_tests"
+path = "tests/mcp_render_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "mcp_router_tests"
+path = "tests/mcp_router_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "mcp_skills_tests"
+path = "tests/mcp_skills_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "mcp_tools_tests"
+path = "tests/mcp_tools_tests.rs"
 required-features = ["server"]

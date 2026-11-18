@@ -311,6 +311,10 @@ unset).
 keyed only on `key_id`. `GET {base_path}/api/{ingestion,analytics}-api-keys`
 is the way to discover a `key_id` to revoke.
 
+## Using an analytics key with MCP
+
+An analytics key can be the `Authorization: Bearer` credential of an MCP client (see [MCP Server](mcp.md)). It gets the query and read-only screen tools; the screen write tools need an OIDC identity.
+
 ## IP allowlisting
 
 Either key table can additionally pin a key to a set of source IP addresses

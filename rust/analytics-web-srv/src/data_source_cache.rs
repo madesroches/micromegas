@@ -19,6 +19,7 @@ type CachedEntry = Option<Arc<DataSourceConfig>>;
 #[derive(Clone)]
 pub struct DataSourceCache {
     cache: Cache<String, CachedEntry>,
+    default_cache: Cache<(), CachedEntry>,
     pool: PgPool,
 }
 
@@ -28,7 +29,12 @@ impl DataSourceCache {
             .time_to_live(ttl)
             .max_capacity(1000)
             .build();
-        Self { cache, pool }
+        let default_cache = Cache::builder().time_to_live(ttl).max_capacity(1).build();
+        Self {
+            cache,
+            default_cache,
+            pool,
+        }
     }
 
     /// Resolve a data source name to its config.
@@ -69,8 +75,41 @@ impl DataSourceCache {
         }
     }
 
+    /// Resolve the data source flagged `is_default`, if any.
+    pub async fn resolve_default(&self) -> Result<Option<DataSourceConfig>> {
+        let pool = self.pool.clone();
+        let result = self
+            .default_cache
+            .try_get_with::<_, anyhow::Error>((), async {
+                let row = instrument_named!(
+                    sqlx::query_scalar::<_, serde_json::Value>(
+                        "SELECT config FROM data_sources WHERE is_default = TRUE LIMIT 1",
+                    )
+                    .fetch_optional(&pool),
+                    "sql_select_default_data_source_config"
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("database error: {e}"))?;
+                match row {
+                    Some(config_json) => {
+                        let config: DataSourceConfig = serde_json::from_value(config_json)
+                            .map_err(|e| anyhow::anyhow!("invalid config: {e}"))?;
+                        Ok(Some(Arc::new(config)))
+                    }
+                    None => Ok(None),
+                }
+            })
+            .await;
+        match result {
+            Ok(config) => Ok(config.map(|c| (*c).clone())),
+            Err(e) => Err(anyhow::anyhow!("{e}")),
+        }
+    }
+
     /// Invalidate a cache entry after create/update/delete.
     pub async fn invalidate(&self, name: &str) {
         self.cache.invalidate(name).await;
+        // Any change may move the default flag.
+        self.default_cache.invalidate(&()).await;
     }
 }

@@ -139,6 +139,10 @@ the `web` role's own `/api/ingestion-api-keys*` / `/api/analytics-api-keys*` /
 process, or the monolith's own `web` role) — see
 [API Keys](api-keys.md#minting-an-analytics-key-over-http).
 
+## MCP endpoint
+
+The `web` role also serves `/mcp` when `MICROMEGAS_MCP_ENABLED=true`; see [MCP Server](mcp.md).
+
 ## Role selection
 
 Run only a subset of roles with `--roles` or `MICROMEGAS_MONOLITH_ROLES`:
