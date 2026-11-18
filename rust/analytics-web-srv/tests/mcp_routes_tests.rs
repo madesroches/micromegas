@@ -160,8 +160,17 @@ fn public_url_override_wins_and_must_end_in_mcp_path() {
     )
     .expect("url");
     assert_eq!(url, "https://public.example.com/mcp");
+    // A proxy may drop the base path, so the override only needs the trailing /mcp segment.
+    let url = resolve_public_url(
+        "http://localhost:3000/callback",
+        "/base/mcp",
+        Some("https://public.example.com/mcp"),
+    )
+    .expect("url");
+    assert_eq!(url, "https://public.example.com/mcp");
     for bad in [
         "https://public.example.com/other",
+        "https://public.example.com/xmcp",
         "not a url",
         "ftp://x.example.com/mcp",
     ] {
@@ -172,7 +181,6 @@ fn public_url_override_wins_and_must_end_in_mcp_path() {
 #[test]
 fn metadata_has_expected_urls_and_body() {
     let m = oauth();
-    assert_eq!(m.resource(), "https://analytics.example.com/base/mcp");
     assert_eq!(
         m.metadata_url(),
         "https://analytics.example.com/base/.well-known/oauth-protected-resource"

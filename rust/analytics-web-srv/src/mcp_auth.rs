@@ -23,7 +23,6 @@ pub const METADATA_SUFFIX: &str = "/.well-known/oauth-protected-resource";
 /// Where a client learns which authorization server to sign in with (RFC 9728).
 #[derive(Clone, Debug)]
 pub struct McpOAuthMetadata {
-    resource: String,
     metadata_url: String,
     body: serde_json::Value,
     challenge: HeaderValue,
@@ -41,8 +40,8 @@ pub fn resolve_public_url(
         Some(u) => {
             let url = Url::parse(u).with_context(|| format!("invalid MCP public URL {u:?}"))?;
             ensure!(
-                url.path().ends_with(mcp_path),
-                "MCP public URL path {:?} does not end in {mcp_path:?}",
+                url.path().ends_with("/mcp"),
+                "MCP public URL path {:?} does not end in /mcp",
                 url.path()
             );
             url
@@ -72,7 +71,7 @@ pub fn resolve_public_url(
     Ok(url.to_string())
 }
 
-/// The metadata route for an MCP route path (`{base}/mcp` -> `{base}/.well-known/...`).
+/// The metadata route for an MCP route path or URL (`{base}/mcp` -> `{base}/.well-known/...`).
 pub fn metadata_path(mcp_path: &str) -> Option<String> {
     mcp_path
         .strip_suffix("/mcp")
@@ -81,10 +80,9 @@ pub fn metadata_path(mcp_path: &str) -> Option<String> {
 
 impl McpOAuthMetadata {
     pub fn new(public_url: &str, issuer: &str) -> Result<Self> {
-        let Some(prefix) = public_url.strip_suffix("/mcp") else {
+        let Some(metadata_url) = metadata_path(public_url) else {
             bail!("MCP public URL {public_url:?} does not end in /mcp");
         };
-        let metadata_url = format!("{prefix}{METADATA_SUFFIX}");
         // The URL is embedded in a quoted header parameter.
         ensure!(
             !metadata_url.contains(['"', '\\']),
@@ -97,7 +95,6 @@ impl McpOAuthMetadata {
             HeaderValue::from_str(&format!("{challenge}, error=\"invalid_token\""))
                 .context("metadata URL is not a valid header value")?;
         Ok(Self {
-            resource: public_url.to_string(),
             body: serde_json::json!({
                 "resource": public_url,
                 "authorization_servers": [issuer],
@@ -107,10 +104,6 @@ impl McpOAuthMetadata {
             challenge: challenge_value,
             invalid_token_challenge,
         })
-    }
-
-    pub fn resource(&self) -> &str {
-        &self.resource
     }
 
     pub fn metadata_url(&self) -> &str {

@@ -166,7 +166,7 @@ fallback (200 `index.html`), so the disabled branch registers an explicit 404 fo
 - AFK: Metadata stays at `{base_path}/.well-known/oauth-protected-resource`, found via the 401
   challenge's `resource_metadata` parameter (option B); no RFC 9728 well-known mount, so no new
   proxy rule for base-path deployments. The plan already describes this consistently.
-- AFK: A `MICROMEGAS_MCP_PUBLIC_URL` override that is invalid or does not end in the MCP path
+- AFK: A `MICROMEGAS_MCP_PUBLIC_URL` override that is invalid or does not end in `/mcp`
   warns and skips metadata (as already specified); the mcp.md docs note that the proxy must
   forward the external `.well-known/oauth-protected-resource` sibling of the MCP URL to
   `{base_path}/.well-known/oauth-protected-resource`.
@@ -176,7 +176,7 @@ fallback (200 `index.html`), so the disabled branch registers an explicit 404 fo
 No-DB tests in `analytics-web-srv/tests/mcp_routes_tests.rs`:
 
 - The public-URL resolution function yields the redirect-URI-derived URL by default and the
-  override when set, and fails for an override whose path does not end in the MCP path;
+  override when set, and fails for an override whose path does not end in `/mcp`;
   `McpOAuthMetadata::new` produces the expected resource URL, metadata URL
   and body.
 - A request without a token gets 401 whose `WWW-Authenticate` contains `resource_metadata`;

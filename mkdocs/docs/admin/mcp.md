@@ -18,7 +18,7 @@ The route is off by default. Set on `analytics-web-srv` (or the monolith):
 | `MICROMEGAS_MCP_MAX_BYTES` | `131072` | Byte cap on a rendered result. |
 | `MICROMEGAS_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Comma-separated `Host` allowlist; requests for another host get 403. Set it to the public hostname. |
 | `MICROMEGAS_MCP_ALLOWED_ORIGINS` | empty | Comma-separated `Origin` allowlist (with scheme). Empty disables Origin validation. No CORS headers are added to `/mcp`. |
-| `MICROMEGAS_MCP_PUBLIC_URL` | origin of `MICROMEGAS_AUTH_REDIRECT_URI` + the MCP path | Full external URL of the MCP route, for deployments where it differs from the redirect URI's origin. Must end in the MCP path (`/mcp`); otherwise the route is not mounted. |
+| `MICROMEGAS_MCP_PUBLIC_URL` | origin of `MICROMEGAS_AUTH_REDIRECT_URI` + the MCP path | Full external URL of the MCP route, for deployments where it differs from the redirect URI's origin. Its path must end in `/mcp` (it need not include the base path); otherwise the route is not mounted. |
 | `MICROMEGAS_MCP_SKILLS_DIR` | unset | Directory of extra skills (`<name>/SKILL.md`), read once at startup. Symlinks are not followed. |
 
 Row and byte limits cannot exceed the compiled-in ceilings (10,000 rows, 1 MiB). The route is not mounted under `--disable-auth`.
