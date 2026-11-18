@@ -672,12 +672,18 @@ async fn build_mcp_mount(
     };
     // Same chain as FlightSQL's analytics role, wrapped in the group-membership provider, so a
     // token accepted here is accepted there with the same identity.
-    let auth_provider = ProviderBuilder::new("MICROMEGAS_ANALYTICS")
+    let auth_provider = match ProviderBuilder::new("MICROMEGAS_ANALYTICS")
         .with_db_key_store(dedicated_key_store_pool(pool), ApiKeyTable::Analytics)
         .with_group_store(dedicated_key_store_pool(pool))
         .build_chain()
         .await
-        .context("building the MCP auth provider")?;
+    {
+        Ok(provider) => provider,
+        Err(e) => {
+            warn!("could not build the MCP auth provider, /mcp is not mounted: {e:#}");
+            return Ok(None);
+        }
+    };
     let public_url_override = std::env::var("MICROMEGAS_MCP_PUBLIC_URL").ok();
     let oauth = match resolve_public_url(
         &oidc_config.redirect_uri,
