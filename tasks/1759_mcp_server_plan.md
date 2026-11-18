@@ -43,7 +43,7 @@ audience scoping, deny list, admission, scan cap and audit apply.
 
 - New module `rust/public/src/servers/mcp/` (feature `server`) holding the tool logic, guardrails
   and rendering, with no dependency on the web app. It exposes
-  `mcp::register_routes(router, McpConfig)`.
+  `mcp::register_routes(router, McpConfig, providers)`, where `providers` is a list of `ToolProvider`s.
   - Open/closed: `http-gateway` or a standalone binary can mount the same module later without
     change.
 - `analytics-web-srv` calls it from `web_server.rs` **outside** the protected (cookie) router
@@ -79,7 +79,9 @@ Cap request body size (reuse `tower-http` `limit` already in the workspace).
 
 - **No handle**: prepare and execute are independent calls with the same arguments. FlightSQL
   re-plans and re-checks the cap on every execute, so a handle would add state and an opaque
-  value to validate without removing any check. The read-only check runs on both tools.
+  value to validate without removing any check. Re-sending costs a second planning pass (the same
+  one a stateless FlightSQL handle would cost) and loses an explicit prepare-to-execute id link.
+  The read-only check runs on both tools.
 - **Rendering** (`mcp/render.rs`): markdown table (CSV for wide results is not needed in v1),
   stops pulling batches once `max_rows` or `max_bytes` is reached, then appends
   `truncated at N rows, add filters or aggregate`. Defaults 1,000 rows / 128 KiB (about 32k tokens), hard maxima 10,000 rows / 1 MiB. Defaults and
@@ -106,9 +108,12 @@ Parse with `sqlparser` (already a DataFusion dependency) and reject, before any 
 
 - anything that is not a single `Query` statement (DDL, `INSERT`, `SET`, `COPY`, multiple
   statements, `CREATE/DROP MATERIALIZED VIEW`);
-- calls to a deny list of mutating table functions/UDFs. The list is **shared with
-  `view_definition.rs:281`** (move it to one `pub const` rather than keeping two copies) so a new
-  mutating function added in one place is covered in both.
+- calls to a deny list of mutating table functions/UDFs (`retire_partitions`,
+  `materialize_partitions`, `regenerate_partitions`, `deny_queries`). `MUTATING_TABLE_FUNCTIONS` in
+  `view_definition.rs:280` also holds read-only functions banned from stored scans
+  (`view_instance`, `process_spans`, `perfetto_trace_chunks`), so split it: a `pub const` of the
+  truly mutating subset (used here), and the stored-scan-banned superset built from it. A new
+  mutating function is then covered in both.
 
 The same check gates `prepare_query`, `execute_query` and the export route.
 
@@ -118,8 +123,11 @@ The same check gates `prepare_query`, `execute_query` and the export route.
 2. **Tool descriptions** repeat the critical rules on `prepare_query`/`execute_query`.
 3. **Skills over MCP** (`io.modelcontextprotocol/skills`): serve the built-in `micromegas-query`
    skill by `include_str!` of the existing shipped
-   `claude-plugin/skills/micromegas-query/SKILL.md` (single source, no copy), with a digest
-   manifest computed at startup. Extra skills are loaded from `MICROMEGAS_MCP_SKILLS_DIR` (read
+   `claude-plugin/skills/micromegas-query/SKILL.md` (single source), with a digest
+   manifest computed at startup. `rust/public` (`micromegas`) is published to crates.io and
+   `include_str!` outside the crate directory breaks `cargo publish`, so keep the skill files
+   inside the crate (e.g. `rust/public/src/servers/mcp/skills/`) and make `claude-plugin/skills/`
+   a symlink or build-time copy of them. Extra skills are loaded from `MICROMEGAS_MCP_SKILLS_DIR` (read
    once at startup, files only, no symlink escape). Layers 1 and 2 must stand alone because
    client support for layer 3 is partial.
 
@@ -127,9 +135,11 @@ The same check gates `prepare_query`, `execute_query` and the export route.
 
 Per call, set on the FlightSQL client: `x-client-type: mcp`, `x-client-agent` from the MCP
 `clientInfo` (name/version), `x-client-session` from the MCP session id, a fresh `x-request-id`
-(prepare and execute are correlated in the audit by session and query fingerprint, not by id). `x-client-ip` is taken from the connection, never
-from a client header (same rule as `build_origin_metadata` in `http_gateway.rs`; reuse it rather
-than reimplementing).
+(prepare and execute are correlated in the audit by session and query fingerprint, not by id).
+`x-client-ip` comes from the shared `http_utils::get_client_ip` (connection info, never a
+client-supplied header; `ConnectInfo` is already enabled in the web server). `build_origin_metadata`
+in `http_gateway.rs` is not reusable (it appends `+gateway` to `x-client-type` and echoes a
+client `x-request-id`), so `mcp/flight.rs` sets the other attribution headers itself.
 
 ### Auth phases
 
@@ -166,20 +176,24 @@ right place for them.
 - **Shared logic, not a second implementation.** Today the SQL, advisory-lock ordering and
   validation live inside axum handlers (`screens.rs`, `folders.rs`). Extract them into plain
   functions taking `(&PgPool, &ValidatedUser, args)` and make both the HTTP handlers and the MCP
-  tools call them. `ValidatedUser` already converts from `AuthContext`
-  (`auth/claims.rs:40`), so the bearer middleware's identity feeds them directly. Name, folder
+  tools call them. The bearer middleware's identity feeds them via
+  `ValidatedUser::from(&AuthContext)`. Name, folder
   path and screen-type validation stay in that one place.
-- **Tool provider seam.** `mcp/` defines a `ToolProvider` trait (tool list + call). The query
+- **Tool provider seam.** `mcp/` defines a `ToolProvider` trait (tool list + call, receiving the full `AuthContext` of the caller, since
+  `ValidatedUser` drops `auth_type`). The query
   tools are one provider in `rust/public`; the screens provider lives in `analytics-web-srv`
   (it needs the app DB) and is registered when mounting the route. This keeps `mcp/` free of
   web-app types (open/closed) and lets another host mount only the query tools.
 - **Authorization.** The web app today lets any authenticated user mutate screens, so the tools
   do the same. Additionally:
   - write tools are only registered when `MICROMEGAS_MCP_SCREEN_WRITES=true` (default off);
-  - they require an OIDC identity. An analytics key has no user, so it gets the read tools only;
+  - they require `AuthType::Oidc` on the `AuthContext`. `ValidatedUser::from` also succeeds for an
+    analytics key (subject = key name, no email), so the provider must check `auth_type` itself; a
+    key gets the read tools only;
   - `update_screen` and `delete_screen` refuse a screen whose `managed_by` is set, since a CLI
     keeps those in sync from git and an agent edit would be overwritten or cause drift.
-- **Attribution.** `created_by`/`updated_by` get the caller's email as in the UI. The info log
+- **Attribution.** `created_by`/`updated_by` get the caller's email as in the UI, falling back to `subject` when
+  the email is absent, as the HTTP handlers do. The info log
   line for each mutation also records the MCP client agent and session, since the row does not.
 - **Cell queries go through the guarded path.** A notebook's cell SQL is run by the agent via
   `prepare_query`/`execute_query`, so caps, scan cap and the read-only check apply unchanged.
@@ -193,17 +207,18 @@ right place for them.
 
 1. **Dependency gate**: land #1760 (and #1758 for the two discovery tools). Steps 2-5 can proceed
    against the existing FlightSQL; `prepare_query` degrades to schema-only until #1760 lands.
-2. Add `rmcp` to the workspace and `rust/public/Cargo.toml` (`server` feature); check
-   `cargo deny`.
+2. Add `rmcp` (latest stable at implementation time, streamable-http server feature) to the
+   workspace and `rust/public/Cargo.toml` (`server` feature); check `cargo deny`.
 3. `mcp/config.rs`: `McpConfig` (enabled, caps with hard maxima, flightsql URL, skills dir).
-4. `mcp/read_only.rs` + extract the shared mutating-function list.
+4. `mcp/read_only.rs` + expose the truly-mutating function list as a `pub const`.
 5. `mcp/render.rs`: capped renderer over a `RecordBatch` stream.
 6. `mcp/flight.rs`: per-call FlightSQL client (bearer + attribution), prepare/execute helpers
    added to `client/flightsql_client.rs` (prepare returning schema + estimate once #1760 exists).
-7. `mcp/export.rs` (streaming export route), `mcp/tools.rs`, `mcp/server.rs` (`ServerHandler`, instructions, skills resources),
-   `mcp/mod.rs::register_routes`.
+7. `mcp/export.rs` (streaming export route), `mcp/provider.rs` (`ToolProvider` trait), `mcp/tools.rs`
+   (query tools as one provider), `mcp/server.rs` (`ServerHandler`, instructions, skills resources),
+   `mcp/mod.rs::register_routes(router, McpConfig, providers)`.
+7a. Extract shared screen/folder store functions from `screens.rs`/`folders.rs`; HTTP handlers call them (existing handler tests must still pass unchanged).
 8. Mount in `analytics-web-srv/src/web_server.rs`; bearer validation middleware.
-8a. Extract shared screen/folder store functions from `screens.rs`/`folders.rs`; HTTP handlers call them (existing handler tests must still pass unchanged).
 8b. `mcp_screens.rs` provider and registration behind `MICROMEGAS_MCP_SCREEN_WRITES`; notebooks skill.
 9. Docs, CHANGELOG, and an `mcp` section in the Python/CLI docs if clients are listed.
 
@@ -211,9 +226,10 @@ right place for them.
 
 - `rust/Cargo.toml`, `rust/public/Cargo.toml` — `rmcp`.
 - `rust/public/src/servers/mod.rs` — `pub mod mcp;`
-- `rust/public/src/servers/mcp/{mod,config,read_only,render,flight,tools,server}.rs` — new.
+- `rust/public/src/servers/mcp/{mod,config,read_only,render,flight,export,tools,server,provider,skills}.rs` — new (`provider.rs` holds `ToolProvider`; `skills.rs` the skills resources).
+- `rust/analytics-web-srv/src/mcp_auth.rs` — new, the bearer validation middleware.
 - `rust/public/src/client/flightsql_client.rs` — prepare returning schema and estimate.
-- `rust/analytics/src/lakehouse/view_definition.rs` (+ `query.rs`) — shared mutating-function list.
+- `rust/analytics/src/lakehouse/view_definition.rs` (+ `query.rs`) — split the function list into a `pub const` truly-mutating subset and the stored-scan-banned superset.
 - `rust/analytics-web-srv/src/web_server.rs` — mount `/mcp`.
 - `rust/analytics-web-srv/src/{screens,folders}.rs` — extract shared store functions used by the HTTP handlers and the MCP tools.
 - `rust/analytics-web-srv/src/mcp_screens.rs` — new, the screens/folders `ToolProvider`.
@@ -230,15 +246,13 @@ right place for them.
   second auth provider in the web server, but screen management needs a validated identity
   there. The cost is token validation on both hops (a cached key/JWKS lookup) and a provider
   configuration to keep consistent with FlightSQL's.
-- **Handle vs. re-sending the query**: re-sending costs a second planning pass (the same one a
-  stateless FlightSQL handle would cost) and loses an explicit prepare-to-execute id link, in
-  exchange for no state and one fewer concept for the agent.
 
 ## Decisions
 
-- Screen write tools are opt-in, OIDC-only, and never touch `managed_by` screens.
-- Screen logic is extracted once and shared by the HTTP handlers and MCP tools; no duplicate SQL.
-
+- Screen write tools are opt-in, OIDC-only, and never touch `managed_by` screens (analytics keys do not write).
+- The FlightSQL target is fixed by server config (`MICROMEGAS_MCP_FLIGHTSQL_URL` or the default data source); callers never choose one.
+- Folder rename/delete are out of scope.
+- No MCP-layer rate limiting in v1; FlightSQL admission and the scan cap apply.
 - The MCP route validates tokens itself (user call: screen management needs the identity) and
   still forwards the token so FlightSQL remains the enforcement point for queries.
 - The MCP layer rejects mutating SQL even for admin keys; it is not a security boundary for
@@ -248,14 +262,15 @@ right place for them.
 
 - New `mkdocs/docs/admin/mcp.md`: enabling, env vars, client configuration with a static
   `Authorization` header, tools, caps, attribution values in `flightsql_query_audit`.
-- `mkdocs/docs/admin/monolith.md` and `web-app.md`: mention the `/mcp` route and flag.
+- `mkdocs/docs/admin/monolith.md` and `web-app.md`: mention the `/mcp` route and flag; update the `Auth: OIDC (ID tokens via httpOnly cookies)` line in `web-app.md` (~L412) to note the bearer-validated `/mcp` route.
+- `mkdocs/docs/admin/authentication.md` and `api-keys.md`: document using OIDC tokens and analytics keys as the MCP bearer (read tools only for keys).
 - `CHANGELOG.md`: new feature entry.
 
 ## Testing Strategy
 
 No-DB unit tests (the default tier):
 - `read_only`: accepts a plain select/CTE/`view_instance` query; rejects DDL, DML, `SET`,
-  multi-statement, each mutating function (iterating the shared list so a new entry is covered),
+  multi-statement, each mutating function (iterating the mutating subset so a new entry is covered),
   case/quoting variants, and nested calls inside subqueries.
 - `render`: row cap, byte cap, truncation message, empty result, wide/NULL/nested types,
   stops consuming the stream at the cap (use a counting stream).
@@ -288,7 +303,3 @@ No live-DB test: nothing here reproduces a witnessed bug, and cap/estimate enfor
 - Is a bearer-authenticated export link enough, or do hosted clients that can't fetch with a header need another delivery path (e.g. MCP resources read over the transport, with paging)?
 
 - Should #1758 metadata carry machine-readable per-view limits that `prepare_query` enforces?
-- Should the FlightSQL target be allowed to differ from the web app's default data source?
-- Are write tools opt-in (`MICROMEGAS_MCP_SCREEN_WRITES`, OIDC callers only, `managed_by` rows refused) the right default, or should analytics keys be able to write too?
-- Should folder rename/delete be exposed later?
-- Rate limiting per key beyond the admission scheduler, or leave to #1748?
