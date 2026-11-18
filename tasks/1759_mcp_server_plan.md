@@ -49,30 +49,43 @@ audience scoping, deny list, admission, scan cap and audit apply.
 - `analytics-web-srv` calls it from `web_server.rs` **outside** the protected (cookie) router
   layer, at `{base_path}/mcp`. The monolith gets it through the `web` role.
 - The route does **not** use `cookie_auth_middleware`. A bearer middleware validates the token in
-  the web server with a `MultiAuthProvider` (OIDC plus analytics keys, built with
-  `ProviderBuilder` as the monolith already does for FlightSQL, wrapped in `MembershipProvider`
-  so admin/group membership resolves as it does for the cookie path). It returns 401 +
+  the web server with a `MultiAuthProvider` (OIDC plus analytics keys, wrapped in
+  `MembershipProvider` so admin/group membership resolves as it does for the cookie path). The web
+  server's existing validator is OIDC-only (`OidcConfig::from_env()` in `auth/state.rs`) and does
+  not read `MICROMEGAS_ANALYTICS_*`, so the MCP route builds its own provider with
+  `ProviderBuilder` plus a DB key store over the existing lazy pool
+  (`MICROMEGAS_SQL_CONNECTION_STRING`, `web_server.rs`). It returns 401 +
   `WWW-Authenticate` on a missing or invalid token and puts the resulting `AuthContext` in
   request extensions. The validated token is also forwarded to FlightSQL, which re-validates it
   and applies audience scoping, deny list, admission, scan cap and audit. Validating here is
   what gives the screens/notebook tools a real identity.
-- FlightSQL target: the web server's default data source URL (`DataSourceCache`), overridable
-  with `MICROMEGAS_MCP_FLIGHTSQL_URL`. The MCP route never takes a data source from the caller.
+- FlightSQL target: `MICROMEGAS_MCP_FLIGHTSQL_URL` if set, otherwise the default data source,
+  resolved through a new `data_sources.is_default` lookup (`DataSourceCache` only has
+  `resolve(name)`). When neither exists the route is not mounted. The MCP route never takes a
+  data source from the caller.
 - Disabled unless `MICROMEGAS_MCP_ENABLED=true`, so existing deployments don't grow a new
-  agent-facing surface by upgrading.
+  agent-facing surface by upgrading. When disabled, an explicit 404 handler is registered for
+  `/mcp` (the SPA fallback would otherwise return `index.html` with 200). Under `--disable-auth`
+  there is no `auth_state`, so the route is not mounted.
 
 ### Transport
 
-`rmcp` (official Rust SDK) with its Streamable HTTP service nested in axum. Stateless-friendly:
+`rmcp` (official Rust SDK) with its Streamable HTTP service nested in axum, in stateless mode:
 every tool call is self-contained (`execute_query` takes the full query arguments, there is no
-handle), so no server-side state is needed beyond what `rmcp` keeps for `initialize`.
+handle), so no server-side state is needed. Per-call data (headers, the validated `AuthContext`)
+is read from the `http::request::Parts` in the request context extensions.
 Cap request body size (reuse `tower-http` `limit` already in the workspace).
+
+`McpConfig` carries a host allowlist and an origin allowlist, set on rmcp's
+`StreamableHttpServerConfig` (`allowed_hosts` defaults to localhost only, so a real hostname gets
+403; empty `allowed_origins` means no Origin validation, which the MCP Streamable HTTP spec
+requires). No CORS is added for `/mcp`; the global `CorsLayer` stays as is.
 
 ### Query and discovery tools (all `readOnlyHint: true`)
 
 | Tool | Behavior |
 |---|---|
-| `prepare_query(sql, begin?, end?, limit?)` | Read-only check, then FlightSQL `GetFlightInfo` with `query_range_begin/end`. Returns the schema, `total_bytes` estimate, `estimate_precision`, within-cap flag. Executes nothing and returns no handle. Over-cap or opaque-without-range results carry the hint to narrow the range / filter on sort columns. |
+| `prepare_query(sql, begin?, end?, limit?)` | Read-only check, then FlightSQL `GetFlightInfo` with `query_range_begin/end`. Returns the schema, `total_bytes` estimate, `estimate_precision`, within-cap flag. Executes nothing and returns no handle. Over-cap or opaque-without-range results carry the hint to narrow the range / filter on sort columns. Without #1760 the estimate fields are absent/"unknown" and only the MCP row/byte caps apply. |
 | `execute_query(sql, begin?, end?, limit?)` | Same arguments as `prepare_query`, so the agent re-sends its (possibly revised) SQL. `limit` defaults to the default row cap and is clamped to the hard row maximum. Runs the read-only check, executes through FlightSQL (which re-plans and enforces the scan cap); streams batches into a bounded renderer; cancels the stream at the row or byte cap. |
 | `list_views()` | Names + first line of description, from `list_view_sets()`. |
 | `describe_view(name)` | Description, columns, sort order, on-demand flag, from `list_view_sets()` (#1758). |
@@ -87,16 +100,6 @@ Cap request body size (reuse `tower-http` `limit` already in the workspace).
   `truncated at N rows, add filters or aggregate`. Defaults 1,000 rows / 128 KiB (about 32k tokens), hard maxima 10,000 rows / 1 MiB. Defaults and
   maxima are configurable via env, and the config cannot exceed the compiled-in absolute limits.
   The byte cap is the binding one for wide rows (long `msg` values), so it is checked per row.
-- **Large results via export**: `execute_query` returns the capped inline preview plus an MCP
-  `resource_link` to `POST {base_path}/mcp/export` (JSON body: the same query arguments plus
-  `format=csv|parquet`; the link carries a body template the client fills in). That route
-  runs the read-only check, then executes through FlightSQL with the caller's `Authorization` header (no secret in
-  the URL) and streams batches to the HTTP body without buffering. FlightSQL still enforces the
-  scan cap and audits it as `x-client-type: mcp`. Limits: `MICROMEGAS_MCP_EXPORT_MAX_BYTES`
-  (default 1 GiB) and a timeout; the inline caps are unchanged. It only helps agents that can
-  make an authenticated HTTP fetch or run a shell, so the inline caps must stay usable alone.
-  The export logic lives in `mcp/export.rs`, reusing the renderer's batch stream plumbing and an
-  arrow CSV/Parquet writer.
 - **Errors**: FlightSQL `Status` becomes a tool result with `isError: true` and the message;
   `Unauthenticated` becomes HTTP 401 at the transport level so clients re-auth.
 - **No paging in v1**: the agent aggregates or filters (answers the issue's paging question).
@@ -104,18 +107,21 @@ Cap request body size (reuse `tower-http` `limit` already in the workspace).
 
 ### Read-only enforcement (`mcp/read_only.rs`)
 
-Parse with `sqlparser` (already a DataFusion dependency) and reject, before any FlightSQL call:
+Parse with `sqlparser` (via the `datafusion::sql::sqlparser` re-export) and reject, before any FlightSQL call:
 
 - anything that is not a single `Query` statement (DDL, `INSERT`, `SET`, `COPY`, multiple
   statements, `CREATE/DROP MATERIALIZED VIEW`);
-- calls to a deny list of mutating table functions/UDFs (`retire_partitions`,
-  `materialize_partitions`, `regenerate_partitions`, `deny_queries`). `MUTATING_TABLE_FUNCTIONS` in
-  `view_definition.rs:280` also holds read-only functions banned from stored scans
-  (`view_instance`, `process_spans`, `perfetto_trace_chunks`), so split it: a `pub const` of the
-  truly mutating subset (used here), and the stored-scan-banned superset built from it. A new
+- calls to a deny list of mutating table functions and scalar UDFs (`retire_partitions`,
+  `materialize_partitions`, `regenerate_partitions`, `deny_queries`, and the admin-only scalar
+  UDFs `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial`).
+  `read_only.rs` matches function-call expressions as well as table factors.
+  `MUTATING_TABLE_FUNCTIONS` in `view_definition.rs:280` covers table functions only and also holds
+  read-only functions banned from stored scans (`view_instance`, `process_spans`,
+  `perfetto_trace_chunks`), so split it: a `pub const` of the truly mutating subset (used here,
+  with the three scalar UDF names added), and the stored-scan-banned superset built from it. A new
   mutating function is then covered in both.
 
-The same check gates `prepare_query`, `execute_query` and the export route.
+The same check gates `prepare_query` and `execute_query`.
 
 ### Guidance
 
@@ -133,9 +139,11 @@ The same check gates `prepare_query`, `execute_query` and the export route.
 
 ### Attribution
 
-Per call, set on the FlightSQL client: `x-client-type: mcp`, `x-client-agent` from the MCP
-`clientInfo` (name/version), `x-client-session` from the MCP session id, a fresh `x-request-id`
-(prepare and execute are correlated in the audit by session and query fingerprint, not by id).
+Per call, set on the FlightSQL client: `x-client-type: mcp`, `x-client-agent` from the request's
+`User-Agent` header or `unknown` (stateless mode has no `clientInfo`), `x-client-session` only
+when the client sends an `mcp-session-id` header (absent otherwise), a fresh `x-request-id`
+(prepare and execute are correlated in the audit by query fingerprint, not by id). The FlightSQL
+service also reads `x-client-entrypoint`; it is left unset.
 `x-client-ip` comes from the shared `http_utils::get_client_ip` (connection info, never a
 client-supplied header; `ConnectInfo` is already enabled in the web server). `build_origin_metadata`
 in `http_gateway.rs` is not reusable (it appends `+gateway` to `x-client-type` and echoes a
@@ -143,7 +151,9 @@ client `x-request-id`), so `mcp/flight.rs` sets the other attribution headers it
 
 ### Auth phases
 
-- **Phase 1** (this plan): analytics key or OIDC token as bearer, static header. Query and
+- **Phase 1** (this plan): analytics key or OIDC token as bearer, static header. The web app
+  `client_id` is the OIDC audience, so FlightSQL must accept that audience (its OIDC config lists
+  it) for OIDC tokens to be forwarded successfully. Query and
   screen read tools work with a long-lived analytics key; the screen write tools need an OIDC
   identity, and a pasted OIDC token expires, so writes are practical mainly once phase 2 lands.
 - **Phase 2** (separate plan, after a decision on token passthrough): the web server already
@@ -191,7 +201,8 @@ right place for them.
     analytics key (subject = key name, no email), so the provider must check `auth_type` itself; a
     key gets the read tools only;
   - `update_screen` and `delete_screen` refuse a screen whose `managed_by` is set, since a CLI
-    keeps those in sync from git and an agent edit would be overwritten or cause drift.
+    keeps those in sync from git and an agent edit would be overwritten or cause drift. This
+    refusal is new MCP-only behavior; the HTTP `update_screen` does not refuse.
 - **Attribution.** `created_by`/`updated_by` get the caller's email as in the UI, falling back to `subject` when
   the email is absent, as the HTTP handlers do. The info log
   line for each mutation also records the MCP client agent and session, since the row does not.
@@ -208,17 +219,17 @@ right place for them.
 1. **Dependency gate**: land #1760 (and #1758 for the two discovery tools). Steps 2-5 can proceed
    against the existing FlightSQL; `prepare_query` degrades to schema-only until #1760 lands.
 2. Add `rmcp` (latest stable at implementation time, streamable-http server feature) to the
-   workspace and `rust/public/Cargo.toml` (`server` feature); check `cargo deny`.
-3. `mcp/config.rs`: `McpConfig` (enabled, caps with hard maxima, flightsql URL, skills dir).
+   workspace and `rust/public/Cargo.toml` (`server` feature).
+3. `mcp/config.rs`: `McpConfig` (enabled, caps with hard maxima, flightsql URL, skills dir, host and origin allowlists).
 4. `mcp/read_only.rs` + expose the truly-mutating function list as a `pub const`.
 5. `mcp/render.rs`: capped renderer over a `RecordBatch` stream.
 6. `mcp/flight.rs`: per-call FlightSQL client (bearer + attribution), prepare/execute helpers
    added to `client/flightsql_client.rs` (prepare returning schema + estimate once #1760 exists).
-7. `mcp/export.rs` (streaming export route), `mcp/provider.rs` (`ToolProvider` trait), `mcp/tools.rs`
+7. `mcp/provider.rs` (`ToolProvider` trait), `mcp/tools.rs`
    (query tools as one provider), `mcp/server.rs` (`ServerHandler`, instructions, skills resources),
    `mcp/mod.rs::register_routes(router, McpConfig, providers)`.
 7a. Extract shared screen/folder store functions from `screens.rs`/`folders.rs`; HTTP handlers call them (existing handler tests must still pass unchanged).
-8. Mount in `analytics-web-srv/src/web_server.rs`; bearer validation middleware.
+8. Mount in `analytics-web-srv/src/web_server.rs`; build the `MultiAuthProvider` (`ProviderBuilder` + DB key store from the lazy pool) and the bearer validation middleware.
 8b. `mcp_screens.rs` provider and registration behind `MICROMEGAS_MCP_SCREEN_WRITES`; notebooks skill.
 9. Docs, CHANGELOG, and an `mcp` section in the Python/CLI docs if clients are listed.
 
@@ -226,7 +237,7 @@ right place for them.
 
 - `rust/Cargo.toml`, `rust/public/Cargo.toml` — `rmcp`.
 - `rust/public/src/servers/mod.rs` — `pub mod mcp;`
-- `rust/public/src/servers/mcp/{mod,config,read_only,render,flight,export,tools,server,provider,skills}.rs` — new (`provider.rs` holds `ToolProvider`; `skills.rs` the skills resources).
+- `rust/public/src/servers/mcp/{mod,config,read_only,render,flight,tools,server,provider,skills}.rs` — new (`provider.rs` holds `ToolProvider`; `skills.rs` the skills resources).
 - `rust/analytics-web-srv/src/mcp_auth.rs` — new, the bearer validation middleware.
 - `rust/public/src/client/flightsql_client.rs` — prepare returning schema and estimate.
 - `rust/analytics/src/lakehouse/view_definition.rs` (+ `query.rs`) — split the function list into a `pub const` truly-mutating subset and the stored-scan-banned superset.
@@ -257,11 +268,12 @@ right place for them.
   still forwards the token so FlightSQL remains the enforcement point for queries.
 - The MCP layer rejects mutating SQL even for admin keys; it is not a security boundary for
   non-admin callers (FlightSQL still is).
+- Export of large results is deferred to a follow-up.
 
 ## Documentation
 
 - New `mkdocs/docs/admin/mcp.md`: enabling, env vars, client configuration with a static
-  `Authorization` header, tools, caps, attribution values in `flightsql_query_audit`.
+  `Authorization` header, tools, caps, host/origin allowlists, and how attribution appears in the audit log (`log_entries` with `target = 'flightsql_query_audit'`; `client` is in the JSON `msg`).
 - `mkdocs/docs/admin/monolith.md` and `web-app.md`: mention the `/mcp` route and flag; update the `Auth: OIDC (ID tokens via httpOnly cookies)` line in `web-app.md` (~L412) to note the bearer-validated `/mcp` route.
 - `mkdocs/docs/admin/authentication.md` and `api-keys.md`: document using OIDC tokens and analytics keys as the MCP bearer (read tools only for keys).
 - `CHANGELOG.md`: new feature entry.
@@ -270,18 +282,18 @@ right place for them.
 
 No-DB unit tests (the default tier):
 - `read_only`: accepts a plain select/CTE/`view_instance` query; rejects DDL, DML, `SET`,
-  multi-statement, each mutating function (iterating the mutating subset so a new entry is covered),
+  multi-statement, each mutating function, both table functions and scalar UDFs (iterating the mutating subset so a new entry is covered),
   case/quoting variants, and nested calls inside subqueries.
 - `render`: row cap, byte cap, truncation message, empty result, wide/NULL/nested types,
   stops consuming the stream at the cap (use a counting stream).
 - `screens` (no-DB: store functions behind a trait seam with canned data): `list_screens` omits config; `create_screen` defaults config from the type; `update_screen` honors `expected_updated_at` and refuses `managed_by` rows; `delete_screen` refuses `managed_by`; write tools absent when the flag is off or the caller is an analytics key; invalid name/folder/type map to `isError`.
-- Existing `screens.rs`/`folders.rs` tests prove the extraction didn't change HTTP behavior.
-- `export`: streams CSV and Parquet from a canned batch stream without buffering it, stops at the byte cap, requires the bearer header, rejects a query FlightSQL refuses.
+- Existing `screens_tests.rs`/`folders_tests.rs` are `#[ignore]` live-DB tests, so they don't prove the extraction; the new no-DB store-function tests do.
 - `config`: hard maxima clamp a larger env value; `limit` defaults to the default row cap and clamps to the hard row maximum.
 - Tool layer against a fake FlightSQL seam returning canned `FlightInfo`/streams: over-cap hint,
   opaque-without-range hint, `Status` -> `isError`, `Unauthenticated` -> 401, same arguments accepted by prepare and execute.
+  Degraded case (no #1760): estimate fields absent/"unknown", only MCP caps applied.
 - Router test (no DB, lazily-connected state): missing bearer -> 401 with `WWW-Authenticate`;
-  disabled flag -> 404; `initialize` returns `instructions` and the skills capability.
+  disabled flag -> explicit 404 handler; disallowed `Host`/`Origin` -> 403; `initialize` returns `instructions` and the skills capability.
 - Skills: manifest digest matches content; skills dir rejects path escape.
 
 No live-DB test: nothing here reproduces a witnessed bug, and cap/estimate enforcement belongs to
@@ -295,11 +307,6 @@ No live-DB test: nothing here reproduces a witnessed bug, and cap/estimate enfor
    `http://127.0.0.1:3000/mcp` with a bearer header; run `list_views`, `describe_view`, then
    `prepare_query` + `execute_query` on `log_entries`. Expect a table with the truncation line on
    a large result.
-3. Query `micromegas-query "SELECT client_type, count(*) FROM flightsql_query_audit GROUP BY 1"`
-   and expect an `mcp` row. Not automated: it needs a running service and a real MCP client.
+3. Query `micromegas-query "SELECT msg FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY time DESC LIMIT 10"`
+   and expect an entry whose JSON `msg` has `client` identifying `mcp`. Not automated: it needs a running service and a real MCP client.
 
-## Open Questions
-
-- Is a bearer-authenticated export link enough, or do hosted clients that can't fetch with a header need another delivery path (e.g. MCP resources read over the transport, with paging)?
-
-- Should #1758 metadata carry machine-readable per-view limits that `prepare_query` enforces?
