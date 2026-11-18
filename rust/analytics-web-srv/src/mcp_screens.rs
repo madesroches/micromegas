@@ -287,7 +287,7 @@ impl ToolProvider for ScreenToolProvider {
                         &["name"],
                     ),
                 )
-                .with_annotations(write().idempotent(true)),
+                .with_annotations(write().destructive(true).idempotent(true)),
             );
             tools.push(
                 Tool::new(
@@ -402,13 +402,7 @@ impl ScreenToolProvider {
         match self.store.create_screen(user, &request).await {
             Ok(screen) => {
                 self.log_mutation(ctx, "create_screen", &screen.name);
-                json_result(&ScreenSummary {
-                    name: screen.name,
-                    screen_type: screen.screen_type,
-                    folder_path: screen.folder_path,
-                    managed_by: screen.managed_by,
-                    updated_at: screen.updated_at,
-                })
+                json_result(&ScreenSummary::from(screen))
             }
             Err(e) => screen_error(e),
         }
@@ -443,13 +437,7 @@ impl ScreenToolProvider {
         {
             Ok(screen) => {
                 self.log_mutation(ctx, "update_screen", &screen.name);
-                json_result(&ScreenSummary {
-                    name: screen.name,
-                    screen_type: screen.screen_type,
-                    folder_path: screen.folder_path,
-                    managed_by: screen.managed_by,
-                    updated_at: screen.updated_at,
-                })
+                json_result(&ScreenSummary::from(screen))
             }
             Err(e) => screen_error(e),
         }

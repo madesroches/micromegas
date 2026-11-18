@@ -603,6 +603,23 @@ pub fn build_mcp_routes(base_path: &str, mount: Option<McpMount>) -> Result<Rout
     Ok(router)
 }
 
+/// Loads the skills once up front so a bad skills directory is a logged non-mount instead of a
+/// startup failure in `register_routes`.
+fn mcp_skills_load(config: &McpConfig) -> bool {
+    match micromegas::servers::mcp::skills::Skills::new(config.skills_dir.as_deref()) {
+        Ok(_) => true,
+        Err(e) => {
+            let dir = config
+                .skills_dir
+                .as_deref()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default();
+            warn!("MCP skills could not be loaded (dir '{dir}'), /mcp is not mounted: {e:#}");
+            false
+        }
+    }
+}
+
 /// Decides whether the MCP route can be mounted and builds what it needs. Every reason for not
 /// mounting is logged; none of them stops the web server.
 async fn build_mcp_mount(
@@ -618,6 +635,9 @@ async fn build_mcp_mount(
     }
     if config.disable_auth {
         warn!("MICROMEGAS_MCP_ENABLED is set but /mcp is not mounted under --disable-auth");
+        return Ok(None);
+    }
+    if !mcp_skills_load(&mcp_config) {
         return Ok(None);
     }
     let oidc_config =
@@ -1094,4 +1114,19 @@ pub async fn run_web_server(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_skills_dir_is_not_fatal() {
+        let config = McpConfig {
+            skills_dir: Some("/nonexistent/micromegas-skills".into()),
+            ..McpConfig::default()
+        };
+        assert!(!mcp_skills_load(&config));
+        assert!(mcp_skills_load(&McpConfig::default()));
+    }
 }

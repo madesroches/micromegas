@@ -307,8 +307,10 @@ No live-DB test: nothing here reproduces a witnessed bug, and cap/estimate enfor
 
 ## Manual Verification
 
-1. Start the monolith with `MICROMEGAS_MCP_ENABLED=true`
-   (`python3 local_test_env/ai_scripts/start_services.py --monolith`).
+1. Start the monolith with `MICROMEGAS_MCP_ENABLED=true` and `MICROMEGAS_OIDC_CONFIG` (or
+   `MICROMEGAS_ANALYTICS_OIDC_CONFIG`) set so auth is enabled
+   (`python3 local_test_env/ai_scripts/start_services.py --monolith`); without the OIDC env the
+   script passes `--disable-auth` and `/mcp` is not mounted (404).
 2. Connect an MCP client (e.g. `npx @modelcontextprotocol/inspector`) to
    `http://127.0.0.1:3000/mcp` with a bearer header; run `list_views`, `describe_view`, then
    `prepare_query` + `execute_query` on `log_entries`. Expect a table with the truncation line on

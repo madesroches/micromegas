@@ -166,6 +166,18 @@ pub struct ScreenSummary {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
+impl From<Screen> for ScreenSummary {
+    fn from(screen: Screen) -> Self {
+        Self {
+            name: screen.name,
+            screen_type: screen.screen_type,
+            folder_path: screen.folder_path,
+            managed_by: screen.managed_by,
+            updated_at: screen.updated_at,
+        }
+    }
+}
+
 pub async fn fetch_screens(pool: &PgPool) -> ScreenResult<Vec<Screen>> {
     let query = format!("SELECT {SCREEN_COLUMNS} FROM screens ORDER BY name");
     Ok(instrument_named!(
