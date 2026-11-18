@@ -698,7 +698,7 @@ async fn build_mcp_mount(
             return Ok(None);
         }
     };
-    let screen_writes = resolve_bool_env("MICROMEGAS_MCP_SCREEN_WRITES", false);
+    let screen_writes = resolve_bool_env("MICROMEGAS_MCP_SCREEN_WRITES", true);
     let providers: Vec<Arc<dyn ToolProvider>> = vec![
         Arc::new(QueryToolProvider::new(
             Arc::new(GrpcFlightBackend::new(resolver)),

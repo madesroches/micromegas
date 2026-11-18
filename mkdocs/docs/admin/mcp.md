@@ -12,7 +12,7 @@ The route is off by default. Set on `analytics-web-srv` (or the monolith):
 |---|---|---|
 | `MICROMEGAS_MCP_ENABLED` | `false` | Mount `/mcp`. When off, `/mcp` answers 404. |
 | `MICROMEGAS_MCP_FLIGHTSQL_URL` | unset | FlightSQL target. When unset the default data source is used. If neither exists the route is not mounted. Callers never choose a target. |
-| `MICROMEGAS_MCP_SCREEN_WRITES` | `false` | Register the screen and folder write tools. |
+| `MICROMEGAS_MCP_SCREEN_WRITES` | `true` | Register the screen and folder write tools. Set to `false` to make the screen tools read-only. |
 | `MICROMEGAS_MCP_DEFAULT_ROWS` | `1000` | Rows returned when a call gives no `limit`. |
 | `MICROMEGAS_MCP_MAX_ROWS` | `10000` | Largest accepted `limit`. |
 | `MICROMEGAS_MCP_MAX_BYTES` | `131072` | Byte cap on a rendered result. |
@@ -91,7 +91,7 @@ Query tools (all read-only):
 
 Only a single `SELECT`-style query is accepted. DDL, DML, `SET`, several statements, the mutating table functions and UDFs (`retire_partitions`, `materialize_partitions`, `regenerate_partitions`, `deny_queries`, `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial`) and every other admin-only function are refused even for admin callers. This check is a guardrail, not a security boundary: FlightSQL enforces permissions.
 
-Screen tools, which manage the same screens and folders as the web app: `list_screen_types`, `get_screen_type_default`, `list_screens`, `get_screen`, `list_folders` (read-only), and, with `MICROMEGAS_MCP_SCREEN_WRITES=true`, `create_folder`, `create_screen`, `update_screen` (with an optional `expected_updated_at` guard against overwriting a concurrent edit) and `delete_screen`. Write tools require an OIDC identity: an analytics key gets the read tools only. A notebook's SQL is run through the guarded query tools; there is no "run notebook" tool.
+Screen tools, which manage the same screens and folders as the web app: `list_screen_types`, `get_screen_type_default`, `list_screens`, `get_screen`, `list_folders` (read-only), and, unless `MICROMEGAS_MCP_SCREEN_WRITES=false`, `create_folder`, `create_screen`, `update_screen` (with an optional `expected_updated_at` guard against overwriting a concurrent edit) and `delete_screen`. Write tools require an OIDC identity: an analytics key gets the read tools only. A notebook's SQL is run through the guarded query tools; there is no "run notebook" tool.
 
 ## Guidance
 
