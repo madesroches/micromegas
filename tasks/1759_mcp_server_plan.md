@@ -6,10 +6,11 @@
 
 Agents that can't spawn processes (hosted assistants, IDE agents without a shell) can't use the
 `micromegas-query` CLI. This adds an MCP server (Streamable HTTP) that exposes guarded query
-tools (`prepare_query`, `execute_query`, `list_views`, `describe_view`) and delivers the usage
+tools (`prepare_query`, `execute_query`, `list_views`, `describe_view`), screen/notebook
+management tools, and delivers the usage
 guidance as MCP-native content. The server is a `/mcp` route hosted **inside `analytics-web-srv`**
-(and therefore inside the monolith's `web` role). It does no token validation of its own: it
-forwards the caller's bearer to FlightSQL, which stays the single place where identity,
+(and therefore inside the monolith's `web` role). It validates the bearer itself (OIDC or analytics key)
+and forwards it to FlightSQL, which stays the enforcement point where identity,
 audience scoping, deny list, admission, scan cap and audit apply.
 
 ## Current State
@@ -47,10 +48,14 @@ audience scoping, deny list, admission, scan cap and audit apply.
     change.
 - `analytics-web-srv` calls it from `web_server.rs` **outside** the protected (cookie) router
   layer, at `{base_path}/mcp`. The monolith gets it through the `web` role.
-- The route does **not** use `cookie_auth_middleware`. A small middleware only requires an
-  `Authorization: Bearer` header to be present (401 + `WWW-Authenticate` otherwise) and puts the
-  token in request extensions. Validity is decided by FlightSQL on the first call. Analytics
-  keys therefore work without adding `MultiAuthProvider` to the web app.
+- The route does **not** use `cookie_auth_middleware`. A bearer middleware validates the token in
+  the web server with a `MultiAuthProvider` (OIDC plus analytics keys, built with
+  `ProviderBuilder` as the monolith already does for FlightSQL, wrapped in `MembershipProvider`
+  so admin/group membership resolves as it does for the cookie path). It returns 401 +
+  `WWW-Authenticate` on a missing or invalid token and puts the resulting `AuthContext` in
+  request extensions. The validated token is also forwarded to FlightSQL, which re-validates it
+  and applies audience scoping, deny list, admission, scan cap and audit. Validating here is
+  what gives the screens/notebook tools a real identity.
 - FlightSQL target: the web server's default data source URL (`DataSourceCache`), overridable
   with `MICROMEGAS_MCP_FLIGHTSQL_URL`. The MCP route never takes a data source from the caller.
 - Disabled unless `MICROMEGAS_MCP_ENABLED=true`, so existing deployments don't grow a new
@@ -63,7 +68,7 @@ every tool call is self-contained (`execute_query` takes the full query argument
 handle), so no server-side state is needed beyond what `rmcp` keeps for `initialize`.
 Cap request body size (reuse `tower-http` `limit` already in the workspace).
 
-### Tools (all `readOnlyHint: true`)
+### Query and discovery tools (all `readOnlyHint: true`)
 
 | Tool | Behavior |
 |---|---|
@@ -128,30 +133,61 @@ than reimplementing).
 
 ### Auth phases
 
-- **Phase 1** (this plan): analytics key as bearer, static header.
+- **Phase 1** (this plan): analytics key or OIDC token as bearer, static header. Query and
+  screen read tools work with a long-lived analytics key; the screen write tools need an OIDC
+  identity, and a pasted OIDC token expires, so writes are practical mainly once phase 2 lands.
 - **Phase 2** (separate plan, after a decision on token passthrough): the web server already
   holds the OIDC configuration, which makes serving
   `/.well-known/oauth-protected-resource` straightforward. The open decision is the audience
   question: FlightSQL accepting an MCP-audience token vs. delegated identity. Nothing in phase 1
   forecloses either.
 
-### Follow-up enabled by web hosting: notebooks and screens
+### Screen and notebook tools
 
-Because the route lives in the web server, it can later reuse the screens/notebook layer
-(`screens.rs`, `screen_types.rs`, the app DB) that a gateway or standalone binary would not
-have. Candidate tools: `list_notebooks`, `get_notebook` (cells, queries and variables, so an
-agent can reuse a curated query instead of inventing one), and possibly running a notebook cell
-through the same guarded prepare/execute path. This is out of scope for v1. Two constraints for
-that later plan:
+Hosting in the web server lets the MCP route manage the same screens (notebooks, tables, ...) and
+folders the UI does, so an agent can find a curated notebook, reuse its queries, or save the
+analysis it just built.
 
-- Notebook access is authorized by the web app's own identity model (OIDC user, app DB
-  permissions), not by an analytics key. A bearer that is only an analytics key has no web-app
-  identity, so exposing notebooks depends on the phase 2 auth decision.
-- Cell queries must still go through `prepare_query`/`execute_query`, so caps and read-only
-  checks apply to them the same way.
+| Tool | Hints | Behavior |
+|---|---|---|
+| `list_screen_types()` | read-only | Types with descriptions, as `GET /screen-types`. |
+| `get_screen_type_default(screen_type)` | read-only | Default config for a type, a starting point for `create_screen`. |
+| `list_screens(folder_path?)` | read-only | Name, type, folder, `managed_by`, `updated_at`; no config (keeps the list small). |
+| `get_screen(name)` | read-only | Full record including the config JSON. Large configs are subject to the byte cap with a truncation notice. |
+| `list_folders()` | read-only | Folder tree with counts. |
+| `create_folder(path)` | write | Idempotent, as the HTTP route. |
+| `create_screen(name, screen_type, config?, folder_path?)` | write | `config` defaults to the type default. |
+| `update_screen(name, config?, folder_path?, expected_updated_at?)` | write | `expected_updated_at` is an optional guard: the update is refused if the stored `updated_at` differs, so an agent doesn't silently overwrite a concurrent edit (the HTTP route is last-writer-wins). |
+| `delete_screen(name)` | destructive | Deletes one screen. |
 
-v1 keeps tool logic in `mcp/` free of web-app types so this can be added as a second tool
-provider mounted by `analytics-web-srv` without touching the core.
+Folder rename/delete are left out: they move or remove many screens at once and the UI is the
+right place for them.
+
+- **Shared logic, not a second implementation.** Today the SQL, advisory-lock ordering and
+  validation live inside axum handlers (`screens.rs`, `folders.rs`). Extract them into plain
+  functions taking `(&PgPool, &ValidatedUser, args)` and make both the HTTP handlers and the MCP
+  tools call them. `ValidatedUser` already converts from `AuthContext`
+  (`auth/claims.rs:40`), so the bearer middleware's identity feeds them directly. Name, folder
+  path and screen-type validation stay in that one place.
+- **Tool provider seam.** `mcp/` defines a `ToolProvider` trait (tool list + call). The query
+  tools are one provider in `rust/public`; the screens provider lives in `analytics-web-srv`
+  (it needs the app DB) and is registered when mounting the route. This keeps `mcp/` free of
+  web-app types (open/closed) and lets another host mount only the query tools.
+- **Authorization.** The web app today lets any authenticated user mutate screens, so the tools
+  do the same. Additionally:
+  - write tools are only registered when `MICROMEGAS_MCP_SCREEN_WRITES=true` (default off);
+  - they require an OIDC identity. An analytics key has no user, so it gets the read tools only;
+  - `update_screen` and `delete_screen` refuse a screen whose `managed_by` is set, since a CLI
+    keeps those in sync from git and an agent edit would be overwritten or cause drift.
+- **Attribution.** `created_by`/`updated_by` get the caller's email as in the UI. The info log
+  line for each mutation also records the MCP client agent and session, since the row does not.
+- **Cell queries go through the guarded path.** A notebook's cell SQL is run by the agent via
+  `prepare_query`/`execute_query`, so caps, scan cap and the read-only check apply unchanged.
+  There is no "run notebook" tool.
+- **Authoring guidance.** The notebook config format is documented for humans in
+  `mkdocs/docs/web-app/notebooks/`. A built-in `micromegas-notebooks` skill (condensed from those
+  pages, `include_str!` of a file kept next to the query skill) is served over the Skills
+  extension, and the write tools' descriptions point to it and to `get_screen_type_default`.
 
 ## Implementation Steps
 
@@ -166,7 +202,9 @@ provider mounted by `analytics-web-srv` without touching the core.
    added to `client/flightsql_client.rs` (prepare returning schema + estimate once #1760 exists).
 7. `mcp/export.rs` (streaming export route), `mcp/tools.rs`, `mcp/server.rs` (`ServerHandler`, instructions, skills resources),
    `mcp/mod.rs::register_routes`.
-8. Mount in `analytics-web-srv/src/web_server.rs`; bearer-presence middleware.
+8. Mount in `analytics-web-srv/src/web_server.rs`; bearer validation middleware.
+8a. Extract shared screen/folder store functions from `screens.rs`/`folders.rs`; HTTP handlers call them (existing handler tests must still pass unchanged).
+8b. `mcp_screens.rs` provider and registration behind `MICROMEGAS_MCP_SCREEN_WRITES`; notebooks skill.
 9. Docs, CHANGELOG, and an `mcp` section in the Python/CLI docs if clients are listed.
 
 ## Files to Modify
@@ -177,6 +215,9 @@ provider mounted by `analytics-web-srv` without touching the core.
 - `rust/public/src/client/flightsql_client.rs` — prepare returning schema and estimate.
 - `rust/analytics/src/lakehouse/view_definition.rs` (+ `query.rs`) — shared mutating-function list.
 - `rust/analytics-web-srv/src/web_server.rs` — mount `/mcp`.
+- `rust/analytics-web-srv/src/{screens,folders}.rs` — extract shared store functions used by the HTTP handlers and the MCP tools.
+- `rust/analytics-web-srv/src/mcp_screens.rs` — new, the screens/folders `ToolProvider`.
+- `claude-plugin/skills/` (or `rust/public/src/servers/mcp/skills/`) — notebooks authoring skill.
 - `mkdocs/docs/admin/` — new `mcp.md`; `mkdocs/mkdocs.yml` nav; `CHANGELOG.md`.
 
 ## Trade-offs
@@ -185,17 +226,21 @@ provider mounted by `analytics-web-srv` without touching the core.
   wherever the UI is, is in the monolith, and has the data source config. Cost: agent traffic
   shares a process with the UI, and the web server is not independently scalable for it. The
   module boundary keeps the other two hosts available.
-- **Forward the bearer vs. validate in the web app.** Forwarding avoids adding
-  `MultiAuthProvider` to the web server and keeps one auth implementation, at the price of the
-  first bad token being rejected one hop later.
+- **Validate in the web app and forward vs. forward only.** Forward-only would avoid building a
+  second auth provider in the web server, but screen management needs a validated identity
+  there. The cost is token validation on both hops (a cached key/JWKS lookup) and a provider
+  configuration to keep consistent with FlightSQL's.
 - **Handle vs. re-sending the query**: re-sending costs a second planning pass (the same one a
   stateless FlightSQL handle would cost) and loses an explicit prepare-to-execute id link, in
   exchange for no state and one fewer concept for the agent.
 
 ## Decisions
 
-- Phase 1 keeps the MCP layer free of any token parsing, so phase 2's audience decision is not
-  pre-empted.
+- Screen write tools are opt-in, OIDC-only, and never touch `managed_by` screens.
+- Screen logic is extracted once and shared by the HTTP handlers and MCP tools; no duplicate SQL.
+
+- The MCP route validates tokens itself (user call: screen management needs the identity) and
+  still forwards the token so FlightSQL remains the enforcement point for queries.
 - The MCP layer rejects mutating SQL even for admin keys; it is not a security boundary for
   non-admin callers (FlightSQL still is).
 
@@ -214,6 +259,8 @@ No-DB unit tests (the default tier):
   case/quoting variants, and nested calls inside subqueries.
 - `render`: row cap, byte cap, truncation message, empty result, wide/NULL/nested types,
   stops consuming the stream at the cap (use a counting stream).
+- `screens` (no-DB: store functions behind a trait seam with canned data): `list_screens` omits config; `create_screen` defaults config from the type; `update_screen` honors `expected_updated_at` and refuses `managed_by` rows; `delete_screen` refuses `managed_by`; write tools absent when the flag is off or the caller is an analytics key; invalid name/folder/type map to `isError`.
+- Existing `screens.rs`/`folders.rs` tests prove the extraction didn't change HTTP behavior.
 - `export`: streams CSV and Parquet from a canned batch stream without buffering it, stops at the byte cap, requires the bearer header, rejects a query FlightSQL refuses.
 - `config`: hard maxima clamp a larger env value; `limit` defaults to the default row cap and clamps to the hard row maximum.
 - Tool layer against a fake FlightSQL seam returning canned `FlightInfo`/streams: over-cap hint,
@@ -242,5 +289,6 @@ No live-DB test: nothing here reproduces a witnessed bug, and cap/estimate enfor
 
 - Should #1758 metadata carry machine-readable per-view limits that `prepare_query` enforces?
 - Should the FlightSQL target be allowed to differ from the web app's default data source?
-- Should notebook/screen tools be a v1 stretch goal, or wait for the phase 2 auth decision?
+- Are write tools opt-in (`MICROMEGAS_MCP_SCREEN_WRITES`, OIDC callers only, `managed_by` rows refused) the right default, or should analytics keys be able to write too?
+- Should folder rename/delete be exposed later?
 - Rate limiting per key beyond the admission scheduler, or leave to #1748?
