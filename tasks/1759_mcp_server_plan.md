@@ -53,8 +53,11 @@ audience scoping, deny list, admission, scan cap and audit apply.
   `MembershipProvider` so admin/group membership resolves as it does for the cookie path). The web
   server's existing validator is OIDC-only (`OidcConfig::from_env()` in `auth/state.rs`) and does
   not read `MICROMEGAS_ANALYTICS_*`, so the MCP route builds its own provider with
-  `ProviderBuilder` plus a DB key store over the existing lazy pool
-  (`MICROMEGAS_SQL_CONNECTION_STRING`, `web_server.rs`). It returns 401 +
+  `ProviderBuilder` plus a DB key store built with
+  `dedicated_key_store_pool(&analytics_keys_pool)` (the existing lazy pool over
+  `MICROMEGAS_SQL_CONNECTION_STRING`, `web_server.rs`; `with_db_key_store` expects the dedicated
+  pool, not the raw one), and attaches a group store so `compose()` wraps the chain in
+  `MembershipProvider`. It returns 401 +
   `WWW-Authenticate` on a missing or invalid token and puts the resulting `AuthContext` in
   request extensions. The validated token is also forwarded to FlightSQL, which re-validates it
   and applies audience scoping, deny list, admission, scan cap and audit. Validating here is
@@ -70,7 +73,9 @@ audience scoping, deny list, admission, scan cap and audit apply.
 
 ### Transport
 
-`rmcp` (official Rust SDK) with its Streamable HTTP service nested in axum, in stateless mode:
+`rmcp` (official Rust SDK) with its Streamable HTTP service nested in axum, in stateless mode
+(set explicitly: `StreamableHttpServerConfig::default()` has `legacy_session_mode: true`, so use
+`with_legacy_session_mode(false)` / `NeverSessionManager`; verify the exact API at implementation):
 every tool call is self-contained (`execute_query` takes the full query arguments, there is no
 handle), so no server-side state is needed. Per-call data (headers, the validated `AuthContext`)
 is read from the `http::request::Parts` in the request context extensions.
@@ -140,12 +145,11 @@ The same check gates `prepare_query` and `execute_query`.
 ### Attribution
 
 Per call, set on the FlightSQL client: `x-client-type: mcp`, `x-client-agent` from the request's
-`User-Agent` header or `unknown` (stateless mode has no `clientInfo`), `x-client-session` only
-when the client sends an `mcp-session-id` header (absent otherwise), a fresh `x-request-id`
+`User-Agent` header or `unknown` (stateless mode has no `clientInfo`), a fresh `x-request-id`
 (prepare and execute are correlated in the audit by query fingerprint, not by id). The FlightSQL
 service also reads `x-client-entrypoint`; it is left unset.
-`x-client-ip` comes from the shared `http_utils::get_client_ip` (connection info, never a
-client-supplied header; `ConnectInfo` is already enabled in the web server). `build_origin_metadata`
+`x-client-ip` comes from the shared `http_utils::get_client_ip`, which honors `X-Forwarded-For` /
+`X-Real-IP` before `ConnectInfo`, so it assumes a trusted proxy in front, as FlightSQL does. `build_origin_metadata`
 in `http_gateway.rs` is not reusable (it appends `+gateway` to `x-client-type` and echoes a
 client `x-request-id`), so `mcp/flight.rs` sets the other attribution headers itself.
 
@@ -170,9 +174,9 @@ analysis it just built.
 
 | Tool | Hints | Behavior |
 |---|---|---|
-| `list_screen_types()` | read-only | Types with descriptions, as `GET /screen-types`. |
-| `get_screen_type_default(screen_type)` | read-only | Default config for a type, a starting point for `create_screen`. |
-| `list_screens(folder_path?)` | read-only | Name, type, folder, `managed_by`, `updated_at`; no config (keeps the list small). |
+| `list_screen_types()` | read-only | Types with descriptions; exposes the existing `/api/screen-types` endpoint. |
+| `get_screen_type_default(screen_type)` | read-only | Default config for a type, a starting point for `create_screen`; exposes the existing `get_default_config` endpoint. |
+| `list_screens(folder_path?)` | read-only | Name, type, folder, `managed_by`, `updated_at`; no config (keeps the list small). The extracted store function adds the folder filter and config omission; the current HTTP handler has neither. |
 | `get_screen(name)` | read-only | Full record including the config JSON. Large configs are subject to the byte cap with a truncation notice. |
 | `list_folders()` | read-only | Folder tree with counts. |
 | `create_folder(path)` | write | Idempotent, as the HTTP route. |
@@ -205,7 +209,7 @@ right place for them.
     refusal is new MCP-only behavior; the HTTP `update_screen` does not refuse.
 - **Attribution.** `created_by`/`updated_by` get the caller's email as in the UI, falling back to `subject` when
   the email is absent, as the HTTP handlers do. The info log
-  line for each mutation also records the MCP client agent and session, since the row does not.
+  line for each mutation also records the MCP client agent, since the row does not.
 - **Cell queries go through the guarded path.** A notebook's cell SQL is run by the agent via
   `prepare_query`/`execute_query`, so caps, scan cap and the read-only check apply unchanged.
   There is no "run notebook" tool.
@@ -229,9 +233,9 @@ right place for them.
    (query tools as one provider), `mcp/server.rs` (`ServerHandler`, instructions, skills resources),
    `mcp/mod.rs::register_routes(router, McpConfig, providers)`.
 7a. Extract shared screen/folder store functions from `screens.rs`/`folders.rs`; HTTP handlers call them (existing handler tests must still pass unchanged).
-8. Mount in `analytics-web-srv/src/web_server.rs`; build the `MultiAuthProvider` (`ProviderBuilder` + DB key store from the lazy pool) and the bearer validation middleware.
+8. Mount in `analytics-web-srv/src/web_server.rs`; build the `MultiAuthProvider` (`ProviderBuilder` + DB key store via `dedicated_key_store_pool(&analytics_keys_pool)`, plus a group store for `MembershipProvider`) and the bearer validation middleware.
 8b. `mcp_screens.rs` provider and registration behind `MICROMEGAS_MCP_SCREEN_WRITES`; notebooks skill.
-9. Docs, CHANGELOG, and an `mcp` section in the Python/CLI docs if clients are listed.
+9. Docs, CHANGELOG.
 
 ## Files to Modify
 
