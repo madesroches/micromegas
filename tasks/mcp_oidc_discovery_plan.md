@@ -161,6 +161,15 @@ fallback (200 `index.html`), so the disabled branch registers an explicit 404 fo
 - Public origin comes from configuration, never from the request `Host` header.
 - The metadata route is unauthenticated by design (RFC 9728) and carries no secret: issuer URL
   and resource URL are already public.
+- AFK: No `micromegas-token` command; Google-style deployments without JWT access tokens keep
+  using the static header until a user reports the gap.
+- AFK: Metadata stays at `{base_path}/.well-known/oauth-protected-resource`, found via the 401
+  challenge's `resource_metadata` parameter (option B); no RFC 9728 well-known mount, so no new
+  proxy rule for base-path deployments. The plan already describes this consistently.
+- AFK: A `MICROMEGAS_MCP_PUBLIC_URL` override that is invalid or does not end in the MCP path
+  warns and skips metadata (as already specified); the mcp.md docs note that the proxy must
+  forward the external `.well-known/oauth-protected-resource` sibling of the MCP URL to
+  `{base_path}/.well-known/oauth-protected-resource`.
 
 ## Testing Strategy
 
@@ -188,8 +197,3 @@ No-DB tests in `analytics-web-srv/tests/mcp_routes_tests.rs`:
    sign-in, then run `list_views`. Expected: the tools work and no token was typed. The IdP-side
    behavior (token type presented, `resource` parameter, discovery fallback) is not documented by
    the client; this is the check. It needs a real IdP and a real client, so it is not automated.
-
-## Open Questions
-
-- Whether to add a `micromegas-token` command (prints the cached OIDC token) so Google
-  deployments can use `headersHelper`. Not needed for providers with JWT access tokens.
