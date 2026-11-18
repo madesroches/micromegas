@@ -94,6 +94,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "url",
  "uuid",
  "wiremock",
 ]

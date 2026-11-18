@@ -18,6 +18,7 @@ The route is off by default. Set on `analytics-web-srv` (or the monolith):
 | `MICROMEGAS_MCP_MAX_BYTES` | `131072` | Byte cap on a rendered result. |
 | `MICROMEGAS_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Comma-separated `Host` allowlist; requests for another host get 403. Set it to the public hostname. |
 | `MICROMEGAS_MCP_ALLOWED_ORIGINS` | empty | Comma-separated `Origin` allowlist (with scheme). Empty disables Origin validation. No CORS headers are added to `/mcp`. |
+| `MICROMEGAS_MCP_PUBLIC_URL` | origin of `MICROMEGAS_AUTH_REDIRECT_URI` + the MCP path | Full external URL of the MCP route, for deployments where it differs from the redirect URI's origin. Must end in the MCP path (`/mcp`); otherwise the route is not mounted. |
 | `MICROMEGAS_MCP_SKILLS_DIR` | unset | Directory of extra skills (`<name>/SKILL.md`), read once at startup. Symlinks are not followed. |
 
 Row and byte limits cannot exceed the compiled-in ceilings (10,000 rows, 1 MiB). The route is not mounted under `--disable-auth`.
@@ -26,7 +27,40 @@ The path is `{MICROMEGAS_BASE_PATH}/mcp`, for example `http://127.0.0.1:3000/mcp
 
 ## Client configuration
 
-Send the credential as a static `Authorization` header:
+### OAuth sign-in
+
+The 401 answer of `/mcp` carries a `resource_metadata` parameter pointing at `{base_path}/.well-known/oauth-protected-resource`, an unauthenticated document (RFC 9728) that names the authorization server: the first issuer of `MICROMEGAS_OIDC_CONFIG`, the same one the web login uses. A client that supports MCP authorization can then run the browser sign-in, PKCE and token refresh itself. The advertised `resource` URL is the origin of `MICROMEGAS_AUTH_REDIRECT_URI` plus the MCP path, or `MICROMEGAS_MCP_PUBLIC_URL` when set; it is never derived from the request `Host` header.
+
+For Claude Code, give the URL and the app's client id in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "micromegas": {
+      "type": "http",
+      "url": "https://analytics.example.com/mcp",
+      "oauth": {
+        "clientId": "<client id>",
+        "callbackPort": 48080,
+        "scopes": "<IdP scopes>",
+        "authServerMetadataUrl": "<issuer>/.well-known/openid-configuration"
+      }
+    }
+  }
+}
+```
+
+The same can be added with `claude mcp add --transport http --client-id <id> --callback-port 48080 ...` (and `claude mcp add-json` for the fields the flags do not cover). Then run `/mcp` in the client and sign in once.
+
+- Providers such as Google, Entra and Okta do not offer dynamic client registration, so the client needs a pre-registered client id (the web app's, which is the issuer's `audience` in `MICROMEGAS_OIDC_CONFIG`), and `http://localhost:<callbackPort>/callback` must be registered as a redirect URI on that app.
+- The bearer the client presents must pass the server's validation: a JWT from a configured issuer whose `aud` is a configured `audience`. Providers that issue JWT access tokens for a configured API audience (Entra custom API, Auth0, Okta) work when that audience is in `scopes`. Google's access tokens are opaque and fail validation; use the static header below on such a deployment.
+- `authServerMetadataUrl` points at the issuer's OIDC discovery document because the client's fallback is RFC 8414 discovery only, which not every provider serves.
+- The metadata route is found through the 401 challenge. Behind a proxy that serves the MCP route at a different external path or origin, set `MICROMEGAS_MCP_PUBLIC_URL`, and forward the external `.well-known/oauth-protected-resource` sibling of the MCP URL to `{base_path}/.well-known/oauth-protected-resource`. When MCP is not mounted, that path answers 404.
+- A configured `Authorization` header disables OAuth for that server.
+
+### Static header
+
+Send an analytics API key (or an OIDC token) as a static `Authorization` header:
 
 ```json
 {

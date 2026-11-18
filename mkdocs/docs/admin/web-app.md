@@ -393,6 +393,7 @@ Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
 - `GET`/`POST /api/audience-grants`, `DELETE /api/audience-grants?audience=&axis=&selector=`, `GET /api/audience-grants/visible`, `GET /api/audience-grants/my-audiences` — Audience grant CRUD and the caller-scoped reads (see [Authorization](authorization.md#audiences-and-grants))
 - `GET`/`POST /api/groups`, `DELETE /api/groups/{name}`, `GET`/`POST /api/groups/{name}/members`, `DELETE /api/groups/{name}/members?member=` — Group CRUD and membership management, admin-only (see [Groups](groups.md))
 - `GET /api/settings`, `PUT`/`DELETE /api/settings/{key}` — List, set and reset deployment settings, admin-only (see [Settings](authorization.md#settings))
+- `GET /.well-known/oauth-protected-resource` — OAuth protected-resource metadata for the MCP route (public, only when MCP is enabled, see [MCP Server](mcp.md#client-configuration))
 - `GET /auth/login` — Initiate OAuth login
 - `GET /auth/callback` — OAuth callback
 - `POST /auth/refresh` — Refresh tokens

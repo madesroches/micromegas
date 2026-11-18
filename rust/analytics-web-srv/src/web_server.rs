@@ -7,6 +7,7 @@ use crate::data_source_cache::DataSourceCache;
 use crate::groups;
 use crate::ingestion_keys;
 use crate::maps;
+use crate::mcp_auth::{METADATA_SUFFIX, McpOAuthMetadata, resolve_public_url};
 use crate::settings;
 use crate::stream_query;
 use crate::{analytics_keys, data_sources, folders, screens};
@@ -542,6 +543,8 @@ pub struct McpMount {
     /// Validates the bearer token of every MCP request.
     pub auth_provider: Arc<dyn AuthProvider>,
     pub providers: Vec<Arc<dyn ToolProvider>>,
+    /// Discovery metadata for OAuth-capable MCP clients; `None` keeps the bare 401 challenge.
+    pub oauth: Option<McpOAuthMetadata>,
 }
 
 /// Sends queries to the data source flagged as default, looked up on each call so a change of
@@ -565,23 +568,44 @@ impl FlightUrlResolver for DefaultDataSourceResolver {
 /// fallback would reply `200 index.html` to an unmatched path.
 pub fn build_mcp_routes(base_path: &str, mount: Option<McpMount>) -> Result<Router> {
     let Some(mount) = mount else {
-        return Ok(Router::new().route(
-            &format!("{base_path}/mcp"),
-            any(|| async { StatusCode::NOT_FOUND }),
-        ));
+        return Ok(Router::new()
+            .route(
+                &format!("{base_path}/mcp"),
+                any(|| async { StatusCode::NOT_FOUND }),
+            )
+            .route(
+                &format!("{base_path}{METADATA_SUFFIX}"),
+                any(|| async { StatusCode::NOT_FOUND }),
+            ));
     };
+    let oauth = mount.oauth.map(Arc::new);
     let router =
         micromegas::servers::mcp::register_routes(Router::new(), &mount.config, mount.providers)?;
-    Ok(router.layer(middleware::from_fn_with_state(
-        mount.auth_provider,
+    let mut router = router.layer(middleware::from_fn_with_state(
+        crate::mcp_auth::McpAuthState {
+            provider: mount.auth_provider,
+            oauth: oauth.clone(),
+        },
         crate::mcp_auth::mcp_bearer_middleware,
-    )))
+    ));
+    // Outside the bearer middleware: a client reads it before it has a token.
+    if let Some(oauth) = oauth {
+        let path = crate::mcp_auth::metadata_path(&mount.config.path)
+            .context("the MCP route path does not end in /mcp")?;
+        router = router.merge(
+            Router::new()
+                .route(&path, get(crate::mcp_auth::metadata_handler))
+                .with_state(oauth),
+        );
+    }
+    Ok(router)
 }
 
 /// Decides whether the MCP route can be mounted and builds what it needs. Every reason for not
 /// mounting is logged; none of them stops the web server.
 async fn build_mcp_mount(
     config: &WebServerConfig,
+    oidc_config: Option<&OidcClientConfig>,
     analytics_keys_pool: &Option<PgPool>,
     app_db_pool: &PgPool,
     data_source_cache: &DataSourceCache,
@@ -594,6 +618,8 @@ async fn build_mcp_mount(
         warn!("MICROMEGAS_MCP_ENABLED is set but /mcp is not mounted under --disable-auth");
         return Ok(None);
     }
+    let oidc_config =
+        oidc_config.expect("auth state is built whenever authentication is not disabled");
     let Some(pool) = analytics_keys_pool else {
         warn!(
             "MICROMEGAS_MCP_ENABLED is set but no telemetry-DB pool is configured, /mcp is not mounted"
@@ -630,6 +656,20 @@ async fn build_mcp_mount(
         .build_chain()
         .await
         .context("building the MCP auth provider")?;
+    let public_url_override = std::env::var("MICROMEGAS_MCP_PUBLIC_URL").ok();
+    let oauth = match resolve_public_url(
+        &oidc_config.redirect_uri,
+        &mcp_config.path,
+        public_url_override.as_deref(),
+    )
+    .and_then(|url| McpOAuthMetadata::new(&url, &oidc_config.issuer))
+    {
+        Ok(oauth) => oauth,
+        Err(e) => {
+            warn!("MCP OAuth discovery metadata is unavailable, /mcp is not mounted: {e:#}");
+            return Ok(None);
+        }
+    };
     let screen_writes = resolve_bool_env("MICROMEGAS_MCP_SCREEN_WRITES", false);
     let providers: Vec<Arc<dyn ToolProvider>> = vec![
         Arc::new(QueryToolProvider::new(
@@ -651,6 +691,7 @@ async fn build_mcp_mount(
         config: mcp_config,
         auth_provider,
         providers,
+        oauth: Some(oauth),
     }))
 }
 
@@ -981,6 +1022,7 @@ pub async fn run_web_server(
 
     let mcp_mount = build_mcp_mount(
         &config,
+        auth_state.as_ref().map(|s| &s.config),
         &analytics_keys_pool,
         &app_db_pool,
         &data_source_cache,

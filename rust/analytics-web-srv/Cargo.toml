@@ -38,6 +38,7 @@ time = "0.3"
 tokio.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["compression-gzip", "fs", "normalize-path"] }
+url.workspace = true
 uuid.workspace = true
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
