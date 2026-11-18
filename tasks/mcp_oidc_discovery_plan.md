@@ -56,9 +56,10 @@ MCP is mounted:
 `resource` and the metadata URL need the externally visible origin, which the process cannot
 derive from a request without trusting the `Host` header. Default: the origin of
 `MICROMEGAS_AUTH_REDIRECT_URI` plus the MCP path. New optional `MICROMEGAS_MCP_PUBLIC_URL`
-(full URL of the MCP route) overrides it for deployments where the two differ. Pure function
-`McpOAuthMetadata::new(public_url, issuer)` builds the resource URL, the metadata URL and the
-JSON body, so it is unit-testable.
+(full URL of the MCP route) overrides it for deployments where the two differ. A pure function `(redirect_uri, mcp_path, override) ->
+public_url` resolves it; the metadata URL is derived from the public URL by swapping the trailing
+`/mcp` for `/.well-known/oauth-protected-resource`. `McpOAuthMetadata::new(public_url, issuer)`
+builds the resource URL, the metadata URL and the JSON body. Both are unit-testable.
 
 ### Challenge
 
@@ -73,7 +74,8 @@ The metadata route sits outside the bearer middleware, next to the `/mcp` route 
 `build_mcp_routes`, and is absent when MCP is not mounted (no new surface when disabled). It is
 under `{base_path}`, which the 401 challenge names explicitly; a client that probes only the
 RFC 9728 root path works only when `base_path` is empty and the reverse proxy forwards
-`/.well-known/`.
+`/.well-known/`. When MCP is disabled the metadata path would otherwise fall through to the SPA
+fallback (200 `index.html`), so the disabled branch registers an explicit 404 for it as well.
 
 ### Client setup (documented)
 
@@ -112,22 +114,28 @@ RFC 9728 root path works only when `base_path` is empty and the reverse proxy fo
 
 1. `analytics-web-srv/src/mcp_auth.rs`: add `McpOAuthMetadata` (new, body, challenge builder) and
    a `metadata_handler`; give `mcp_bearer_middleware` state `{ provider, challenge }`.
-2. `analytics-web-srv/src/web_server.rs`: pass `OidcClientConfig` into `build_mcp_mount`; build
-   `McpOAuthMetadata` (honour `MICROMEGAS_MCP_PUBLIC_URL`); add the metadata route in
-   `build_mcp_routes`; keep the explicit 404 for the disabled case.
+2. `analytics-web-srv/src/web_server.rs`: pass `&OidcClientConfig` into `build_mcp_mount`, taken
+   from `auth_state` (`auth_state.as_ref().map(|s| &s.config)`, always `Some` when MCP mounts)
+   rather than calling `from_env()` again; resolve the public URL (honour
+   `MICROMEGAS_MCP_PUBLIC_URL`) and build `McpOAuthMetadata`; add the metadata route in
+   `build_mcp_routes`; in the disabled branch keep the explicit 404 for `/mcp` and add one for
+   the metadata path.
 3. Tests (below).
-4. Docs: replace the static-bearer-only Claude Code subsection in `mkdocs/docs/admin/mcp.md`
-   (currently an uncommitted edit) with the OAuth setup above, keep the static header as the
-   analytics-key option, document `MICROMEGAS_MCP_PUBLIC_URL`; update the MCP bearer paragraph
-   in `mkdocs/docs/admin/authentication.md`.
+4. Docs: rework the `## Client configuration` section of `mkdocs/docs/admin/mcp.md` with the
+   OAuth setup above, keep the static header as the analytics-key option, document
+   `MICROMEGAS_MCP_PUBLIC_URL`; update the MCP bearer paragraph in
+   `mkdocs/docs/admin/authentication.md`; add the unauthenticated metadata route to the API
+   Routes list in `mkdocs/docs/admin/web-app.md`.
 5. `CHANGELOG.md` entry; SQL schemas unchanged.
 
 ## Files to Modify
 
 - `rust/analytics-web-srv/src/mcp_auth.rs`
 - `rust/analytics-web-srv/src/web_server.rs`
+- `rust/analytics-web-srv/Cargo.toml` (`url.workspace = true`)
 - `rust/analytics-web-srv/tests/mcp_routes_tests.rs`
-- `mkdocs/docs/admin/mcp.md`, `mkdocs/docs/admin/authentication.md`
+- `mkdocs/docs/admin/mcp.md`, `mkdocs/docs/admin/authentication.md`,
+  `mkdocs/docs/admin/web-app.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -138,8 +146,6 @@ RFC 9728 root path works only when `base_path` is empty and the reverse proxy fo
 - **Proxying or hosting an authorization server ourselves** (so Google-style providers work) was
   rejected: it makes micromegas an OAuth server, a large security surface for one provider's
   limitation.
-- **`headersHelper` fallback** needs no server change but needs a token-printing command that
-  doesn't exist yet; see Open Questions.
 
 ## Decisions
 
@@ -147,26 +153,24 @@ RFC 9728 root path works only when `base_path` is empty and the reverse proxy fo
 - The metadata route is unauthenticated by design (RFC 9728) and carries no secret: issuer URL
   and resource URL are already public.
 
-## Documentation
-
-`mkdocs/docs/admin/mcp.md` (client setup, new variable, provider caveats),
-`mkdocs/docs/admin/authentication.md` (MCP bearer paragraph).
-
 ## Testing Strategy
 
 No-DB tests in `analytics-web-srv/tests/mcp_routes_tests.rs`:
 
-- `McpOAuthMetadata::new` produces the expected resource URL, metadata URL and body for a base
-  path and for the `MICROMEGAS_MCP_PUBLIC_URL` override.
+- The public-URL resolution function yields the redirect-URI-derived URL by default and the
+  override when set; `McpOAuthMetadata::new` produces the expected resource URL, metadata URL
+  and body.
 - A request without a token gets 401 whose `WWW-Authenticate` contains `resource_metadata`;
   with a rejected token it also contains `error="invalid_token"`.
 - The metadata route answers 200 JSON without credentials when MCP is mounted, and 404 when it
-  is not.
+  is not; the 404 test covers both the `/mcp` and the metadata path.
 
 ## Manual Verification
 
 1. Register an app on the IdP with redirect `http://localhost:48080/callback`; start the monolith
-   with `MICROMEGAS_MCP_ENABLED=true`.
+   with `MICROMEGAS_MCP_ENABLED=true` and `MICROMEGAS_OIDC_CONFIG` set so auth is enabled (e.g.
+   `start_services.py --monolith` with the OIDC env and an empty base path; without it
+   `start_services.py` passes `--disable-auth` and `/mcp` 404s).
 2. `curl -i http://127.0.0.1:3000/mcp` and check the `resource_metadata` parameter; `curl` that
    URL and check the JSON.
 3. Add the server with the `.mcp.json` above, run `/mcp` in Claude Code, complete the browser
