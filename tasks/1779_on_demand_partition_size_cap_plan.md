@@ -100,9 +100,14 @@ check (`view_definition.rs:557-563`) filters to that same subset, so a daemon vi
 `view_definition.rs:429` are updated to the new return contract. The byte-sum source list
 is collected from the extract plan alone, in its own accumulator, because the merge and count plans
 can scan tables the extract doesn't read (e.g. `processes` joined only in `merge_partitions_query`).
-The on-demand subset and the daemon-reads-on-demand check keep the union of all three plans. The
-full `ViewMetadata` from `source.get_meta()` (set, instance and `file_schema_hash`) is kept for
-the byte sum.
+The on-demand subset and the daemon-reads-on-demand check keep the union of all three plans.
+`validate_view_definition` therefore returns a small struct with both lists: the union
+(`Vec<Arc<dyn View>>`, from which the on-demand subset is derived) and the extract-only sources.
+The full `ViewMetadata` from `source.get_meta()` (set, instance and `file_schema_hash`) is captured
+at validation for the extract-only sources. `SqlBatchView::with_sources` stores the union and the
+extract-only `Vec<ViewMetadata>`. `update_on_demand_view` gains two parameters: the extract-only
+`&[ViewMetadata]` (passed to `source_bytes`) and the byte cap `max_jit_src_bytes`. It still receives
+the on-demand subset for `snapshot_sources`.
 
 ### 4. Source bytes of a range
 
@@ -203,7 +208,8 @@ peak.
    `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and discards the result, so
    it needs no change beyond compiling.
 4. **Freshness row**: add `file_size` to `PartitionFreshnessRow`, `fetch_freshness_candidates` and
-   `freshness_row`. Fix the constructors the compiler flags, mostly in tests.
+   `freshness_row`. Fix the constructors the compiler flags, mostly in tests (including the literals
+in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
 5. **Ladder planner**: add `plan_by_source_bytes` to `partition_ladder.rs`.
 6. **Promotion cap**: add `max_bytes` to `is_promotable` (made `pub` so integration tests can
    reach it), `promote_one` and `promote_closed_buckets`. Pass `i64::MAX` in
@@ -234,7 +240,8 @@ peak.
 - `rust/analytics/src/lakehouse/partition_ladder.rs`: `LADDER`, `plan_by_source_bytes`
 - `rust/analytics/src/lakehouse/on_demand_jit.rs`: `source_bytes`, `split_promotion`,
   `promotion_targets`, descent in `update_on_demand_view`
-- Tests: `rust/analytics/tests/{partition_ladder_tests,on_demand_jit_tests,jit_promotion_tests,view_ddl_parse_tests,view_definition_validation_tests}.rs`
+- Tests: `rust/analytics/tests/{partition_ladder_tests,on_demand_jit_tests,jit_promotion_tests,view_ddl_parse_tests,view_definition_validation_tests,jit_bucket_coverage_tests,jit_freshness_tests}.rs`
+  (the last two build `PartitionFreshnessRow` literals that need `file_size`)
 - `mkdocs/docs/admin/materialized-views.md`, `mkdocs/docs/architecture/index.md`, `CHANGELOG.md`
 
 ## Trade-offs
