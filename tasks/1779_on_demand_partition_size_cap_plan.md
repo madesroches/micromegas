@@ -49,8 +49,8 @@ by 3× or 2× instead of jumping 12× from one hour to five minutes.
   (`#[serde(default, skip_serializing_if = "Option::is_none")]`).
 - There is no byte-size parser in the codebase. `parse_time_delta` (`view_definition.rs:67`) is
   the `'<n> <unit>'` precedent.
-- #1778 is still under `## Unreleased` in `CHANGELOG.md`, so on-demand views have no released
-  behavior to stay compatible with.
+- #1778 and #1496 (block-driven JIT bucket sizing) are still under `## Unreleased` in
+  `CHANGELOG.md`, so neither has released behavior to stay compatible with.
 
 ## Design
 
@@ -89,23 +89,18 @@ edge walk more rungs, but they are pure computations over counts that were alrea
 
 ### 3. Source views
 
-`inspect_scan` records every scanned `MaterializedView`, deduplicated by (view set, instance).
-`validate_view_definition` returns that full list. `SqlBatchView::with_on_demand_sources` becomes
-`with_sources`. The on-demand subset (`requires_query_range()` and instance `"global"`, the
-current rule) is derived from it where `snapshot_sources` needs it, and the daemon-reads-on-demand
-check (`view_definition.rs:557-563`) filters to that same subset, so a daemon view reading
-`measures` or `log_entries` is still accepted. The two existing validation tests
-(including `view_reading_only_daemon_views_has_no_on_demand_sources`) and the doc comment at
-`view_definition.rs:429` are updated to the new return contract. The byte-sum source list
-is collected from the extract plan alone, in its own accumulator, because the merge and count plans
-can scan tables the extract doesn't read (e.g. `processes` joined only in `merge_partitions_query`).
-`validate_view_definition` therefore returns a small struct with both lists: the union
-and the extract-only sources.
-The full `ViewMetadata` from `source.get_meta()` (set, instance and `file_schema_hash`) is captured
-at validation for the extract-only sources. `SqlBatchView::with_sources` stores the union and the
-extract-only `Vec<ViewMetadata>`. `update_on_demand_view` gains two parameters: the extract-only
-`&[ViewMetadata]` (passed to `source_bytes`) and the byte cap `max_jit_src_bytes`. It still receives
-the on-demand subset for `snapshot_sources`.
+`inspect_scan` and the on-demand subset (`requires_query_range()` and instance `"global"`) stay as
+they are, as does the daemon-reads-on-demand check. The byte-sum source list is collected from the
+extract plan alone, in one new accumulator that records every scanned `MaterializedView`
+(daemon-maintained ones included), because the merge and count plans can scan tables the extract
+doesn't read (e.g. `processes` joined only in `merge_partitions_query`). The full `ViewMetadata` from
+`source.get_meta()` (set, instance and `file_schema_hash`) is captured for each.
+`validate_view_definition` returns both lists: the on-demand views as today, and the extract-only
+`Vec<ViewMetadata>`. `SqlBatchView::with_on_demand_sources` also stores the extract-only list;
+`view_registry.rs:209` and the doc comment at `view_definition.rs:429` change only to pass and
+describe it. `update_on_demand_view` gains two parameters: the extract-only `&[ViewMetadata]`
+(passed to `source_bytes`) and the byte cap `max_jit_src_bytes`. It still receives the on-demand
+views for `snapshot_sources`.
 
 ### 4. Source bytes of a range
 
@@ -137,7 +132,10 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
 3. Plan the leaves with a new pure `plan_by_source_bytes(range, bytes_fn, cap) ->
    Vec<PlannedBucket>` in `partition_ladder.rs`. It tiles the range with the coarsest aligned
    ladder buckets that fit it, then recurses like `plan_bucket`: a bucket at or under the cap is
-   emitted at its rung, and a bucket over the cap splits into finer children, down to `LADDER[0]` (1 minute). A
+   emitted at its rung, and a bucket over the cap splits into finer children, down to `LADDER[0]` (1 minute). A part of
+   the range narrower than `LADDER[0]` at the unit's edges (a grown unit can end off the minute grid,
+   e.g. around 1-second daemon partitions) is emitted as one leaf over its exact sub-range, counted
+   toward `over_cap` like the 1-minute floor. A
    1-minute bucket is emitted even over the cap, logged as a warning and counted as `on_demand_jit{outcome="over_cap"}` in addition to its write outcome
    (`written` / `conflict_dropped`). Picking leaves from source bytes alone means a dense first
    query doesn't probe every intermediate rung.
@@ -212,10 +210,9 @@ peak.
    `view_ddl.rs`, reject it on daemon views, and update the doc comment on
    `view_definition_from_options`.
 3. **View wiring**: resolve the cap in `build_sql_batch_view` and add the `max_jit_src_bytes`
-   parameter to `SqlBatchView::new`, updating its callers. Record all scanned sources in `inspect_scan` / `validate_view_definition`.
-   Rename `with_on_demand_sources` to `with_sources`, update `view_registry.rs:209`, and derive
-   the on-demand subset for `snapshot_sources` and for the daemon-reads-on-demand check. Update the
-   two validation tests and the `view_definition.rs:429` doc comment.
+   parameter to `SqlBatchView::new`, updating its callers. Add the extract-only `Vec<ViewMetadata>` accumulator and return it from
+   `validate_view_definition`; store it through `with_on_demand_sources`, and update
+   `view_registry.rs:209` and the `view_definition.rs:429` doc comment.
    `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and discards the result, so
    it needs no change beyond compiling.
 4. **Freshness row**: add `file_size` to `PartitionFreshnessRow`, `fetch_freshness_candidates` and
@@ -240,13 +237,13 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   field, `build_sql_batch_view`, `inspect_scan`, `validate_view_definition`
 - `rust/analytics/src/lakehouse/view_ddl.rs`: option parsing and rejection
 - `rust/analytics/src/lakehouse/sql_batch_view.rs`: `new` parameter `max_jit_src_bytes`,
-  `with_sources`, `jit_update`
+  `with_on_demand_sources`, `jit_update`
 - `SqlBatchView::new` callers: `streams_view.rs`, `processes_view.rs`,
   `rust/analytics/tests/{sql_view_test,histo_view_test,sql_batch_view_merge_ordering_tests}.rs`,
   `rust/public/tests/materialize_fail_isolation_tests.rs`
 - `ViewOptions` literals: `log_stats_view.rs`, `view_ddl.rs`,
   `rust/analytics/tests/{view_registry_tests,on_demand_jit_tests,view_ddl_parse_tests,view_definition_validation_tests}.rs`
-- `rust/analytics/src/lakehouse/view_registry.rs`: `with_sources`
+- `rust/analytics/src/lakehouse/view_registry.rs`: the `with_on_demand_sources` call
 - `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size`,
   `fetch_freshness_candidates`, the `promote_closed_buckets` call
 - `rust/analytics/src/lakehouse/jit_promotion.rs`: byte cap in `is_promotable` / `promote_one` /
@@ -299,8 +296,8 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   `max_jit_src_data` is the size control for them.
 - Block-driven JIT views keep their `max_nb_objects` rule. Their promotion passes no byte cap.
 - No CHANGELOG "minor breaking change" clause for the on-demand behavior: #1778 is unreleased. The
-  CHANGELOG bullet states the new rungs, and how they change the bucket sizes of the block-driven
-  JIT views for queries from 6 hours to under 24 hours. The bullet ends with a **Minor breaking
+  CHANGELOG bullet states the new rungs. The block-driven bucket-size change is recorded by
+  editing the unreleased #1496 bullet, not in the #1779 bullet. The bullet ends with a **Minor breaking
   change:** clause for the Rust API changes (see Documentation).
 
 ## Documentation
@@ -316,9 +313,10 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   - "Cost" bullet: a dense stale range costs one probe and one write per leaf.
 - `mkdocs/docs/architecture/index.md:225`: the ladder listing gains the 15-minute and 30-minute
   rungs.
-- `CHANGELOG.md`: a new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
-  clause listing the `validate_view_definition` return type, `with_on_demand_sources` renamed to
-  `with_sources`, the new `PartitionFreshnessRow.file_size` field, and the new `max_bytes`
+- `CHANGELOG.md`: edit the unreleased #1496 bullet: the ladder becomes "minute, 5, 15 and 30
+  minutes, hour, 6 hours, day" and "roughly 24 to 288 partitions" becomes "roughly 24 to 144
+  partitions". A new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
+  clause listing the `validate_view_definition` return type, the new `PartitionFreshnessRow.file_size` field, and the new `max_bytes`
   argument of `is_promotable` / `promote_one` / `promote_closed_buckets`, the new
   `max_jit_src_bytes` parameter of `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
   field.
@@ -330,15 +328,13 @@ helpers:
 
 - `view_ddl_parse_tests.rs`: `max_jit_src_data` accepted on an on-demand view, rejected with
   `update_group`, a bad unit or a non-positive value rejected, absent → `None`.
-- `view_definition_validation_tests.rs` (`try_validate_sources`): an extract over a daemon
-  source (e.g. `measures`) records it as a source but not as an on-demand source, and a daemon view reading it
-  is still accepted. A `ViewOptions`
+- `view_definition_validation_tests.rs`: a `ViewOptions`
   JSON without the field deserializes. `parse_byte_size` cases, including case and units.
 - `partition_ladder_tests.rs`: the existing "each rung divides the next" test covers the new
   rungs. `select_rung` picks 15m for a 6-hour range and 30m for a 12-hour range, and keeps 1h for
   1 day and 6h for 7 days. `plan_by_source_bytes`: sparse → stays at the rung. Uniform dense
   → all at the rung that fits. Uneven density → mixed rungs that tile the range. Over the cap at
-  `LADDER[0]` → emitted at the floor. A range not aligned to one rung (a grown unit) → tiled by the coarsest aligned buckets.
+  `LADDER[0]` → emitted at the floor. A range not aligned to one rung (a grown unit) → tiled by the coarsest aligned buckets. A range whose edges are off the minute grid → the sub-minute edge pieces are emitted as exact-range leaves, and the leaves tile the range with no gap.
 - `on_demand_jit_tests.rs`:
   - `source_bytes`: full containment, prorated straddle, zero-width partition, other views
     ignored, stale-schema partition ignored.
