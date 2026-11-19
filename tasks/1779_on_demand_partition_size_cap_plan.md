@@ -134,8 +134,9 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
    ladder buckets that fit it, then recurses like `plan_bucket`: a bucket at or under the cap is
    emitted at its rung, and a bucket over the cap splits into finer children, down to `LADDER[0]` (1 minute). A part of
    the range narrower than `LADDER[0]` at the unit's edges (a grown unit can end off the minute grid,
-   e.g. around 1-second daemon partitions) is emitted as one leaf over its exact sub-range, counted
-   toward `over_cap` like the 1-minute floor. A
+   e.g. around 1-second daemon partitions) is emitted as one leaf over its exact sub-range with
+   `rung = LADDER[0]`, counted as `over_cap` only when its source bytes exceed the cap, like the
+   1-minute floor. A
    1-minute bucket is emitted even over the cap, logged as a warning and counted as `on_demand_jit{outcome="over_cap"}` in addition to its write outcome
    (`written` / `conflict_dropped`). Picking leaves from source bytes alone means a dense first
    query doesn't probe every intermediate rung.
@@ -144,7 +145,8 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
    `planned_rung = Some(leaf rung)`. After the retire there are no rows left to grow around, so
    leaves are written as planned and don't descend again. `resolve_conflict` re-settles a grown
    unit around concurrent rows; it sends the recomputed unit back through `plan_stale_unit` (write
-   whole only within the cap, otherwise retire and write leaves) instead of writing it whole.
+   whole only within the cap, otherwise retire and write leaves) instead of writing it whole. Any conflict while writing leaves inside `resolve_conflict` is an
+   error (no recursion, as today for a second conflict); leaves already written stay written.
 
 The decision in steps 1-3 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
 `on_demand_jit.rs` returning either "write whole" or "retire these rows, then write these leaves",
@@ -226,7 +228,9 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
    `is_promotable` doc comment (`jit_promotion.rs:33`, "within the object cap").
 7. **On-demand driver**: in `on_demand_jit.rs`, add `source_bytes`, `split_promotion` and
    `plan_stale_unit`, apply `split_promotion` in `promotion_targets`, execute `plan_stale_unit`
-   (retire, then write leaves) in the unit loop of `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`. Route `resolve_conflict` through `plan_stale_unit`.
+   (retire, then write leaves) in the unit loop of `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`. Route `resolve_conflict` through `plan_stale_unit`. Add the extract-only `&[ViewMetadata]` and the
+   `max_jit_src_bytes` cap as parameters of `update_on_demand_view` and `resolve_conflict`, and pass them from
+   `SqlBatchView::jit_update`.
    Update the module doc (lines 1-6).
 8. **Docs and CHANGELOG** (see Documentation).
 9. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas-analytics`.
@@ -334,7 +338,7 @@ helpers:
   rungs. `select_rung` picks 15m for a 6-hour range and 30m for a 12-hour range, and keeps 1h for
   1 day and 6h for 7 days. `plan_by_source_bytes`: sparse → stays at the rung. Uniform dense
   → all at the rung that fits. Uneven density → mixed rungs that tile the range. Over the cap at
-  `LADDER[0]` → emitted at the floor. A range not aligned to one rung (a grown unit) → tiled by the coarsest aligned buckets. A range whose edges are off the minute grid → the sub-minute edge pieces are emitted as exact-range leaves, and the leaves tile the range with no gap.
+  `LADDER[0]` → emitted at the floor. A range not aligned to one rung (a grown unit) → tiled by the coarsest aligned buckets. A range whose edges are off the minute grid → the sub-minute edge pieces are emitted as exact-range leaves (flagged over the cap only when their source bytes exceed it), and the leaves tile the range with no gap.
 - `on_demand_jit_tests.rs`:
   - `source_bytes`: full containment, prorated straddle, zero-width partition, other views
     ignored, stale-schema partition ignored.
@@ -354,8 +358,10 @@ The async driver wiring in `update_on_demand_view` needs a live DB and object st
 
 ## Manual Verification
 
-1. Start the services: `python3 local_test_env/ai_scripts/start_services.py`. Ingest data with
-   `python3 local_test_env/ai_scripts/run_generator.py` for at least about an hour, and wait for
+1. Start the services: `python3 local_test_env/ai_scripts/start_services.py`. Ingest data by
+   running `python3 local_test_env/ai_scripts/run_generator.py` repeatedly (each run exits after
+   its default `--tasks 5000`), or with a larger `--tasks`, until at least about an hour of insert
+   time is ingested, and wait for
    the hourly buckets to close before step 4.
 2. Create an on-demand view over `measures` with a tiny cap so it descends:
    `micromegas-query "CREATE MATERIALIZED VIEW m_cap WITH (extract_query = \$\$SELECT * FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'\$\$, count_src_query = \$\$SELECT count(*) AS count FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'\$\$, merge_partitions_query = \$\$SELECT * FROM {source}\$\$, time_column = 'time', max_jit_src_data = '1 MB')" --all`.
