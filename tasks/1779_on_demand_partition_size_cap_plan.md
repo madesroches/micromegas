@@ -43,7 +43,8 @@ over the cap descends by 3× or 2× instead of jumping 12× from one hour to fiv
   extract scans, but records only global on-demand views. `validate_view_definition`
   (`view_definition.rs:431`) returns them as `Vec<Arc<dyn View>>`. They are stored on
   `SqlBatchView` through `with_on_demand_sources` (`sql_batch_view.rs:176`, wired in
-  `view_registry.rs:199` and `flight_sql_service_impl.rs:1168`). Daemon-maintained sources such as
+  `view_registry.rs:209`; `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and
+  discards the result). Daemon-maintained sources such as
   `measures` are walked but not recorded.
 - DDL options (`view_ddl.rs:172`) reject `source_partition_delta` / `merge_partition_delta` on
   on-demand views, as a v1 stopgap pending this issue. `ViewOptions` (`view_definition.rs:41`) is
@@ -64,8 +65,9 @@ still holds. Partitions already written at the old rungs nest inside the new one
 judged on summed counts, so no migration is needed.
 
 Because `select_rung` is shared, the change also affects the block-driven JIT views. With the
-24-bucket target, a 6-hour query moves from 72 five-minute buckets to 24 fifteen-minute ones, and
-a 12-hour query from 12 one-hour buckets to 24 thirty-minute ones. Other ranges are unchanged
+24-bucket target, queries from 6 hours up to 12 hours move from five-minute buckets (72 for 6
+hours) to 15-minute ones (24), and queries from 12 hours up to 24 hours move from five-minute
+buckets (144 for 12 hours) to 30-minute ones (24 to 48). Other ranges are unchanged
 (1 day → 1 h, 7 days → 6 h). The result is fewer, larger partitions and fewer probes for medium
 ranges. This is a partition-layout change, not a SQL break. Descent (`plan_bucket`) and the open
 edge walk more rungs, but they are pure computations over counts that were already fetched.
@@ -76,13 +78,12 @@ edge walk more rungs, but they are pure computations over counts that were alrea
   insensitive, base 1024), mirroring `parse_time_delta`. It is parsed by a new
   `parse_byte_size(&str) -> Result<i64>` in `view_definition.rs`, which rejects non-positive
   values.
-- On-demand only: it is rejected when `update_group` is set, by the same loop that rejects the
-  delta options on on-demand views, in the opposite direction.
+- On-demand only: a separate `update_group.is_some()` check in `view_ddl.rs` rejects it (the
+  delta-rejection loop, `view_ddl.rs:237-249`, runs only when `update_group.is_none()`), plus a new
+  `"max_jit_src_data"` arm in the option key match (`view_ddl.rs:186-233`).
 - Stored as `ViewOptions::max_jit_src_data: Option<String>` with `serde(default,
   skip_serializing_if = "Option::is_none")`. `None` means the built-in default
-  `DEFAULT_MAX_JIT_SRC_DATA = 1 GiB`, resolved in `build_sql_batch_view`. Because the default is
-  resolved at load time rather than stored, tuning it later applies to every view that didn't set
-  its own.
+  `DEFAULT_MAX_JIT_SRC_DATA = 1 GiB`, resolved in `build_sql_batch_view`.
 - `SqlBatchView` gains `max_jit_src_bytes: i64`, passed to `update_on_demand_view` from
   `jit_update`.
 
@@ -91,8 +92,12 @@ edge walk more rungs, but they are pure computations over counts that were alrea
 `inspect_scan` records every scanned `MaterializedView`, deduplicated by (view set, instance).
 `validate_view_definition` returns that full list. `SqlBatchView::with_on_demand_sources` becomes
 `with_sources`. The on-demand subset (`requires_query_range()` and instance `"global"`, the
-current rule) is derived from it where `snapshot_sources` needs it. A list of `ViewMetadata`
-(set and instance) is kept for the byte sum.
+current rule) is derived from it where `snapshot_sources` needs it, and the daemon-reads-on-demand
+check (`view_definition.rs:557-563`) filters to that same subset, so a daemon view reading
+`measures` or `log_entries` is still accepted. The two existing validation tests
+(including `view_reading_only_daemon_views_has_no_on_demand_sources`) and the doc comment at
+`view_definition.rs:429` are updated to the new return contract. The full `ViewMetadata` from
+`source.get_meta()` (set, instance and `file_schema_hash`) is kept for the byte sum.
 
 ### 4. Source bytes of a range
 
@@ -104,7 +109,8 @@ pub fn source_bytes(partitions: &[Partition], sources: &[ViewMetadata], range: T
 
 It sums `file_size` over the source partitions, each prorated by
 `|insert range ∩ range| / |insert range|`. A zero-width partition counts whole when its insert
-time is in `[begin, end)`. Partitions of other views are ignored. Prorating assumes data is spread
+time is in `[begin, end)`. Partitions that don't match a source's full `ViewMetadata` (including `file_schema_hash`) are
+ignored, so old-schema partitions of a source view and partitions of other views don't count. Prorating assumes data is spread
 evenly in insert time. That is good enough for a cap: extracts filter sources by insert time, and
 the daemon's source partitions are insert-time aligned. Sources that aren't lakehouse partitions
 count as 0, which keeps today's behavior for them.
@@ -116,14 +122,15 @@ After `probe_unit` returns `Stale` for a closed unit planned as a single bucket
 
 1. If `source_bytes(unit.range) <= cap`, or `r` is the finest rung, write the unit as today. At
    the finest rung with bytes over the cap, log it and record
-   `on_demand_jit{outcome="over_cap"}`.
+   `on_demand_jit{outcome="over_cap"}` in addition to the write outcome
+   (`written` / `conflict_dropped`).
 2. Otherwise, plan the leaves with a new pure `plan_by_source_bytes(range, rung, bytes_fn, cap) ->
    Vec<PlannedBucket>` in `partition_ladder.rs`. It is a recursion shaped like `plan_bucket`: a
    bucket at or under the cap is emitted at its rung, and a bucket over the cap splits into
    `finer_rung` children, down to `LADDER[0]`. Picking leaves from source bytes alone means a dense
    first query doesn't probe every intermediate rung.
 3. Run `plan_units(leaves, rows)`. If that yields exactly the original unit (existing coarse rows
-   force it back together), write the whole unit and record `over_cap`. Otherwise probe each
+   force it back together), write the whole unit and record `over_cap` in addition to the write outcome. Otherwise probe each
    sub-unit, and write it when it is stale, with the same conflict handling (`resolve_conflict`).
    Sub-units don't descend again: their leaves were already sized.
 
@@ -139,7 +146,8 @@ Neither the snapshot range nor the order of `update_on_demand_view` changes.
 - `PartitionFreshnessRow` gains `file_size: i64`. `fetch_freshness_candidates` selects it and
   `freshness_row` copies it.
 - `is_promotable(inputs, max_nb_objects, max_bytes)` also requires `Σ file_size <= max_bytes`. The
-  block-driven JIT path passes `i64::MAX`, which leaves it unchanged. `promote_closed_buckets` and
+  block-driven JIT path passes `i64::MAX`, which leaves it unchanged, and so does
+  `promotion_candidates` (`jit_promotion.rs:76`). `promote_closed_buckets` and
   `promote_one` take `max_bytes`, and the lock-time recheck applies it.
 - `promotion_targets(units, rows, verdicts, cap)` keeps covered, closed, ungrown units at any
   planned rung, not only the query's rung, because descended leaves can be covered too. For each
@@ -176,20 +184,26 @@ peak.
 1. **Ladder**: insert the 15m and 30m rungs into `LADDER` in `partition_ladder.rs`. In the
    tests, replace the positional rung constants with explicit `TimeDelta`s first. After the
    insert, `LADDER[2]` silently becomes 15 minutes, and the compiler won't flag it. Then update
-   on purpose the assertions that hard-code a rung choice (for example a 6-hour query → 5m).
+   on purpose the assertions that hard-code a rung choice: the 6-hour and 23-hour assertions
+   (`partition_ladder_tests.rs:36-37`, now 15m and 30m). The 2-hour one stays at 5m. Update the
+   `partition_ladder.rs` module doc comment (line 1 lists "minute, 5 min, hour, 6 h, day").
 2. **Option parsing**: add `parse_byte_size` and `DEFAULT_MAX_JIT_SRC_DATA` to
    `view_definition.rs`, and add the `ViewOptions::max_jit_src_data` field. Accept the option in
    `view_ddl.rs`, reject it on daemon views, and update the doc comment on
    `view_definition_from_options`.
 3. **View wiring**: resolve the cap in `build_sql_batch_view` and add `max_jit_src_bytes` to
    `SqlBatchView`. Record all scanned sources in `inspect_scan` / `validate_view_definition`.
-   Rename `with_on_demand_sources` to `with_sources`, update `view_registry.rs` and
-   `flight_sql_service_impl.rs`, and derive the on-demand subset for `snapshot_sources`.
+   Rename `with_on_demand_sources` to `with_sources`, update `view_registry.rs:209`, and derive
+   the on-demand subset for `snapshot_sources` and for the daemon-reads-on-demand check. Update the
+   two validation tests and the `view_definition.rs:429` doc comment.
+   `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and discards the result, so
+   it needs no change beyond compiling.
 4. **Freshness row**: add `file_size` to `PartitionFreshnessRow`, `fetch_freshness_candidates` and
    `freshness_row`. Fix the constructors the compiler flags, mostly in tests.
 5. **Ladder planner**: add `plan_by_source_bytes` to `partition_ladder.rs`.
-6. **Promotion cap**: add `max_bytes` to `is_promotable`, `promote_one` and
-   `promote_closed_buckets`. Pass `i64::MAX` in `jit_partitions.rs:1542`.
+6. **Promotion cap**: add `max_bytes` to `is_promotable` (made `pub` so integration tests can
+   reach it), `promote_one` and `promote_closed_buckets`. Pass `i64::MAX` in
+   `jit_partitions.rs:1542` and in `promotion_candidates` (`jit_promotion.rs:76`).
 7. **On-demand driver**: in `on_demand_jit.rs`, add `source_bytes` and `split_promotion`,
    generalize `promotion_targets`, add the stale-unit descent to the unit loop of
    `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`.
@@ -203,12 +217,11 @@ peak.
 - `rust/analytics/src/lakehouse/view_ddl.rs`: option parsing and rejection
 - `rust/analytics/src/lakehouse/sql_batch_view.rs`: `max_jit_src_bytes`, `with_sources`,
   `jit_update`
-- `rust/analytics/src/lakehouse/view_registry.rs`, `rust/public/src/servers/flight_sql_service_impl.rs`:
-  `with_sources`
+- `rust/analytics/src/lakehouse/view_registry.rs`: `with_sources`
 - `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size`,
   `fetch_freshness_candidates`, the `promote_closed_buckets` call
 - `rust/analytics/src/lakehouse/jit_promotion.rs`: byte cap in `is_promotable` / `promote_one` /
-  `promote_closed_buckets`, `freshness_row`
+  `promote_closed_buckets`, `freshness_row`, `promotion_candidates` (passes `i64::MAX`)
 - `rust/analytics/src/lakehouse/partition_ladder.rs`: `LADDER`, `plan_by_source_bytes`
 - `rust/analytics/src/lakehouse/on_demand_jit.rs`: `source_bytes`, `split_promotion`,
   `promotion_targets`, descent in `update_on_demand_view`
@@ -234,14 +247,6 @@ peak.
   are already in the catalog.
 - **A byte estimate from the source snapshot**, rather than a `count_src_query`-based estimate:
   the snapshot is already loaded, so the estimate needs no query.
-- **Default of 1 GB, rather than 256 MB or 2 GB.** It stays below the hourly `measures`
-  partitions the maintenance daemon already writes in a dense deployment (about 1.4 GB at the
-  median), so it is a safe bound on what one step reads. With the new rungs, it keeps the densest
-  source at 15 minutes or coarser. 256 MB or 512 MB would push peak `measures` hours back to
-  5 minutes, which means 288 files per day and about 8,600 for a 30-day query. 2 GB doubles the
-  worst-case cost of one extract or merge, and the latency of the first query over a dense range.
-- **Rungs at 15 and 30 minutes only.** The 1-hour to 6-hour gap is also 6×, but at a 1 GB cap no
-  observed source needs a 3-hour rung.
 
 ## Decisions
 
@@ -261,8 +266,8 @@ peak.
 - Block-driven JIT views keep their `max_nb_objects` rule. Their promotion passes no byte cap.
 - No CHANGELOG "minor breaking change" clause for the on-demand behavior: #1778 is unreleased. The
   CHANGELOG bullet states the new rungs, and how they change the bucket sizes of the block-driven
-  JIT views for 6-hour and 12-hour queries. The Rust API changes (`validate_view_definition` return type, `with_sources`, the
-  `PartitionFreshnessRow` field, `promote_closed_buckets` arguments) are noted in the bullet.
+  JIT views for queries from 6 hours to under 24 hours. The bullet ends with a **Minor breaking
+  change:** clause for the Rust API changes (see Documentation).
 
 ## Documentation
 
@@ -276,7 +281,10 @@ peak.
   - "Cost" bullet: a dense stale range costs one write per fine bucket.
 - `mkdocs/docs/architecture/index.md:225`: the ladder listing gains the 15-minute and 30-minute
   rungs.
-- `CHANGELOG.md`: a new Unreleased bullet for #1779.
+- `CHANGELOG.md`: a new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
+  clause listing the `validate_view_definition` return type, `with_on_demand_sources` renamed to
+  `with_sources`, the new `PartitionFreshnessRow.file_size` field, and the new `max_bytes`
+  argument of `is_promotable` / `promote_one` / `promote_closed_buckets`.
 
 ## Testing Strategy
 
@@ -286,7 +294,8 @@ helpers:
 - `view_ddl_parse_tests.rs`: `max_jit_src_data` accepted on an on-demand view, rejected with
   `update_group`, a bad unit or a non-positive value rejected, absent → `None`.
 - `view_definition_validation_tests.rs` (`try_validate_sources`): an extract over a daemon
-  source (e.g. `measures`) records it as a source but not as an on-demand source. A `ViewOptions`
+  source (e.g. `measures`) records it as a source but not as an on-demand source, and a daemon view reading it
+  is still accepted. A `ViewOptions`
   JSON without the field deserializes. `parse_byte_size` cases, including case and units.
 - `partition_ladder_tests.rs`: the existing "each rung divides the next" test covers the new
   rungs. `select_rung` picks 15m for a 6-hour range and 30m for a 12-hour range, and keeps 1h for
@@ -295,13 +304,13 @@ helpers:
   `LADDER[0]` → emitted at the floor.
 - `on_demand_jit_tests.rs`:
   - `source_bytes`: full containment, prorated straddle, zero-width partition, other views
-    ignored.
+    ignored, stale-schema partition ignored.
   - `split_promotion`: fits → one target; over the cap → child targets; straddling row → that
     child skipped; a single row → no target.
   - `promotion_targets`: covered leaves at a finer rung qualify, grown or open units don't.
   - Descent fallback: `plan_units` over leaves that an existing coarse row forces back together
     yields the original unit.
-- `jit_promotion_tests.rs`: `is_promotable` rejects inputs whose `file_size` sum exceeds
+- `jit_promotion_tests.rs`: `is_promotable` (now `pub`) rejects inputs whose `file_size` sum exceeds
   `max_bytes`, and accepts them at the cap exactly.
 
 The async driver wiring in `update_on_demand_view` needs a live DB and object store. Per
@@ -312,17 +321,17 @@ The async driver wiring in `update_on_demand_view` needs a live DB and object st
 Checked by hand because the driver's wiring needs real services and ingested data:
 
 1. Start the services: `python3 local_test_env/ai_scripts/start_services.py`. Ingest data with
-   `python3 local_test_env/ai_scripts/run_generator.py` until `measures` holds a few minutes of
-   data.
+   `python3 local_test_env/ai_scripts/run_generator.py` for at least about an hour, and wait for
+   the hourly buckets to close before step 4.
 2. Create an on-demand view over `measures` with a tiny cap so it descends:
-   `micromegas-query "CREATE MATERIALIZED VIEW m_cap WITH (extract_query = \$\$SELECT * FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'\$\$, count_src_query = \$\$SELECT count(*) AS count FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'\$\$, merge_partitions_query = \$\$SELECT * FROM {source}\$\$, time_column = 'time', max_jit_src_data = '1 MB')"`.
+   `micromegas-query "CREATE MATERIALIZED VIEW m_cap WITH (extract_query = \$\$SELECT * FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'\$\$, count_src_query = \$\$SELECT count(*) AS count FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'\$\$, merge_partitions_query = \$\$SELECT * FROM {source}\$\$, time_column = 'time', max_jit_src_data = '1 MB')" --all`.
    Expected: accepted. The same statement with `update_group = 10` is rejected.
 3. `micromegas-query "SELECT count(*) FROM m_cap" --begin 6h` (a 15-minute rung), then
-   `micromegas-query "SELECT begin_insert_time, end_insert_time, file_size FROM list_partitions() WHERE view_set_name = 'm_cap' ORDER BY begin_insert_time"`.
+   `micromegas-query "SELECT begin_insert_time, end_insert_time, file_size FROM list_partitions() WHERE view_set_name = 'm_cap' ORDER BY begin_insert_time" --all`.
    Expected: closed partitions are narrower than the 15-minute query rung wherever a 15-minute
    bucket's source data is over 1 MB.
-4. Recreate the view with `max_jit_src_data = '1 GB'`, then run `retire_partitions` on it and
-   re-run step 3. Expected: closed partitions at the 15-minute rung. A second query over
+4. Run `DROP MATERIALIZED VIEW m_cap` (which retires its partitions), recreate the view with
+   `max_jit_src_data = '1 GB'`, and re-run step 3. Expected: closed partitions at the 15-minute rung. A second query over
    `--begin 1d` (a 1-hour rung) merges closed rows into 1-hour partitions whose `file_size` stays
    under the cap.
 
