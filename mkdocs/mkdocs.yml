@@ -173,6 +173,7 @@ nav:
         - View Sets as Code: admin/views-as-code.md
         - Analytics Web App Deployment: admin/web-app.md
         - Monolith Deployment: admin/monolith.md
+        - MCP Server: admin/mcp.md
         - Object Cache Deployment: admin/object-cache.md
         - Redis Exporter: admin/redis-exporter.md
         - Service Lifecycle & Shutdown: admin/service-lifecycle.md

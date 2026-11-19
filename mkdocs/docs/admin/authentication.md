@@ -131,6 +131,10 @@ telemetry-ingestion-srv --disable-auth
 !!! danger "Security Warning"
     Never disable authentication in production environments. This flag is intended only for local development and testing.
 
+## MCP bearer
+
+The `/mcp` route of `analytics-web-srv` accepts the same credentials as FlightSQL as its bearer token: an OIDC token or an analytics API key. The token is validated by the web server and forwarded to FlightSQL, which validates it again. Screen write tools require an OIDC identity; an analytics key gets the read tools only. A 401 from the route carries a `resource_metadata` pointer to an unauthenticated metadata document naming the first configured OIDC issuer, so MCP clients that run the OAuth login themselves can sign in without a pasted token. See [MCP Server](mcp.md).
+
 ## Authorization
 
 Authentication establishes *who* is calling; authorization decides *what* they

@@ -393,6 +393,7 @@ Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
 - `GET`/`POST /api/audience-grants`, `DELETE /api/audience-grants?audience=&axis=&selector=`, `GET /api/audience-grants/visible`, `GET /api/audience-grants/my-audiences` — Audience grant CRUD and the caller-scoped reads (see [Authorization](authorization.md#audiences-and-grants))
 - `GET`/`POST /api/groups`, `DELETE /api/groups/{name}`, `GET`/`POST /api/groups/{name}/members`, `DELETE /api/groups/{name}/members?member=` — Group CRUD and membership management, admin-only (see [Groups](groups.md))
 - `GET /api/settings`, `PUT`/`DELETE /api/settings/{key}` — List, set and reset deployment settings, admin-only (see [Settings](authorization.md#settings))
+- `GET /.well-known/oauth-protected-resource` — OAuth protected-resource metadata for the MCP route (public, only when MCP is enabled, see [MCP Server](mcp.md#client-configuration))
 - `GET /auth/login` — Initiate OAuth login
 - `GET /auth/callback` — OAuth callback
 - `POST /auth/refresh` — Refresh tokens
@@ -405,11 +406,15 @@ With `MICROMEGAS_BASE_PATH="/analytics"`, all routes are prefixed (e.g., `/analy
 - Add the redirect URI to allowed callbacks
 - For Google: Cloud Console → APIs & Services → Credentials
 
+## MCP route
+
+Set `MICROMEGAS_MCP_ENABLED=true` to serve an MCP endpoint at `{base_path}/mcp` for agents without a shell. See [MCP Server](mcp.md).
+
 ## Architecture
 
 - **Frontend**: Vite/React SPA on port 3000 (dev) or served by backend (prod)
 - **Backend**: Rust (`analytics-web-srv`) on port 3000 (default); the dev start script uses 8000 to avoid conflicting with the Vite dev server
-- **Auth**: OIDC (ID tokens via httpOnly cookies)
+- **Auth**: OIDC (ID tokens via httpOnly cookies); the optional `/mcp` route instead validates a bearer token (OIDC or analytics key), see [MCP Server](mcp.md)
 - **Data**: FlightSQL queries to analytics service
 
 Backend proxies FlightSQL with user's ID token. No direct data access.

@@ -1,0 +1,423 @@
+---
+name: micromegas-query
+description: Query micromegas observability data (logs, metrics, spans) using SQL. Use when the user wants to explore telemetry data, investigate errors, check performance, or analyze system behavior.
+argument-hint: "<SQL query or natural language question about observability data>"
+context: fork
+shell: bash
+allowed-tools: Bash(pip install micromegas), Bash(pip install --upgrade micromegas), Bash(micromegas-query *), Bash(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), Bash(micromegas-logout), Bash(micromegas-logout *), PowerShell(python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(python -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(py -3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"), PowerShell(pip install micromegas), PowerShell(pip install --upgrade micromegas), PowerShell(micromegas-query *), PowerShell(micromegas-logout), PowerShell(micromegas-logout *), Read, Write(~/.micromegas/config.json), Edit(~/.micromegas/config.json), Glob, Grep, WebFetch(https://micromegas.info/*), WebFetch(https://datafusion.apache.org/*)
+---
+
+The user's query or question: $ARGUMENTS
+
+## MANDATORY RULES — read before writing ANY query
+
+1. **Every query MUST have `--begin` (and optionally `--end`).** No exceptions — not for `SELECT DISTINCT`, not for process lookups, not for exploratory queries. Default to `--begin 1h` when in doubt; narrow further when possible. The **only** exception: `--all` may be used for lightweight aggregate-only queries (`COUNT(*)`, `COUNT(DISTINCT ...)`, `MIN/MAX`) that return a single row or a small fixed number of rows. Never use `--all` with queries that return raw rows or unbounded GROUP BY result sets.
+2. **Every query MUST have a `LIMIT` clause** unless the user explicitly asks for all rows or the query is a pure aggregate (COUNT, SUM, etc.) guaranteed to return a small result set. Default to `LIMIT 20`. For GROUP BY queries, still add LIMIT (e.g. `LIMIT 50`).
+3. **Use `--begin`/`--end` CLI flags for time filtering, never `WHERE time >= ...` in SQL.** The CLI flags enable server-side partition pruning, making queries much faster.
+4. **Use `view_instance()` for single-process/stream queries.** Much better performance than filtering with WHERE.
+5. **`thread_spans` has no global view** — must use `view_instance('thread_spans', stream_id)` or `process_spans(process_id, 'thread')`.
+6. **`async_events` has no global view** — must use `view_instance('async_events', process_id)` or `process_spans(process_id, 'async')`.
+7. **For each view, stay within the time window its `description` gives (and apply its mandatory filters).** The `description` returned by `list_view_sets()` is binding (see Available views).
+
+Violating these rules can crash the analytics service by exhausting its memory, as can a `GROUP BY` without a selective filter on a large view (see Performance tips) — `LIMIT` caps output, not the group set.
+
+## Setup
+
+Before running the user's actual query, verify the environment with two cheap, no-network checks:
+a CLI-presence check, and a Python config probe. Run both — they test different things, since
+`micromegas-query` (a console script, typically on `PATH` via pipx/poetry/venv) and the `micromegas`
+module importable by the ambient `python3`/`python`/`py -3` interpreter can each be present without
+the other.
+
+First, check the CLI is on `PATH`:
+```
+micromegas-query --help
+```
+
+Second, use an ordinary shell check (use `Bash` on Linux/macOS, or on Windows without Git Bash,
+`PowerShell`) for the config probe. Try `python3` first; if that command is not found, fall back to
+`python`, then `py -3`:
+
+```
+python3 -c "import os; from micromegas.cli.config import resolve_connection; c = resolve_connection(); print(c.uri); print(c.oidc_issuer); print(c.oidc_client_id); print(os.path.exists(c.token_file))"
+```
+
+For a config with no `profiles` map, this call is total — it never fails just because nothing is
+configured yet, since a missing config resolves to the default `grpc://localhost:50051` — and it
+never triggers a browser login by itself (see the Interactive SSO note below). The one exception:
+if `~/.micromegas/config.json` has a `profiles` map but no profile is selected (no `default_profile`
+set, and neither `--profile` nor `MICROMEGAS_PROFILE` given to this probe), or a stale
+`MICROMEGAS_PROFILE` is set against a flat config with no `profiles` map, this call raises a Python
+`ProfileError` instead — see the probe-outcome bullet below for how to handle it. Read the two
+checks together:
+
+- **Only one of the two checks succeeds** — this is a `PATH`/interpreter mismatch, not "not
+  installed": use whichever one works (the CLI is what actually runs queries, so prefer it, and
+  treat the Python probe as best-effort diagnostics of the resolved config/OIDC state). Only
+  raise it with the user if neither check works after trying `pip install`/`pip install --upgrade`
+  below. If instead it's specifically the CLI that's missing while the Python probe succeeds,
+  that means the interpreter's scripts/bin directory isn't on `PATH` — not a package problem, so
+  don't suggest `pip install` — tell the user this directly rather than trying to proceed.
+- **`ModuleNotFoundError: No module named 'micromegas'`, and the CLI is also missing** — the
+  package isn't installed. Run:
+  ```
+  pip install micromegas
+  ```
+- **Any other import error naming something inside `micromegas`** (e.g.
+  `No module named 'micromegas.cli.config'`) — an older `micromegas` version is already installed
+  that predates this config module. `pip install micromegas` alone is a no-op in this case; run:
+  ```
+  pip install --upgrade micromegas
+  ```
+- **Prints four lines with no error** — the package is present and importable. Read the four
+  printed values (`uri`, `oidc_issuer`, `oidc_client_id`, token-file-exists) as follows:
+  - A printed `uri` of `grpc://localhost:50051` is ambiguous — it may be a deliberate local
+    deployment, or nothing may be configured yet. Don't treat it as reason to overwrite an
+    existing config on its own; ask the user first if you're unsure whether it's configured.
+  - If `oidc_issuer` and `oidc_client_id` are both `None`, no OIDC is configured — no further
+    setup is implied for auth; either the URI is enough (plain connection) or the user still needs
+    to provide connection details (see below).
+- **Raises `ProfileError`** (an uncaught traceback naming `ProfileError`, not a clean CLI usage
+  error, since this probe calls `resolve_connection()` directly) — treat this as a profile-selection
+  problem, not a broken install. There are three distinct causes; read the message to tell them apart:
+  - A `profiles` map exists but no profile is selected — the error message lists the available
+    profile names. Prefer offering to set `default_profile` in `config.json` to one of them: this
+    is the option that keeps the config probe working, since the probe is a fixed command (pinned
+    in this skill's `allowed-tools`) that always calls `resolve_connection()` with no arguments and
+    has no way to take a `--profile` flag itself. If the user instead wants a session-only
+    `--profile <name>` (passed on every `micromegas-query`/`micromegas-logout` call, without
+    touching `config.json`), be explicit that this leaves the probe permanently raising
+    `ProfileError` for the rest of the session — token/login state for that profile is then
+    unknown to you. In that case, don't run the first `micromegas-query --profile <name>` call
+    yourself; ask the *user* to run it themselves, since you can't tell from the broken probe
+    whether it's safe (see the Interactive SSO note below on why running a possibly-first,
+    possibly-token-less call yourself risks blocking on a browser login.)
+  - No `profiles` map exists at all, but `MICROMEGAS_PROFILE` is set (a stale env var left over
+    against a flat config) — the error lists no profile names, and setting `default_profile` does
+    nothing since there's no `profiles` map for it to select from. Advise the user to unset
+    `MICROMEGAS_PROFILE`, or, if they actually want named profiles, migrate the flat config into a
+    `profiles` map.
+  - The message is `unknown profile '<name>' (available: ...)` — a profile name was resolved but
+    isn't in the `profiles` map. This looks similar to the "no profile selected" case above (both
+    list available profile names), but setting `default_profile` will *not* fix it: `--profile` and
+    `MICROMEGAS_PROFILE` both take precedence over `default_profile`, so a typo'd or stale
+    `MICROMEGAS_PROFILE` env var (or a mistyped `--profile` flag) would keep overriding it. Check
+    `MICROMEGAS_PROFILE` and any `--profile` flag for a typo against the listed available names
+    first, before touching `config.json`.
+
+If the user hasn't told you where to connect, ask them to provide:
+- Their analytics service URI (e.g. `https://analytics.example.com:443`)
+- If their deployment uses OIDC authentication: the issuer URL, client ID, and audience
+
+(Scope is not part of this flow — see the OIDC scope note below.)
+
+If the user instead wants to keep multiple named connections around (e.g. prod/dev/local) and
+switch between them, mention `~/.micromegas/config.json`'s `profiles` map, selected via
+`--profile`/`MICROMEGAS_PROFILE`, as the alternative to the single flat `uri`/`client_id`/`issuers`
+keys walked through below — same per-profile shape, just nested under `profiles.<name>` with a
+`default_profile` key picking the one used when no flag/env var is given.
+
+Once the user provides the values, read `~/.micromegas/config.json` first (it may already have
+content to preserve). If it already has a `profiles` map, write the new values into that profile
+entry — asking the user which profile if none is already active — and set `default_profile` to
+that name, rather than merging into the top-level `uri`/`client_id`/`issuers` keys (which are
+silently ignored once `profiles` is present, and would otherwise leave the skill writing dead
+config and then mis-diagnosing the unchanged active profile on the next probe):
+```json
+{
+  "default_profile": "<selected profile name>",
+  "profiles": {
+    "<selected profile name>": {
+      "uri": "<value from user>",
+      "client_id": "<value from user, only if OIDC>",
+      "issuers": [{ "issuer": "<value from user>", "audience": "<value from user>" }]
+    }
+  }
+}
+```
+Otherwise (no `profiles` map exists yet), merge the new values into the flat top-level shape
+instead, exactly as before:
+```json
+{
+  "uri": "<value from user>",
+  "client_id": "<value from user, only if OIDC>",
+  "issuers": [{ "issuer": "<value from user>", "audience": "<value from user>" }]
+}
+```
+Either way, this takes effect immediately for every subsequent `micromegas-query` call in this
+session or any future one — no shell profile edit or new terminal required, since the library
+reads this file on every invocation.
+
+**Legacy env var precedence**: `MICROMEGAS_ANALYTICS_URI`/`MICROMEGAS_OIDC_*` environment variables
+always take precedence over `config.json` (a previous version of this skill instructed setting
+these in `~/.micromegas_env`, sourced from `~/.bashrc`/`~/.zshrc`). If the verification probe below
+still shows stale values after you've written `config.json`, check the user's shell profile for a
+leftover `source ~/.micromegas_env` line or these env vars set directly, and ask them to remove it.
+
+**OIDC scope**: there's no `config.json` field for `oidc_scope` — it's only read from the
+`MICROMEGAS_OIDC_SCOPE` environment variable, with no config-file fallback. The library already
+defaults it to `"openid email profile offline_access"` when unset, which covers the common case.
+If the user needs a non-default scope (e.g. Azure's `api://{client_id}/.default`), tell them to
+set `MICROMEGAS_OIDC_SCOPE` themselves in their own shell profile — that's outside this skill's
+automated config flow.
+
+**Interactive SSO**: the setup probe above makes no network calls and can never trigger a login.
+Only the *first* real `micromegas-query` call can, and only when `oidc_issuer` and
+`oidc_client_id` are both configured — `connect()` takes the OIDC path only when both are truthy.
+When that's the case, check the probe's token-file-exists output:
+- If it's `False`, no cached token exists yet, so that first `micromegas-query` call may open a
+  browser for login and block waiting for the user. Ask the *user* to run that first call
+  themselves, in their own session, rather than attempting it yourself and hanging.
+- If it's `True`, a cached token already exists and `load_or_login()` will try it before ever
+  considering a browser — go ahead and run the query yourself. If that token has expired or been
+  revoked, this does not hang: the query fails cleanly with an error like `Token refresh failed:
+  ... Please re-authenticate.` If you see that error, clear the stale token: if a `profiles` map is
+  in use, run `micromegas-logout --profile <active profile>` to narrow the clear to that one
+  profile — a bare `micromegas-logout` wipes every profile's cached token, not just the stale one.
+  Otherwise (flat config, no `profiles` map), run bare `micromegas-logout`. Either way, then ask the
+  *user* to re-run the query themselves in their own session (this will trigger a fresh interactive
+  login).
+
+**Connection errors**: a connection error targeting `127.0.0.1:50051` (the default) means the URI
+never resolved to the intended service, not that authentication failed — this matters because it
+can appear interleaved with token-refresh output that suggests the wrong cause. Fix the `uri`
+value in `~/.micromegas/config.json` (or the `MICROMEGAS_ANALYTICS_URI` env var) rather than
+troubleshooting auth.
+
+After writing or changing `~/.micromegas/config.json`, re-run the config probe from Setup above —
+the file is read fresh on every invocation, so this reflects what you just wrote — and verify
+against that fresh output, not the pre-write probe: if no OIDC is configured (`oidc_issuer`/
+`oidc_client_id` both `None`), or a cached token already exists (token-file-exists is `True`), run:
+```
+micromegas-query "SELECT 1" --begin 1h
+```
+Otherwise (OIDC is configured and no token exists yet), this is the same first-call case covered
+by the Interactive SSO note above — ask the *user* to run that verification query themselves.
+This verification is only needed right after the config file changes — don't run it before
+ordinary queries.
+
+## CLI syntax
+
+```
+micromegas-query [--file <path|->] ["<SQL>"] --begin <time> [--end <time>] [--format table|csv|json] [--max-colwidth N]
+```
+
+- `--begin` is **always required** except when using `--all` for lightweight aggregate-only queries (see MANDATORY RULES).
+- `--file` accepts a `.sql` file path or `-` for stdin, as an alternative to the inline SQL positional argument. Using `--file` avoids awkward shell quoting when queries contain JSONPath expressions (e.g., `$[*].attributes[*]?(@.key=="Branch").value`).
+- Time formats: relative (`1h`, `30m`, `7d`) or RFC 3339
+- Use `--begin`/`--end` for time filtering, never `WHERE time >= ...` in SQL (see MANDATORY RULES).
+- Use `--format csv` or `--format json` when processing results programmatically (csv for flat data, json when properties/nested fields matter)
+- `--max-colwidth 0` for unlimited column width
+
+## Deployment notes
+
+If `~/.micromegas/query-notes.md` exists, read it before the catalog read (the first step of Available views below). It holds facts about this deployment: approximate row counts, stricter windows for the largest views, preferred subset views over `log_entries`, environment conventions.
+
+Where the notes conflict with a view's `description`, the notes win only by being stricter (narrower windows, extra filters). They never loosen a `description` or the MANDATORY RULES. The same applies to deployment notes given in context.
+
+## Available views
+
+**First step: ask the server what exists and how to use it.** Start with the cheap read of names only:
+
+```
+micromegas-query "SELECT view_set_name FROM list_view_sets() LIMIT 100" --begin 1h --format json
+```
+
+Then read the documentation for only the views the question needs:
+
+```
+micromegas-query "SELECT view_set_name, description, columns, sort_order FROM list_view_sets() WHERE view_set_name IN ('<name1>', '<name2>') LIMIT 100" --begin 1h --format json
+```
+
+`description` is a markdown usage guide per view (what a row is, how to access it, mandatory filters, how to decode columns, join keys, examples), `columns` lists `name: DataType` per column, and `sort_order` lists the columns a scan is already ordered by. It includes any views the deployment defined itself. Reading every view at once (dropping the `WHERE`) returns tens of KB on a deployment with a few dozen views, so avoid it. Keep `--format json`: table output truncates cells. **Do not run DESCRIBE queries** — `columns` and `description` from `list_view_sets()` cover the schemas and usage.
+
+**Descriptions are binding.** Time windows, mandatory filters and access rules in a view's `description` must be followed exactly like the MANDATORY RULES.
+
+**Empty results:** an empty result prints the lowercase string `no data` for every `--format`, so `json` and `csv` output is a bare, non-parseable string rather than an empty document. This includes a `GROUP BY` that matches no row. It is not an error and does not mean missing access. For an explicit 0, use a plain `COUNT(*)` without `GROUP BY`.
+
+**Ignore internal tables:** Tables prefixed with `__` and suffixed with `__partitions` (e.g. `__log_entries__partitions`) are internal partition tables — never query them directly.
+
+**Log levels:** 1=Fatal, 2=Error, 3=Warn, 4=Info, 5=Debug, 6=Trace
+
+**Type notes:** `Dictionary(Utf8)` columns are dictionary-encoded (`Dictionary(Int32, Utf8)`) and behave like `Utf8` in SQL. `properties`/`process_properties` are `Dictionary(Int32, Binary)` — always read them via `property_get()` / the JSONB functions rather than treating them as raw bytes.
+
+## Key functions
+
+### Table functions
+- `view_instance(view_name, id)` — scoped queries for a single process or stream, better performance
+- `process_spans(process_id, 'thread'|'async'|'both')` — all spans for a process with `stream_id` and `thread_name` columns. **Extremely dense** — always use tight `--begin`/`--end` and `LIMIT`.
+- `list_partitions()` — list available data partitions with metadata
+- `expand_histogram(h)` — expands a histogram into rows of `(bin_center, count)` for visualization
+- `jsonb_each(jsonb)` — expand JSONB object/array into rows of `(key, value)`. `value` is raw JSONB (Binary) — wrap it with `jsonb_as_string()`/`jsonb_as_f64()`/`jsonb_format_json()` to read it. Like `jsonb_array_elements`, its argument must be a literal or an uncorrelated subquery — `jsonb_each(t.col)` with a bare column reference fails to plan. For per-row expansion of a column, use `jsonb_entries`/`jsonb_elements`/`jsonb_path_elements` below with `unnest()` instead.
+
+### Property functions
+- `property_get(properties, key)` — extract property values
+- `properties_to_jsonb(properties)` — convert properties to JSONB format
+
+### JSONB functions
+- `jsonb_get(jsonb, key)` — extract value by key
+- `jsonb_as_string(jsonb)` — cast JSONB to string
+- `jsonb_as_f64(jsonb)` — cast JSONB to float
+- `jsonb_as_i64(jsonb)` — cast JSONB to integer
+- `jsonb_format_json(jsonb)` — JSONB to readable JSON string
+- `jsonb_parse(string)` — parse JSON string to JSONB
+- `jsonb_object_keys(jsonb)` — list keys of a JSONB object
+- `jsonb_array_length(jsonb)` — number of elements in a JSONB array
+- `jsonb_path_query_first(jsonb, path)` — first JSONPath match
+- `jsonb_path_query(jsonb, path)` — all JSONPath matches as array
+- `jsonb_entries(jsonb)` — expand a JSONB object/array into a `List<Struct<key, value>>`, for per-row expansion via `unnest()` (e.g. `unnest(jsonb_entries(properties))`)
+- `jsonb_elements(jsonb)` — expand a JSONB array into a `List<Binary>` of its elements, for per-row expansion via `unnest()`
+- `jsonb_path_elements(jsonb, path)` — expand all JSONPath matches into a `List<Binary>`, for per-row expansion via `unnest()`
+
+### Histogram functions
+- `make_histogram(start, end, bins, values)` — aggregate: creates a histogram from numeric values
+- `sum_histograms(h)` — aggregate: combines multiple histograms by summing bins
+- `quantile_from_histogram(h, quantile)` — estimate percentile (0.0–1.0, e.g. 0.5=median, 0.95=p95)
+- `variance_from_histogram(h)` — distribution variance
+- `count_from_histogram(h)` — total number of values
+- `sum_from_histogram(h)` — sum of all values
+
+### HyperLogLog functions (mergeable approximate distinct counts)
+- `make_hll(value)` — aggregate: builds a serialized sketch from strings, integers, floats or binary; NULL when no non-null, non-empty value was seen
+- `merge_hll(sketch)` — aggregate: unions sketches (e.g. daily sketches into a monthly one)
+- `hll_cardinality(sketch)` — estimated distinct count (UInt64, ~0.8% standard error); NULL for a NULL sketch
+- Distinct count over a period from daily sketches: `SELECT hll_cardinality(merge_hll(s)) FROM daily_uniques`
+
+### Discovering UDFs
+For micromegas extension functions, use the **Key functions** section above or the
+[functions reference](https://micromegas.info/docs/query-guide/functions-reference/) rather than
+querying for them — `information_schema.routines` lists them, but its `description` and
+`syntax_example` columns are only populated for DataFusion built-ins, since DataFusion derives
+them from `documentation()`, which no micromegas UDF implements. For DataFusion built-in scalar or
+aggregate functions, use the
+[DataFusion scalar](https://datafusion.apache.org/user-guide/sql/scalar_functions.html) /
+[aggregate](https://datafusion.apache.org/user-guide/sql/aggregate_functions.html) function docs
+(see **Reference documentation** below).
+
+## Common query patterns
+
+### Recent errors
+```
+micromegas-query "SELECT time, target, msg FROM log_entries WHERE level <= 2 ORDER BY time DESC LIMIT 20" --begin 1h
+```
+
+### Error trends via log_stats
+```
+micromegas-query "SELECT date_trunc('hour', time_bin) as hour, SUM(count) as total FROM log_stats WHERE level <= 2 GROUP BY 1 ORDER BY 1" --begin 1d
+```
+
+### Process discovery
+```
+micromegas-query "SELECT process_id, exe, computer, start_time FROM processes ORDER BY start_time DESC LIMIT 20" --begin 1d
+```
+
+### Logs for a specific process
+```
+micromegas-query "SELECT time, level, target, msg FROM view_instance('log_entries', '<process_id>') ORDER BY time DESC LIMIT 30" --begin '<start_time>' --end '<end_time>'
+```
+
+### Log volume by target
+```
+micromegas-query "SELECT target, SUM(count) as total FROM log_stats GROUP BY target ORDER BY total DESC LIMIT 20" --begin 1d
+```
+
+### Metric exploration
+```
+micromegas-query "SELECT DISTINCT name, unit FROM measures LIMIT 50" --begin 1h
+```
+
+### Metric values for a process
+```
+micromegas-query "SELECT time, name, value FROM view_instance('measures', '<process_id>') WHERE name = '<metric_name>' ORDER BY time LIMIT 50" --begin '<start_time>' --end '<end_time>'
+```
+
+### Span analysis with process_spans
+```
+micromegas-query "SELECT name, AVG(duration)/1e6 as avg_ms, COUNT(*) FROM process_spans('<process_id>', 'thread') GROUP BY name ORDER BY avg_ms DESC LIMIT 20" --begin '<start_time>' --end '<end_time>'
+```
+
+### Histogram percentiles
+```
+micromegas-query "SELECT name,
+       quantile_from_histogram(make_histogram(0, 100000000, 50, duration), 0.5)/1e6 as p50_ms,
+       quantile_from_histogram(make_histogram(0, 100000000, 50, duration), 0.95)/1e6 as p95_ms,
+       quantile_from_histogram(make_histogram(0, 100000000, 50, duration), 0.99)/1e6 as p99_ms,
+       COUNT(*)
+FROM process_spans('<process_id>', 'thread')
+GROUP BY name ORDER BY p95_ms DESC LIMIT 20" --begin '<start_time>' --end '<end_time>'
+```
+
+### Expand histogram for visualization
+```
+micromegas-query "SELECT bin_center/1e6 as ms, count
+FROM expand_histogram((SELECT make_histogram(0, 100000000, 50, duration) FROM process_spans('<process_id>', 'thread') WHERE name = '<span_name>'))" --begin '<start_time>' --end '<end_time>'
+```
+
+### Property extraction
+```
+micromegas-query "SELECT time, msg, property_get(process_properties, 'thread-name') as thread FROM log_entries WHERE level <= 3 LIMIT 20" --begin 1h
+```
+
+### Log properties as JSON
+```
+micromegas-query "SELECT time, msg, jsonb_format_json(properties) as props FROM log_entries WHERE level <= 2 LIMIT 10" --begin 1h
+```
+
+## Performance tips
+
+- See **MANDATORY RULES** above — `--begin` and `LIMIT` are required on every query.
+- **Keep the time range as tight as possible** — match `--begin` (and `--end`) to what the question actually requires. Default to `--begin 1h` for recent data; use `--begin 1d` for daily analysis; only widen if the user asks for a longer window or the initial query returns nothing useful.
+- Use `view_instance()` for single-process/stream queries — much faster than global views with WHERE filters.
+- Use `log_stats` for volume analysis instead of counting `log_entries`.
+- Select only the columns you need — avoid `SELECT *` on large views.
+- **Project only the histogram columns you need.** Histograms are large and re-aggregated on every read, so `SELECT *` on a view with several histogram columns multiplies the scan cost.
+- **Avoid an unbounded `GROUP BY` on a large aggregated view.** Without a selective filter it can exhaust server memory: the group set is the problem, and `LIMIT` does not help. Filter on a selective column (typically the leading `sort_order` column) before grouping broadly.
+- Filter on time first, then other fields.
+- **Queries without `--begin` scan ALL historical data** and can exhaust server memory, crashing the analytics service for all users.
+
+### Pre-aggregated views first
+
+When the deployment defines per-minute rollups of `measures` (min/max/sum/count per bin), compute MIN/MAX/SUM/COUNT/AVG and find outliers there. Drill into raw `measures` with a tight window only when exact sample times are needed. Column names follow the rollup's own `description`; the translation is:
+
+| Raw `measures` | Rollup |
+|---|---|
+| `MIN(value)` | `MIN(min_value)` |
+| `MAX(value)` | `MAX(max_value)` |
+| `SUM(value)` | `SUM(sum_values)` |
+| `COUNT(value)` | `SUM(nb_values)` |
+| `AVG(value)` | `SUM(sum_values)/SUM(nb_values)` |
+
+### Sizing views
+
+`thread_spans`, `async_events`, `net_spans`, `otel_spans` and `images` are materialized on demand per `view_instance()` id (`thread_spans` is keyed per stream, the others per `process_id`), so `list_partitions()` row counts reflect past queries, not data volume. Estimate density from the source events per stream tag over a few days, divided by the number of days:
+
+```
+micromegas-query "SELECT array_to_string(\"streams.tags\", '+') AS tags, sum(nb_objects) AS events FROM blocks GROUP BY 1 ORDER BY events DESC LIMIT 20" --begin 3d
+```
+
+Map tags to views: `cpu` -> `thread_spans` / `async_events` (the `cpu` total covers both), `net` -> `net_spans`, `image` -> `images`, `trace` -> `otel_spans`.
+
+## Workflow: narrowing time ranges
+
+**Never use a broad time window when querying data for a specific process.** Always resolve the process's actual lifetime first, then use that to set precise `--begin`/`--end` flags.
+
+1. **Get the process lifetime** from the `processes` table:
+   ```
+   micromegas-query "SELECT process_id, start_time, last_update_time FROM processes WHERE process_id = '<pid>' LIMIT 1" --begin 1d
+   ```
+
+2. **Convert the timestamps** to RFC 3339 and use them as `--begin`/`--end`:
+   ```
+   micromegas-query "SELECT time, level, target, msg FROM view_instance('log_entries', '<pid>') ORDER BY time DESC LIMIT 30" \
+     --begin '<start_time>' --end '<last_update_time>' --format table --max-colwidth 150
+   ```
+
+**Why this matters:** The `--begin`/`--end` flags drive server-side partition pruning. A query with `--begin 7d` on a single process will scan 7 days of partitions just to find a few seconds of data. A precise window hits only the relevant partition(s), making the query orders of magnitude faster.
+
+## Reference documentation
+
+- Micromegas docs: https://micromegas.info/docs/
+- Micromegas extensions: https://micromegas.info/docs/query-guide/functions-reference/
+- SQL syntax: https://datafusion.apache.org/user-guide/sql/
+- Scalar functions: https://datafusion.apache.org/user-guide/sql/scalar_functions.html
+- Aggregate functions: https://datafusion.apache.org/user-guide/sql/aggregate_functions.html

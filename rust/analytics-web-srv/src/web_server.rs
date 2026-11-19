@@ -7,6 +7,9 @@ use crate::data_source_cache::DataSourceCache;
 use crate::groups;
 use crate::ingestion_keys;
 use crate::maps;
+use crate::mcp_auth::{
+    METADATA_SUFFIX, McpAuthState, McpOAuthMetadata, metadata_path, resolve_public_url,
+};
 use crate::settings;
 use crate::stream_query;
 use crate::{analytics_keys, data_sources, folders, screens};
@@ -21,11 +24,17 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use http::{HeaderValue, Method, header};
+use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
+use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::auth::groups::{ADMINS_GROUP, DbGroupsConfig, DbGroupsSource};
-use micromegas::auth::types::{AuthContext, AuthType};
+use micromegas::auth::types::{AuthContext, AuthProvider, AuthType};
 use micromegas::ingestion::data_lake_connection::read_write_pool_options;
 use micromegas::ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas::servers::axum_utils::{auth_observability_middleware, observability_middleware};
+use micromegas::servers::mcp::config::McpConfig;
+use micromegas::servers::mcp::flight::{FixedUrl, FlightUrlResolver, GrpcFlightBackend};
+use micromegas::servers::mcp::provider::ToolProvider;
+use micromegas::servers::mcp::tools::QueryToolProvider;
 use micromegas::servers::shutdown::serve_axum_with_graceful_shutdown;
 use micromegas::settings::{EnvFallbacks, SettingsSource, resolve_bool_env};
 use micromegas::tracing::prelude::*;
@@ -527,6 +536,194 @@ fn build_protected_maps_blob_route(
 }
 
 // ---------------------------------------------------------------------------
+// MCP route
+// ---------------------------------------------------------------------------
+
+/// Everything the `/mcp` route needs once it is enabled and resolvable.
+pub struct McpMount {
+    pub config: McpConfig,
+    /// Validates the bearer token of every MCP request.
+    pub auth_provider: Arc<dyn AuthProvider>,
+    pub providers: Vec<Arc<dyn ToolProvider>>,
+    /// Discovery metadata for OAuth-capable MCP clients; `None` keeps the bare 401 challenge.
+    pub oauth: Option<McpOAuthMetadata>,
+}
+
+/// Sends queries to the data source flagged as default, looked up on each call so a change of
+/// default takes effect without a restart.
+struct DefaultDataSourceResolver {
+    cache: DataSourceCache,
+}
+
+#[async_trait::async_trait]
+impl FlightUrlResolver for DefaultDataSourceResolver {
+    async fn resolve(&self) -> Result<String> {
+        self.cache
+            .resolve_default()
+            .await?
+            .map(|c| c.url)
+            .context("no default data source is configured")
+    }
+}
+
+/// Mounts `/mcp` when a mount is given. Otherwise answers 404 explicitly, because the SPA
+/// fallback would reply `200 index.html` to an unmatched path.
+pub fn build_mcp_routes(base_path: &str, mount: Option<McpMount>) -> Result<Router> {
+    let Some(mount) = mount else {
+        return Ok(Router::new()
+            .route(
+                &format!("{base_path}/mcp"),
+                any(|| async { StatusCode::NOT_FOUND }),
+            )
+            .route(
+                &format!("{base_path}{METADATA_SUFFIX}"),
+                any(|| async { StatusCode::NOT_FOUND }),
+            ));
+    };
+    let oauth = mount.oauth.map(Arc::new);
+    let router =
+        micromegas::servers::mcp::register_routes(Router::new(), &mount.config, mount.providers)?;
+    let mut router = router.layer(middleware::from_fn_with_state(
+        McpAuthState {
+            provider: mount.auth_provider,
+            oauth: oauth.clone(),
+        },
+        crate::mcp_auth::mcp_bearer_middleware,
+    ));
+    // Outside the bearer middleware: a client reads it before it has a token.
+    if let Some(oauth) = oauth {
+        let path =
+            metadata_path(&mount.config.path).context("the MCP route path does not end in /mcp")?;
+        router = router.merge(
+            Router::new()
+                .route(&path, get(crate::mcp_auth::metadata_handler))
+                .with_state(oauth),
+        );
+    }
+    Ok(router)
+}
+
+/// Loads the skills once up front so a bad skills directory is a logged non-mount instead of a
+/// startup failure in `register_routes`.
+fn mcp_skills_load(config: &McpConfig) -> bool {
+    match micromegas::servers::mcp::skills::Skills::new(config.skills_dir.as_deref()) {
+        Ok(_) => true,
+        Err(e) => {
+            let dir = config
+                .skills_dir
+                .as_deref()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default();
+            warn!("MCP skills could not be loaded (dir '{dir}'), /mcp is not mounted: {e:#}");
+            false
+        }
+    }
+}
+
+/// Decides whether the MCP route can be mounted and builds what it needs. Every reason for not
+/// mounting is logged; none of them stops the web server.
+async fn build_mcp_mount(
+    config: &WebServerConfig,
+    oidc_config: Option<&OidcClientConfig>,
+    analytics_keys_pool: &Option<PgPool>,
+    app_db_pool: &PgPool,
+    data_source_cache: &DataSourceCache,
+) -> Result<Option<McpMount>> {
+    let mcp_config = McpConfig::from_env(&config.base_path);
+    if !mcp_config.enabled {
+        return Ok(None);
+    }
+    if config.disable_auth {
+        warn!("MICROMEGAS_MCP_ENABLED is set but /mcp is not mounted under --disable-auth");
+        return Ok(None);
+    }
+    if !mcp_skills_load(&mcp_config) {
+        return Ok(None);
+    }
+    let oidc_config =
+        oidc_config.expect("auth state is built whenever authentication is not disabled");
+    let Some(pool) = analytics_keys_pool else {
+        warn!(
+            "MICROMEGAS_MCP_ENABLED is set but no telemetry-DB pool is configured, /mcp is not mounted"
+        );
+        return Ok(None);
+    };
+    let resolver: Arc<dyn FlightUrlResolver> = match &mcp_config.flightsql_url {
+        Some(url) => Arc::new(FixedUrl(url.clone())),
+        None => {
+            match data_source_cache.resolve_default().await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    warn!(
+                        "MICROMEGAS_MCP_ENABLED is set but neither MICROMEGAS_MCP_FLIGHTSQL_URL \
+                         nor a default data source exists, /mcp is not mounted"
+                    );
+                    return Ok(None);
+                }
+                Err(e) => {
+                    warn!("could not look up the default data source, /mcp is not mounted: {e:#}");
+                    return Ok(None);
+                }
+            }
+            Arc::new(DefaultDataSourceResolver {
+                cache: data_source_cache.clone(),
+            })
+        }
+    };
+    // Same chain as FlightSQL's analytics role, wrapped in the group-membership provider, so a
+    // token accepted here is accepted there with the same identity.
+    let auth_provider = match ProviderBuilder::new("MICROMEGAS_ANALYTICS")
+        .with_db_key_store(dedicated_key_store_pool(pool), ApiKeyTable::Analytics)
+        .with_group_store(dedicated_key_store_pool(pool))
+        .build_chain()
+        .await
+    {
+        Ok(provider) => provider,
+        Err(e) => {
+            warn!("could not build the MCP auth provider, /mcp is not mounted: {e:#}");
+            return Ok(None);
+        }
+    };
+    let public_url_override = std::env::var("MICROMEGAS_MCP_PUBLIC_URL").ok();
+    let oauth = match resolve_public_url(
+        &oidc_config.redirect_uri,
+        &mcp_config.path,
+        public_url_override.as_deref(),
+    )
+    .and_then(|url| McpOAuthMetadata::new(&url, &oidc_config.issuer))
+    {
+        Ok(oauth) => oauth,
+        Err(e) => {
+            warn!("MCP OAuth discovery metadata is unavailable, /mcp is not mounted: {e:#}");
+            return Ok(None);
+        }
+    };
+    let screen_writes = resolve_bool_env("MICROMEGAS_MCP_SCREEN_WRITES", true);
+    let providers: Vec<Arc<dyn ToolProvider>> = vec![
+        Arc::new(QueryToolProvider::new(
+            Arc::new(GrpcFlightBackend::new(resolver)),
+            mcp_config.clone(),
+        )),
+        Arc::new(crate::mcp_screens::ScreenToolProvider::new(
+            Arc::new(crate::mcp_screens::PgScreenStore::new(app_db_pool.clone())),
+            screen_writes,
+            mcp_config.max_bytes,
+        )),
+    ];
+    info!(
+        "MCP enabled at {} (screen writes {})",
+        mcp_config.path,
+        if screen_writes { "on" } else { "off" }
+    );
+    Ok(Some(McpMount {
+        config: mcp_config,
+        auth_provider,
+        providers,
+        oauth: Some(oauth),
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Frontend / SPA
 // ---------------------------------------------------------------------------
 
@@ -851,6 +1048,16 @@ pub async fn run_web_server(
 
     let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));
 
+    let mcp_mount = build_mcp_mount(
+        &config,
+        auth_state.as_ref().map(|s| &s.config),
+        &analytics_keys_pool,
+        &app_db_pool,
+        &data_source_cache,
+    )
+    .await?;
+    let mcp_routes = build_mcp_routes(&config.base_path, mcp_mount)?;
+
     let app = Router::new()
         .merge(build_public_routes(&config.base_path, readiness_state))
         .merge(build_protected_routes(
@@ -867,7 +1074,8 @@ pub async fn run_web_server(
                 settings: settings_state,
             },
         ))
-        .merge(build_auth_routes(&config.base_path, &auth_state));
+        .merge(build_auth_routes(&config.base_path, &auth_state))
+        .merge(mcp_routes);
 
     let index_state = IndexState {
         frontend_dir: config.frontend_dir.clone(),
@@ -912,4 +1120,19 @@ pub async fn run_web_server(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_skills_dir_is_not_fatal() {
+        let config = McpConfig {
+            skills_dir: Some("/nonexistent/micromegas-skills".into()),
+            ..McpConfig::default()
+        };
+        assert!(!mcp_skills_load(&config));
+        assert!(mcp_skills_load(&McpConfig::default()));
+    }
 }

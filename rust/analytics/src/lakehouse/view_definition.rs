@@ -274,18 +274,29 @@ fn check_no_volatile_functions(plan: &LogicalPlan, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// The four mutating admin-gated table functions plus the three unconditionally-registered but
-/// still-mutating ones -- a stored scan against any of these would be re-executed under
-/// `CallerContext::maintenance()` on every daemon tick.
-const MUTATING_TABLE_FUNCTIONS: &[&str] = &[
+/// Functions that change state: the four mutating table functions (all admin-gated)
+/// and the three admin-only scalar UDFs. Anything exposing a
+/// read-only surface (such as the MCP server) must refuse every name here.
+pub const MUTATING_FUNCTIONS: &[&str] = &[
     "retire_partitions",
     "materialize_partitions",
     "regenerate_partitions",
     "deny_queries",
-    "view_instance",
-    "process_spans",
-    "perfetto_trace_chunks",
+    "retire_partition_by_file",
+    "retire_partition_by_metadata",
+    "remove_query_denial",
 ];
+
+/// Read-only table functions that a stored scan must still not call: their result depends on
+/// the caller or on arguments a stored definition cannot freeze.
+const STORED_SCAN_BANNED_READ_ONLY_FUNCTIONS: &[&str] =
+    &["view_instance", "process_spans", "perfetto_trace_chunks"];
+
+/// Whether a stored scan may not call `name`: every mutating function plus the read-only
+/// functions above, so a new entry in [`MUTATING_FUNCTIONS`] is covered here automatically.
+fn is_banned_from_stored_scans(name: &str) -> bool {
+    MUTATING_FUNCTIONS.contains(&name) || STORED_SCAN_BANNED_READ_ONLY_FUNCTIONS.contains(&name)
+}
 
 /// Walks every `TableScan` reachable from `plan`, resolving each to a view set (to
 /// accumulate the highest `update_group` read) or to a banned table function name.
@@ -328,7 +339,7 @@ fn inspect_scan(
         .strip_suffix("()")
         .unwrap_or(raw_name)
         .to_lowercase();
-    if mutating_hit.is_none() && MUTATING_TABLE_FUNCTIONS.contains(&leaf.as_str()) {
+    if mutating_hit.is_none() && is_banned_from_stored_scans(leaf.as_str()) {
         *mutating_hit = Some(leaf);
         return Ok(());
     }
