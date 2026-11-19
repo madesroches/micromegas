@@ -82,4 +82,14 @@ ignore = [
     # allows <0.38, so no sqlx release can reach it. Remove once sqlx allows
     # libsqlite3-sys >=0.39 or the lockfile drops sqlx-sqlite; tracked under #1774.
     "RUSTSEC-2026-0459",
+
+    # chrono 0.4.45 (RUSTSEC-2026-0543), chrono-tz 0.10.4 (RUSTSEC-2026-0555),
+    # humantime 2.3.0 (RUSTSEC-2026-0542): unmaintained, not vulnerabilities.
+    # All three come from the same upstream notice (chrono issue 1768) and no
+    # safe upgrade exists. arrow, parquet, datafusion, object_store and sqlx
+    # expose chrono types in their public APIs, so it stays in the tree even
+    # if our own code moves to jiff. Remove once those upstreams drop chrono; migration tracked under #1800.
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
+    "RUSTSEC-2026-0542",
 ]
