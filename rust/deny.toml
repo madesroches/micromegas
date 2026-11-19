@@ -91,6 +91,9 @@ skip = [
     "base64",
     "core-foundation",
     "foldhash",
+    # rmcp's `cap-std` family is on io-lifetimes 3.x while `fs-set-times`
+    # (a dependency of `cap-primitives`) still pins 2.x
+    "io-lifetimes",
     "itertools",
     # redis-exporter's `redis` crate pulls a newer num-bigint than
     # datafusion/arrow-buffer's
