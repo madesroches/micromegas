@@ -9,12 +9,16 @@ buckets on the minute / 5 min / 1 h / 6 h / 1 day ladder. A 1-day query writes 1
 whatever the data volume. For a dense source, one bucket's extract can then read far more than can
 be processed in one step. This plan adds a mandatory, per-view, customizable byte cap,
 `max_jit_src_data` (default `'1 GB'`), on how much data a single materialization step may read.
+The invariant: no partition of an on-demand view ever covers more than the cap in source bytes.
 An extract reads source partitions, so a stale bucket whose source bytes exceed the cap is written
-as finer ladder buckets. A promotion reads the view's own partitions, so closed partitions are
-merged only while their combined size stays within the cap. Density then drives the size both
-ways: dense data stays fine, sparse data rises to the range's rung, and large partitions are never
-merged past the cap. The shared ladder also gains 15-minute and 30-minute rungs, so that a bucket
-over the cap descends by 3× or 2× instead of jumping 12× from one hour to five minutes.
+as finer ladder buckets, down to 1 minute. A stale unit is never rebuilt whole past the cap
+because an earlier, coarser row forces it together: those stale rows are retired first. A
+promotion reads the view's own partitions, so closed partitions are merged only while both their
+combined size and the source bytes of the merged range stay within the cap. A merged row can
+therefore always be rebuilt within the cap. Density then drives the size both ways: dense data
+stays fine, sparse data rises to the range's rung, and nothing is built or merged past the cap.
+The shared ladder also gains 15-minute and 30-minute rungs, so that a bucket over the cap descends
+by 3× or 2× instead of jumping 12× from one hour to five minutes.
 
 ## Current State
 
@@ -57,7 +61,7 @@ over the cap descends by 3× or 2× instead of jumping 12× from one hour to fiv
 
 ## Design
 
-### 1. Ladder rungs at 15 and 30 minutes
+### 1. Ladder rungs
 
 `LADDER` becomes `[1m, 5m, 15m, 30m, 1h, 6h, 1d]`. Each rung still divides the next one, and
 `duration_trunc` aligns them to the epoch, so buckets still nest and `RetireMatch::Containment`
@@ -127,26 +131,28 @@ count as 0, which keeps today's behavior for them.
 
 ### 5. Write descent for a stale unit
 
-After `probe_unit` returns `Stale` for a closed unit planned as a single bucket
-(`planned_rung = Some(r)`):
+After `probe_unit` returns `Stale` for any unit (planned, grown or open):
 
-1. If `source_bytes(unit.range) <= cap`, or `r` is the finest rung, write the unit as today. At
-   the finest rung with bytes over the cap, log it and record
-   `on_demand_jit{outcome="over_cap"}` in addition to the write outcome
-   (`written` / `conflict_dropped`).
-2. Otherwise, plan the leaves with a new pure `plan_by_source_bytes(range, rung, bytes_fn, cap) ->
-   Vec<PlannedBucket>` in `partition_ladder.rs`. It is a recursion shaped like `plan_bucket`: a
-   bucket at or under the cap is emitted at its rung, and a bucket over the cap splits into
-   `finer_rung` children, down to `LADDER[0]`. Picking leaves from source bytes alone means a dense
-   first query doesn't probe every intermediate rung.
-3. Run `plan_units(leaves, rows)`. If that yields exactly the original unit (existing coarse rows
-   force it back together), write the whole unit and record `over_cap` in addition to the write outcome. Otherwise probe each
-   sub-unit, and write it when it is stale, with the same conflict handling (`resolve_conflict`).
-   Sub-units don't descend again: their leaves were already sized.
+1. If `source_bytes(unit.range) <= cap`, write the unit as today.
+2. Otherwise the unit is never written whole. If it holds existing rows (they are all stale, since
+   the unit is), retire them first, in their own transaction, with `retire_partitions`
+   (`write_partition.rs:221`, `RetireMatch::Containment` over the unit range, which contains every
+   row the unit grew around). Until the leaves land, that range simply has no rows, which is no
+   worse than the stale rows it had; a crash in between leaves missing buckets that the next query
+   plans and builds.
+3. Plan the leaves with a new pure `plan_by_source_bytes(range, bytes_fn, cap) ->
+   Vec<PlannedBucket>` in `partition_ladder.rs`. It tiles the range with the coarsest aligned
+   ladder buckets that fit it, then recurses like `plan_bucket`: a bucket at or under the cap is
+   emitted at its rung, and a bucket over the cap splits into finer children, down to `LADDER[0]` (1 minute). A
+   1-minute bucket is emitted even over the cap, logged as a warning and counted as `on_demand_jit{outcome="over_cap"}` in addition to its write outcome
+   (`written` / `conflict_dropped`). Picking leaves from source bytes alone means a dense first
+   query doesn't probe every intermediate rung.
+4. Write each leaf with the same conflict handling (`resolve_conflict`). After the retire there
+   are no rows left to grow around, so leaves are written as planned and don't descend again.
 
-Grown units (`planned_rung = None`) and open units are written as today. Open units are already at
-1 minute. Grown units only exist around earlier rows, which were written under the cap unless they
-hit the floor or the `over_cap` fallback.
+The decision in steps 1-3 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
+`on_demand_jit.rs` returning either "write whole" or "retire these rows, then write these leaves",
+so it is unit-tested without a DB; `update_on_demand_view` only executes it.
 
 Descent stays inside the unit, so the snapshot taken over the unit hull already covers every leaf.
 Neither the snapshot range nor the order of `update_on_demand_view` changes.
@@ -155,14 +161,20 @@ Neither the snapshot range nor the order of `update_on_demand_view` changes.
 
 - `PartitionFreshnessRow` gains `file_size: i64`. `fetch_freshness_candidates` selects it and
   `freshness_row` copies it.
+- A merged row must stay rebuildable within the cap, so a promotion target also requires
+  `source_bytes(target range) <= cap`, checked in `split_promotion` from the source snapshot
+  already loaded by `update_on_demand_view`. Capping on the view's own bytes alone would let an
+  aggregating view, whose output is tiny, merge a whole dense day into one row that no later
+  rebuild could extract in one step.
 - `is_promotable(inputs, max_nb_objects, max_bytes)` also requires `Σ file_size <= max_bytes`. The
   block-driven JIT path passes `i64::MAX`, which leaves it unchanged, and so does
   `promotion_candidates` (`jit_promotion.rs:76`). `promote_closed_buckets` and
   `promote_one` take `max_bytes`, and the lock-time recheck applies it.
 - `promotion_targets(units, rows, verdicts, cap)` keeps its existing filter (covered, closed,
-  ungrown units planned at the query's rung). For each one it calls a new pure `split_promotion(range, rung, rows, cap) -> Vec<PromotionTarget>`:
-  - If the rows are promotable within the cap, the target is the whole range.
-  - Otherwise, if their total exceeds the cap and a finer rung exists, split the range into child
+  ungrown units planned at the query's rung). For each one it calls a new pure `split_promotion(range, rung, rows, bytes_fn, cap) -> Vec<PromotionTarget>`:
+  - If the rows are promotable within the cap and the range's source bytes are within the cap,
+    the target is the whole range.
+  - Otherwise, if either total exceeds the cap and a finer rung exists, split the range into child
     buckets and recurse into each one with the rows lying inside it. A child that a row straddles
     is skipped, since it can't be split.
   - With one row or none there is nothing to merge.
@@ -214,9 +226,9 @@ in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
 6. **Promotion cap**: add `max_bytes` to `is_promotable` (made `pub` so integration tests can
    reach it), `promote_one` and `promote_closed_buckets`. Pass `i64::MAX` in
    `jit_partitions.rs:1542` and in `promotion_candidates` (`jit_promotion.rs:76`).
-7. **On-demand driver**: in `on_demand_jit.rs`, add `source_bytes` and `split_promotion`,
-   apply `split_promotion` in `promotion_targets`, add the stale-unit descent to the unit loop of
-   `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`.
+7. **On-demand driver**: in `on_demand_jit.rs`, add `source_bytes`, `split_promotion` and
+   `plan_stale_unit`, apply `split_promotion` in `promotion_targets`, execute `plan_stale_unit`
+   (retire, then write leaves) in the unit loop of `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`.
 8. **Docs and CHANGELOG** (see Documentation).
 9. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas-analytics`.
 
@@ -238,7 +250,7 @@ in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
 - `rust/analytics/src/lakehouse/jit_promotion.rs`: byte cap in `is_promotable` / `promote_one` /
   `promote_closed_buckets`, `freshness_row`, `promotion_candidates` (passes `i64::MAX`)
 - `rust/analytics/src/lakehouse/partition_ladder.rs`: `LADDER`, `plan_by_source_bytes`
-- `rust/analytics/src/lakehouse/on_demand_jit.rs`: `source_bytes`, `split_promotion`,
+- `rust/analytics/src/lakehouse/on_demand_jit.rs`: `source_bytes`, `split_promotion`, `plan_stale_unit`,
   `promotion_targets`, descent in `update_on_demand_view`
 - Tests: `rust/analytics/tests/{partition_ladder_tests,on_demand_jit_tests,jit_promotion_tests,view_ddl_parse_tests,view_definition_validation_tests,jit_bucket_coverage_tests,jit_freshness_tests}.rs`
   (the last two build `PartitionFreshnessRow` literals that need `file_size`)
@@ -250,9 +262,10 @@ in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
   means writing small and merging later, which is wasted work whenever the data would fit at the
   coarser size in the first place. One cap on "bytes read in one step" covers both, because each
   step measures its own input.
-- **Source bytes for writes, own partition bytes for merges**, not output bytes for both. Output
-  size is unknown before the first write. Each step is capped on what it actually reads, so an
-  aggregating view, with small output, can be merged much coarser than it could be extracted.
+- **Source bytes for writes; own partition bytes and source bytes for merges**, not output bytes
+  alone. Output size is unknown before the first write. A merge is capped on what it reads and on
+  what rebuilding its result would read, so an aggregating view merges no coarser than it could be
+  extracted, and a stale merged row is always rebuildable within the cap.
 - **Probe at the query's rung, then descend from source bytes**, instead of descending from
   source bytes before probing. Descending first would make every repeated query of covered dense
   history probe each fine bucket (1,440 probes for a minute-grained day). This way covered history
@@ -274,9 +287,11 @@ in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
   tuned centrally.
 - Distributing partition creation to cut the latency of the first dense query is out of scope.
   Units are planned, probed and written independently, which keeps that option open.
-- An existing row above the cap is not split. A stale unit containing one is rewritten whole and
-  counted as `over_cap`. A 1-minute bucket over the cap is written anyway: the ladder has no finer
-  rung.
+- No partition is ever built from more source data than the cap (user call). A stale unit over
+  the cap has its rows retired and is rebuilt as leaves, however coarse the earlier rows were.
+- The one exception is the 1-minute floor: no known source is too dense to process a minute at
+  once, so a 1-minute bucket over the cap is written, logged as a warning and counted as
+  `over_cap` (user call). There are no sub-minute rungs.
 - `source_partition_delta` / `merge_partition_delta` stay rejected on on-demand views.
   `max_jit_src_data` is the size control for them.
 - Block-driven JIT views keep their `max_nb_objects` rule. Their promotion passes no byte cap.
@@ -292,8 +307,9 @@ in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
     what it bounds), and the delta rows point to it for on-demand views.
   - "On-demand views" → "Partition sizes follow the query range": list the new rungs (1 minute,
     5 minutes, 15 minutes, 30 minutes, 1 hour, 6 hours, 1 day), and describe the descent when a
-    bucket's source data exceeds the cap, the merge cap, the 1-minute floor, and that very large
-    existing partitions are not split.
+    bucket's source data exceeds the cap (down to 1 minute, the only exception), the merge cap on both the merged
+    bytes and their source bytes, and that a stale partition over the cap is rebuilt as finer
+    ones.
   - "Cost" bullet: a dense stale range costs one write per fine bucket.
 - `mkdocs/docs/architecture/index.md:225`: the ladder listing gains the 15-minute and 30-minute
   rungs.
@@ -319,16 +335,18 @@ helpers:
   rungs. `select_rung` picks 15m for a 6-hour range and 30m for a 12-hour range, and keeps 1h for
   1 day and 6h for 7 days. `plan_by_source_bytes`: sparse → stays at the rung. Uniform dense
   → all at the rung that fits. Uneven density → mixed rungs that tile the range. Over the cap at
-  `LADDER[0]` → emitted at the floor.
+  `LADDER[0]` → emitted at the floor. A range not aligned to one rung (a grown unit) → tiled by the coarsest aligned buckets.
 - `on_demand_jit_tests.rs`:
   - `source_bytes`: full containment, prorated straddle, zero-width partition, other views
     ignored, stale-schema partition ignored.
-  - `split_promotion`: fits → one target; over the cap → child targets; straddling row → that
-    child skipped; a single row → no target.
+  - `split_promotion`: fits → one target; over the cap → child targets; own bytes under the cap
+    but source bytes over it → child targets; straddling row → that child skipped; a single row →
+    no target.
   - `promotion_targets`: a covered unit at the query rung holding finer leaf rows splits within
     the cap; open-edge finer buckets don't qualify.
-  - Descent fallback: `plan_units` over leaves that an existing coarse row forces back together
-    yields the original unit.
+  - `plan_stale_unit`: within the cap → write whole; over the cap with no rows → leaves; over
+    the cap around an existing coarse row (e.g. a merged day) → retire that row, then leaves
+    within the cap; grown and open units follow the same rule.
 - `jit_promotion_tests.rs`: `is_promotable` (now `pub`) rejects inputs whose `file_size` sum exceeds
   `max_bytes`, and accepts them at the cap exactly.
 
