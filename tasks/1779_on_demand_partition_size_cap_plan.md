@@ -11,13 +11,7 @@ be processed in one step. This plan adds a mandatory, per-view, customizable byt
 `max_jit_src_data` (default `'1 GB'`), on how much data a single materialization step may read.
 The invariant: no partition of an on-demand view ever covers more than the cap in source bytes.
 An extract reads source partitions, so a stale bucket whose source bytes exceed the cap is written
-as finer ladder buckets, down to 1 minute. A stale unit is never rebuilt whole past the cap
-because an earlier, coarser row forces it together: those stale rows are retired first. A
-promotion reads the view's own partitions, so closed partitions are merged only while both their
-combined size and the source bytes of the merged range stay within the cap. A merged row can
-therefore always be rebuilt within the cap. Density then drives the size both ways: dense data
-stays fine, sparse data rises to the range's rung, and nothing is built or merged past the cap.
-The shared ladder also gains 15-minute and 30-minute rungs, so that a bucket over the cap descends
+as finer ladder buckets, down to 1 minute. The shared ladder also gains 15-minute and 30-minute rungs, so that a bucket over the cap descends
 by 3× or 2× instead of jumping 12× from one hour to five minutes.
 
 ## Current State
@@ -43,18 +37,17 @@ by 3× or 2× instead of jumping 12× from one hour to five minutes.
 - The source snapshot (`PartitionCache::fetch_overlapping_insert_range`,
   `partition_cache.rs:60`) already loads every overlapping partition of every view, with
   `file_size`.
-- Source detection: `inspect_scan` (`view_definition.rs:325`) walks every `MaterializedView` the
+- Source detection: `inspect_scan` (`view_definition.rs:323`) walks every `MaterializedView` the
   extract scans, but records only global on-demand views. `validate_view_definition`
   (`view_definition.rs:431`) returns them as `Vec<Arc<dyn View>>`. They are stored on
   `SqlBatchView` through `with_on_demand_sources` (`sql_batch_view.rs:176`, wired in
-  `view_registry.rs:209`; `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and
-  discards the result). Daemon-maintained sources such as
+  `view_registry.rs:209`). Daemon-maintained sources such as
   `measures` are walked but not recorded.
 - DDL options (`view_ddl.rs:172`) reject `source_partition_delta` / `merge_partition_delta` on
   on-demand views, as a v1 stopgap pending this issue. `ViewOptions` (`view_definition.rs:41`) is
   stored as JSON. `description` already shows the pattern for an optional field
   (`#[serde(default, skip_serializing_if = "Option::is_none")]`).
-- There is no byte-size parser in the codebase. `parse_time_delta` (`view_definition.rs:76`) is
+- There is no byte-size parser in the codebase. `parse_time_delta` (`view_definition.rs:67`) is
   the `'<n> <unit>'` precedent.
 - #1778 is still under `## Unreleased` in `CHANGELOG.md`, so on-demand views have no released
   behavior to stay compatible with.
@@ -87,7 +80,9 @@ edge walk more rungs, but they are pure computations over counts that were alrea
   `"max_jit_src_data"` arm in the option key match (`view_ddl.rs:186-233`).
 - Stored as `ViewOptions::max_jit_src_data: Option<String>` with `serde(default,
   skip_serializing_if = "Option::is_none")`. `None` means the built-in default
-  `DEFAULT_MAX_JIT_SRC_DATA = 1 GiB`, resolved in `build_sql_batch_view`.
+  `DEFAULT_MAX_JIT_SRC_DATA = 1 GiB`. The `max_jit_src_data` arm calls `parse_byte_size` at CREATE
+  (like the delta options at `view_ddl.rs:197-206`) and stores the string. `build_sql_batch_view`
+  parses `Some(s)` with `.with_context(...)` and falls back to `DEFAULT_MAX_JIT_SRC_DATA` for `None`.
 - `SqlBatchView::new` gains a `max_jit_src_bytes: i64` parameter, stored on the view and passed to
   `update_on_demand_view` from `jit_update`. `build_sql_batch_view` passes the resolved value; the
   other callers pass `DEFAULT_MAX_JIT_SRC_DATA`.
@@ -104,9 +99,8 @@ check (`view_definition.rs:557-563`) filters to that same subset, so a daemon vi
 `view_definition.rs:429` are updated to the new return contract. The byte-sum source list
 is collected from the extract plan alone, in its own accumulator, because the merge and count plans
 can scan tables the extract doesn't read (e.g. `processes` joined only in `merge_partitions_query`).
-The on-demand subset and the daemon-reads-on-demand check keep the union of all three plans.
 `validate_view_definition` therefore returns a small struct with both lists: the union
-(`Vec<Arc<dyn View>>`, from which the on-demand subset is derived) and the extract-only sources.
+and the extract-only sources.
 The full `ViewMetadata` from `source.get_meta()` (set, instance and `file_schema_hash`) is captured
 at validation for the extract-only sources. `SqlBatchView::with_sources` stores the union and the
 extract-only `Vec<ViewMetadata>`. `update_on_demand_view` gains two parameters: the extract-only
@@ -147,8 +141,12 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
    1-minute bucket is emitted even over the cap, logged as a warning and counted as `on_demand_jit{outcome="over_cap"}` in addition to its write outcome
    (`written` / `conflict_dropped`). Picking leaves from source bytes alone means a dense first
    query doesn't probe every intermediate rung.
-4. Write each leaf with the same conflict handling (`resolve_conflict`). After the retire there
-   are no rows left to grow around, so leaves are written as planned and don't descend again.
+4. Write each leaf with the same conflict handling (`resolve_conflict`). Each leaf builds its own
+   `make_batch_partition_spec` (one count query plus one extract per leaf), and its `Unit` carries
+   `planned_rung = Some(leaf rung)`. After the retire there are no rows left to grow around, so
+   leaves are written as planned and don't descend again. `resolve_conflict` re-settles a grown
+   unit around concurrent rows; it sends the recomputed unit back through `plan_stale_unit` (write
+   whole only within the cap, otherwise retire and write leaves) instead of writing it whole.
 
 The decision in steps 1-3 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
 `on_demand_jit.rs` returning either "write whole" or "retire these rows, then write these leaves",
@@ -163,14 +161,12 @@ Neither the snapshot range nor the order of `update_on_demand_view` changes.
   `freshness_row` copies it.
 - A merged row must stay rebuildable within the cap, so a promotion target also requires
   `source_bytes(target range) <= cap`, checked in `split_promotion` from the source snapshot
-  already loaded by `update_on_demand_view`. Capping on the view's own bytes alone would let an
-  aggregating view, whose output is tiny, merge a whole dense day into one row that no later
-  rebuild could extract in one step.
+  already loaded by `update_on_demand_view`.
 - `is_promotable(inputs, max_nb_objects, max_bytes)` also requires `Σ file_size <= max_bytes`. The
   block-driven JIT path passes `i64::MAX`, which leaves it unchanged, and so does
   `promotion_candidates` (`jit_promotion.rs:76`). `promote_closed_buckets` and
   `promote_one` take `max_bytes`, and the lock-time recheck applies it.
-- `promotion_targets(units, rows, verdicts, cap)` keeps its existing filter (covered, closed,
+- `promotion_targets(units, rows, verdicts, rung, bytes_fn, cap)` keeps its existing filter (covered, closed,
   ungrown units planned at the query's rung). For each one it calls a new pure `split_promotion(range, rung, rows, bytes_fn, cap) -> Vec<PromotionTarget>`:
   - If the rows are promotable within the cap and the range's source bytes are within the cap,
     the target is the whole range.
@@ -178,6 +174,9 @@ Neither the snapshot range nor the order of `update_on_demand_view` changes.
     buckets and recurse into each one with the rows lying inside it. A child that a row straddles
     is skipped, since it can't be split.
   - With one row or none there is nothing to merge.
+
+  The `is_promotable(&inputs, i64::MAX)` call at `on_demand_jit.rs:163` is replaced by
+  `split_promotion` with the cap.
 
   A covered parent proves only the summed count, not each child's count. That is harmless:
   merging keeps both the data and the summed `source_data_hash`, so a stale child stays detectably
@@ -221,14 +220,17 @@ peak.
    it needs no change beyond compiling.
 4. **Freshness row**: add `file_size` to `PartitionFreshnessRow`, `fetch_freshness_candidates` and
    `freshness_row`. Fix the constructors the compiler flags, mostly in tests (including the literals
-in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
+in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_tests.rs:59` and
+`jit_promotion_tests.rs:37`, `:139`).
 5. **Ladder planner**: add `plan_by_source_bytes` to `partition_ladder.rs`.
 6. **Promotion cap**: add `max_bytes` to `is_promotable` (made `pub` so integration tests can
    reach it), `promote_one` and `promote_closed_buckets`. Pass `i64::MAX` in
-   `jit_partitions.rs:1542` and in `promotion_candidates` (`jit_promotion.rs:76`).
+   `jit_partitions.rs:1542` and in `promotion_candidates` (`jit_promotion.rs:76`). Update the
+   `is_promotable` doc comment (`jit_promotion.rs:33`, "within the object cap").
 7. **On-demand driver**: in `on_demand_jit.rs`, add `source_bytes`, `split_promotion` and
    `plan_stale_unit`, apply `split_promotion` in `promotion_targets`, execute `plan_stale_unit`
-   (retire, then write leaves) in the unit loop of `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`.
+   (retire, then write leaves) in the unit loop of `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`. Route `resolve_conflict` through `plan_stale_unit`.
+   Update the module doc (lines 1-6).
 8. **Docs and CHANGELOG** (see Documentation).
 9. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas-analytics`.
 
@@ -253,7 +255,8 @@ in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
 - `rust/analytics/src/lakehouse/on_demand_jit.rs`: `source_bytes`, `split_promotion`, `plan_stale_unit`,
   `promotion_targets`, descent in `update_on_demand_view`
 - Tests: `rust/analytics/tests/{partition_ladder_tests,on_demand_jit_tests,jit_promotion_tests,view_ddl_parse_tests,view_definition_validation_tests,jit_bucket_coverage_tests,jit_freshness_tests}.rs`
-  (the last two build `PartitionFreshnessRow` literals that need `file_size`)
+  (`jit_bucket_coverage_tests`, `jit_freshness_tests`, `on_demand_jit_tests` and
+  `jit_promotion_tests` build `PartitionFreshnessRow` literals that need `file_size`)
 - `mkdocs/docs/admin/materialized-views.md`, `mkdocs/docs/architecture/index.md`, `CHANGELOG.md`
 
 ## Trade-offs
@@ -310,7 +313,7 @@ in `jit_bucket_coverage_tests.rs` and `jit_freshness_tests.rs`).
     bucket's source data exceeds the cap (down to 1 minute, the only exception), the merge cap on both the merged
     bytes and their source bytes, and that a stale partition over the cap is rebuilt as finer
     ones.
-  - "Cost" bullet: a dense stale range costs one write per fine bucket.
+  - "Cost" bullet: a dense stale range costs one probe and one write per leaf.
 - `mkdocs/docs/architecture/index.md:225`: the ladder listing gains the 15-minute and 30-minute
   rungs.
 - `CHANGELOG.md`: a new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
