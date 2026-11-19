@@ -84,8 +84,9 @@ edge walk more rungs, but they are pure computations over counts that were alrea
 - Stored as `ViewOptions::max_jit_src_data: Option<String>` with `serde(default,
   skip_serializing_if = "Option::is_none")`. `None` means the built-in default
   `DEFAULT_MAX_JIT_SRC_DATA = 1 GiB`, resolved in `build_sql_batch_view`.
-- `SqlBatchView` gains `max_jit_src_bytes: i64`, passed to `update_on_demand_view` from
-  `jit_update`.
+- `SqlBatchView::new` gains a `max_jit_src_bytes: i64` parameter, stored on the view and passed to
+  `update_on_demand_view` from `jit_update`. `build_sql_batch_view` passes the resolved value; the
+  other callers pass `DEFAULT_MAX_JIT_SRC_DATA`.
 
 ### 3. Source views
 
@@ -96,8 +97,12 @@ current rule) is derived from it where `snapshot_sources` needs it, and the daem
 check (`view_definition.rs:557-563`) filters to that same subset, so a daemon view reading
 `measures` or `log_entries` is still accepted. The two existing validation tests
 (including `view_reading_only_daemon_views_has_no_on_demand_sources`) and the doc comment at
-`view_definition.rs:429` are updated to the new return contract. The full `ViewMetadata` from
-`source.get_meta()` (set, instance and `file_schema_hash`) is kept for the byte sum.
+`view_definition.rs:429` are updated to the new return contract. The byte-sum source list
+is collected from the extract plan alone, in its own accumulator, because the merge and count plans
+can scan tables the extract doesn't read (e.g. `processes` joined only in `merge_partitions_query`).
+The on-demand subset and the daemon-reads-on-demand check keep the union of all three plans. The
+full `ViewMetadata` from `source.get_meta()` (set, instance and `file_schema_hash`) is kept for
+the byte sum.
 
 ### 4. Source bytes of a range
 
@@ -149,9 +154,8 @@ Neither the snapshot range nor the order of `update_on_demand_view` changes.
   block-driven JIT path passes `i64::MAX`, which leaves it unchanged, and so does
   `promotion_candidates` (`jit_promotion.rs:76`). `promote_closed_buckets` and
   `promote_one` take `max_bytes`, and the lock-time recheck applies it.
-- `promotion_targets(units, rows, verdicts, cap)` keeps covered, closed, ungrown units at any
-  planned rung, not only the query's rung, because descended leaves can be covered too. For each
-  one it calls a new pure `split_promotion(range, rung, rows, cap) -> Vec<PromotionTarget>`:
+- `promotion_targets(units, rows, verdicts, cap)` keeps its existing filter (covered, closed,
+  ungrown units planned at the query's rung). For each one it calls a new pure `split_promotion(range, rung, rows, cap) -> Vec<PromotionTarget>`:
   - If the rows are promotable within the cap, the target is the whole range.
   - Otherwise, if their total exceeds the cap and a finer rung exists, split the range into child
     buckets and recurse into each one with the rows lying inside it. A child that a row straddles
@@ -191,8 +195,8 @@ peak.
    `view_definition.rs`, and add the `ViewOptions::max_jit_src_data` field. Accept the option in
    `view_ddl.rs`, reject it on daemon views, and update the doc comment on
    `view_definition_from_options`.
-3. **View wiring**: resolve the cap in `build_sql_batch_view` and add `max_jit_src_bytes` to
-   `SqlBatchView`. Record all scanned sources in `inspect_scan` / `validate_view_definition`.
+3. **View wiring**: resolve the cap in `build_sql_batch_view` and add the `max_jit_src_bytes`
+   parameter to `SqlBatchView::new`, updating its callers. Record all scanned sources in `inspect_scan` / `validate_view_definition`.
    Rename `with_on_demand_sources` to `with_sources`, update `view_registry.rs:209`, and derive
    the on-demand subset for `snapshot_sources` and for the daemon-reads-on-demand check. Update the
    two validation tests and the `view_definition.rs:429` doc comment.
@@ -205,7 +209,7 @@ peak.
    reach it), `promote_one` and `promote_closed_buckets`. Pass `i64::MAX` in
    `jit_partitions.rs:1542` and in `promotion_candidates` (`jit_promotion.rs:76`).
 7. **On-demand driver**: in `on_demand_jit.rs`, add `source_bytes` and `split_promotion`,
-   generalize `promotion_targets`, add the stale-unit descent to the unit loop of
+   apply `split_promotion` in `promotion_targets`, add the stale-unit descent to the unit loop of
    `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`.
 8. **Docs and CHANGELOG** (see Documentation).
 9. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas-analytics`.
@@ -215,8 +219,13 @@ peak.
 - `rust/analytics/src/lakehouse/view_definition.rs`: `parse_byte_size`, default, `ViewOptions`
   field, `build_sql_batch_view`, `inspect_scan`, `validate_view_definition`
 - `rust/analytics/src/lakehouse/view_ddl.rs`: option parsing and rejection
-- `rust/analytics/src/lakehouse/sql_batch_view.rs`: `max_jit_src_bytes`, `with_sources`,
-  `jit_update`
+- `rust/analytics/src/lakehouse/sql_batch_view.rs`: `new` parameter `max_jit_src_bytes`,
+  `with_sources`, `jit_update`
+- `SqlBatchView::new` callers: `streams_view.rs`, `processes_view.rs`,
+  `rust/analytics/tests/{sql_view_test,histo_view_test,sql_batch_view_merge_ordering_tests}.rs`,
+  `rust/public/tests/materialize_fail_isolation_tests.rs`
+- `ViewOptions` literals: `log_stats_view.rs`, `view_ddl.rs`,
+  `rust/analytics/tests/{view_registry_tests,on_demand_jit_tests,view_ddl_parse_tests,view_definition_validation_tests}.rs`
 - `rust/analytics/src/lakehouse/view_registry.rs`: `with_sources`
 - `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size`,
   `fetch_freshness_candidates`, the `promote_closed_buckets` call
@@ -284,7 +293,9 @@ peak.
 - `CHANGELOG.md`: a new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
   clause listing the `validate_view_definition` return type, `with_on_demand_sources` renamed to
   `with_sources`, the new `PartitionFreshnessRow.file_size` field, and the new `max_bytes`
-  argument of `is_promotable` / `promote_one` / `promote_closed_buckets`.
+  argument of `is_promotable` / `promote_one` / `promote_closed_buckets`, the new
+  `max_jit_src_bytes` parameter of `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
+  field.
 
 ## Testing Strategy
 
@@ -307,7 +318,8 @@ helpers:
     ignored, stale-schema partition ignored.
   - `split_promotion`: fits → one target; over the cap → child targets; straddling row → that
     child skipped; a single row → no target.
-  - `promotion_targets`: covered leaves at a finer rung qualify, grown or open units don't.
+  - `promotion_targets`: a covered unit at the query rung holding finer leaf rows splits within
+    the cap; open-edge finer buckets don't qualify.
   - Descent fallback: `plan_units` over leaves that an existing coarse row forces back together
     yields the original unit.
 - `jit_promotion_tests.rs`: `is_promotable` (now `pub`) rejects inputs whose `file_size` sum exceeds
@@ -318,22 +330,22 @@ The async driver wiring in `update_on_demand_view` needs a live DB and object st
 
 ## Manual Verification
 
-Checked by hand because the driver's wiring needs real services and ingested data:
-
 1. Start the services: `python3 local_test_env/ai_scripts/start_services.py`. Ingest data with
    `python3 local_test_env/ai_scripts/run_generator.py` for at least about an hour, and wait for
    the hourly buckets to close before step 4.
 2. Create an on-demand view over `measures` with a tiny cap so it descends:
    `micromegas-query "CREATE MATERIALIZED VIEW m_cap WITH (extract_query = \$\$SELECT * FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'\$\$, count_src_query = \$\$SELECT count(*) AS count FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'\$\$, merge_partitions_query = \$\$SELECT * FROM {source}\$\$, time_column = 'time', max_jit_src_data = '1 MB')" --all`.
-   Expected: accepted. The same statement with `update_group = 10` is rejected.
+   Expected: accepted.
 3. `micromegas-query "SELECT count(*) FROM m_cap" --begin 6h` (a 15-minute rung), then
    `micromegas-query "SELECT begin_insert_time, end_insert_time, file_size FROM list_partitions() WHERE view_set_name = 'm_cap' ORDER BY begin_insert_time" --all`.
    Expected: closed partitions are narrower than the 15-minute query rung wherever a 15-minute
    bucket's source data is over 1 MB.
-4. Run `DROP MATERIALIZED VIEW m_cap` (which retires its partitions), recreate the view with
-   `max_jit_src_data = '1 GB'`, and re-run step 3. Expected: closed partitions at the 15-minute rung. A second query over
-   `--begin 1d` (a 1-hour rung) merges closed rows into 1-hour partitions whose `file_size` stays
-   under the cap.
+4. Before dropping, run `micromegas-query "SELECT count(*) FROM m_cap" --begin 1d` against the
+   1 MB view and check in `list_partitions()` that no merged 1-hour partition exceeds 1 MB, except
+   unsplittable single rows. Then run `DROP MATERIALIZED VIEW m_cap` (which retires its
+   partitions), recreate the view with `max_jit_src_data = '1 GB'`, and re-run step 3. Expected:
+   closed partitions at the 15-minute rung. A second query over `--begin 1d` (a 1-hour rung)
+   merges closed rows into 1-hour partitions whose `file_size` stays under the cap.
 
 ## Follow-ups
 
