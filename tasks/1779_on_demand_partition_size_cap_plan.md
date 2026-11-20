@@ -167,7 +167,10 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
      `source_data_hash` comes from its own spec's count query.
    - A crash after some leaf files are written but before the commit leaks those files, as a crash
      between file write and insert does today. The window is longer, but no row references them, so
-     no reader sees them.
+     no reader sees them. To let an admin find them, `write_partition_file` logs an `info!` with the
+     view, the insert range and the file path once the file is closed. A path with that line and no
+     matching `[PARTITION_WRITE_COMMIT]` line is a leaked file. Nothing sweeps unreferenced objects,
+     and none is added for this rare, harmless case.
 
 The decision in steps 1-2 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
 `on_demand_jit.rs` returning either "write whole" or "replace these rows with these leaves", so it
