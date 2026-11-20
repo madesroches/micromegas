@@ -18,15 +18,15 @@ by 3× or 2× instead of jumping 12× from one hour to five minutes.
 
 - The ladder (`partition_ladder.rs:12`) is `[1m, 5m, 1h, 6h, 1d]`. It is shared by on-demand
   views and the block-driven JIT views, through `select_rung` (`jit_partitions.rs:133`,
-  `on_demand_jit.rs:326`). Tests name rungs by position (`partition_ladder_tests.rs:22-26`,
+  `on_demand_jit.rs:328`). Tests name rungs by position (`partition_ladder_tests.rs:22-26`,
   `on_demand_jit_tests.rs:29-30`, for example `HOUR = LADDER[2]`).
-- `update_on_demand_view` (`rust/analytics/src/lakehouse/on_demand_jit.rs:323`) picks a rung with
+- `update_on_demand_view` (`rust/analytics/src/lakehouse/on_demand_jit.rs:321`) picks a rung with
   `select_rung(query_range)`, plans buckets with `plan_dense_buckets` (no size-driven descent; only
   the open edge descends, to 1 minute), grows them into `Unit`s around existing rows
   (`plan_units`, `settle_units`), snapshots sources over the unit hull (`snapshot_sources`), then
   probes each unit with the authored `count_src_query` (`probe_unit`, `judge_unit`) and writes the
   stale ones.
-- Promotion: `promotion_targets` (`on_demand_jit.rs:149`) keeps units that are covered, closed, and
+- Promotion: `promotion_targets` (`on_demand_jit.rs:151`) keeps units that are covered, closed, and
   exactly one planned bucket at the query's rung, with at least two rows. `is_promotable`
   (`jit_promotion.rs:35`) checks row count, schema hash and an object-count cap, which
   `update_on_demand_view` sets to `i64::MAX` (`on_demand_jit.rs:163`, `:397`), so on-demand merges
@@ -44,7 +44,7 @@ by 3× or 2× instead of jumping 12× from one hour to five minutes.
   `view_registry.rs:209`). Daemon-maintained sources such as
   `measures` are walked but not recorded.
 - DDL options (`view_ddl.rs:172`) reject `source_partition_delta` / `merge_partition_delta` on
-  on-demand views, as a v1 stopgap pending this issue. `ViewOptions` (`view_definition.rs:41`) is
+  on-demand views, as a v1 stopgap pending this issue. `ViewOptions` (`view_definition.rs:40`) is
   stored as JSON. `description` already shows the pattern for an optional field
   (`#[serde(default, skip_serializing_if = "Option::is_none")]`).
 - There is no byte-size parser in the codebase. `parse_time_delta` (`view_definition.rs:67`) is
@@ -73,11 +73,11 @@ edge walk more rungs, but they are pure computations over counts that were alrea
 
 - Syntax: `max_jit_src_data = '<n> <unit>'`, where the unit is `B`, `KB`, `MB` or `GB` (case
   insensitive, base 1024), mirroring `parse_time_delta`. It is parsed by a new
-  `parse_byte_size(&str) -> Result<i64>` in `view_definition.rs`, which rejects non-positive
-  values.
+  `parse_byte_size(&str) -> Result<i64>` in `view_definition.rs`, which multiplies with `checked_mul` and
+  rejects overflow and non-positive values.
 - On-demand only: a separate `update_group.is_some()` check in `view_ddl.rs` rejects it (the
   delta-rejection loop, `view_ddl.rs:237-249`, runs only when `update_group.is_none()`), plus a new
-  `"max_jit_src_data"` arm in the option key match (`view_ddl.rs:186-233`).
+  `"max_jit_src_data"` arm in the option key match (`view_ddl.rs:189-229`).
 - Stored as `ViewOptions::max_jit_src_data: Option<String>` with `serde(default,
   skip_serializing_if = "Option::is_none")`. `None` means the built-in default
   `DEFAULT_MAX_JIT_SRC_DATA = 1 GiB`. The `max_jit_src_data` arm calls `parse_byte_size` at CREATE
@@ -131,7 +131,10 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
    splits into finer children, down to `LADDER[0]` (1 minute). A part of the range narrower than
    `LADDER[0]` at the unit's edges (a grown unit can end off the minute grid, e.g. around 1-second
    daemon partitions) is emitted as one leaf over its exact sub-range with `rung = LADDER[0]`,
-   counted as `over_cap` only when its source bytes exceed the cap, like the 1-minute floor. A
+   counted as `over_cap` only when its source bytes exceed the cap, like the 1-minute floor.
+   `PlannedBucket` has no over-cap field: the caller recomputes `bytes_fn(leaf.range) > cap` to log
+   and count `over_cap`. A leaf's `nb_blocks`/`nb_objects` are placeholders as in
+   `plan_dense_buckets`, and `closed` is copied from the unit. A
    1-minute bucket is emitted even over the cap, logged as a warning and counted as
    `on_demand_jit{outcome="over_cap"}` in addition to its write outcome (`written` /
    `conflict_dropped`). Picking leaves from source bytes alone means a dense first query doesn't
@@ -162,14 +165,10 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
      A second conflict is an error, as today, and leaves nothing committed.
    - Leaves get no `Unit` of their own and are not probed or descended again: each leaf's
      `source_data_hash` comes from its own spec's count query.
-   - A crash after some leaf files are written but before the commit leaks those files, as a crash
-     between file write and insert does today. The window is longer, but no row references them, so
-     no reader sees them. To let an admin find them, `write_partition_file` logs an `info!` with the
-     view, the insert range and the file path once the file is closed. A path with that line and no
-     matching `[PARTITION_WRITE_COMMIT]` line is a leaked file. After the commit,
-     `insert_partitions_replacing` logs `[PARTITION_WRITE_COMMIT]` with `file_path` for each leaf, as
-     `insert_partition_transaction` does. Nothing sweeps unreferenced objects,
-     and none is added for this rare, harmless case.
+   - `write_partition_file` logs an `info!` with the view, the insert range and the file path once
+     the file is closed. After the commit, `insert_partitions_replacing` logs
+     `[PARTITION_WRITE_COMMIT]` with `file_path` for each leaf, as `insert_partition_transaction`
+     does.
 
 The decision in steps 1-2 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
 `on_demand_jit.rs` returning either "write whole" or "replace these rows with these leaves", so it
@@ -241,7 +240,7 @@ peak.
    on purpose the assertions that hard-code a rung choice: the 6-hour and 23-hour assertions
    (`partition_ladder_tests.rs:36-37`, now 15m and 30m). The 2-hour one stays at 5m. Update the
    `partition_ladder.rs` module doc comment (line 1 lists "minute, 5 min, hour, 6 h, day").
-2. **Option parsing**: add `parse_byte_size` and `DEFAULT_MAX_JIT_SRC_DATA` to
+2. **Option parsing**: add `parse_byte_size` (`checked_mul`, errors on overflow) and `DEFAULT_MAX_JIT_SRC_DATA` to
    `view_definition.rs`, and add the `ViewOptions::max_jit_src_data` field. Accept the option in
    `view_ddl.rs`, reject it on daemon views, and update the doc comment on
    `view_definition_from_options`.
@@ -347,7 +346,9 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - No CHANGELOG "minor breaking change" clause for the on-demand behavior: #1778 is unreleased. The
   CHANGELOG bullet states the new rungs. The block-driven bucket-size change is recorded by
   editing the unreleased #1496 bullet, not in the #1779 bullet. The bullet ends with a **Minor breaking
-  change:** clause for the Rust API changes (see Documentation).
+  change:** clause for the Rust API changes of released items only (see Documentation).
+- No sweeper for leaf files leaked by a crash before commit; they are found by a file-written log
+  line with no matching `[PARTITION_WRITE_COMMIT]`.
 
 ## Documentation
 
@@ -365,11 +366,11 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - `CHANGELOG.md`: edit the unreleased #1496 bullet: the ladder becomes "minute, 5, 15 and 30
   minutes, hour, 6 hours, day" and "roughly 24 to 288 partitions" becomes "roughly 24 to 144
   partitions". A new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
-  clause listing the `validate_view_definition` return type, the new `PartitionFreshnessRow.file_size` and `file_path` fields, and the new `max_bytes`
-  argument of `is_promotable` / `promote_one` / `promote_closed_buckets`, the new provided
-  `PartitionSpec::write_file` trait method, the new `max_jit_src_bytes` parameter of
-  `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
-  field.
+  clause listing only the new `PartitionFreshnessRow.file_size` and `file_path` fields, the new
+  `max_jit_src_bytes` parameter of `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
+  field. Edit the unreleased #1778 bullet's `validate_view_definition` wording in place to describe
+  the new return value (on-demand views plus the extract-only `Vec<ViewMetadata>`), as for the
+  #1496 bullet.
 
 ## Testing Strategy
 
@@ -379,14 +380,14 @@ helpers:
 - `view_ddl_parse_tests.rs`: `max_jit_src_data` accepted on an on-demand view, rejected with
   `update_group`, a bad unit or a non-positive value rejected, absent → `None`.
 - `view_definition_validation_tests.rs`: a `ViewOptions`
-  JSON without the field deserializes. `parse_byte_size` cases, including case and units. The
+  JSON without the field deserializes. `parse_byte_size` cases, including case and units, and overflow (`'99999999999 GB'` rejected). The
   extract-only source list includes a daemon-maintained source (e.g. `measures`) and excludes a
   table scanned only by `merge_partitions_query` or `count_src_query`.
 - `partition_ladder_tests.rs`: the existing "each rung divides the next" test covers the new
   rungs. `select_rung` picks 15m for a 6-hour range and 30m for a 12-hour range, and keeps 1h for
   1 day and 6h for 7 days. `plan_by_source_bytes`: sparse → stays at the rung. Uniform dense
   → all at the rung that fits. Uneven density → mixed rungs that tile the range. Over the cap at
-  `LADDER[0]` → emitted at the floor. A range not aligned to one rung (a grown unit) → tiled by the coarsest aligned buckets. A range whose edges are off the minute grid → the sub-minute edge pieces are emitted as exact-range leaves (flagged over the cap only when their source bytes exceed it), and the leaves tile the range with no gap.
+  `LADDER[0]` → emitted at the floor. A range not aligned to one rung (a grown unit) → tiled by the coarsest aligned buckets. A range whose edges are off the minute grid → the sub-minute edge pieces are emitted as exact-range leaves (the test asserts `bytes_fn(range) > cap` for them only when their source bytes exceed it), and the leaves tile the range with no gap.
 - `on_demand_jit_tests.rs`:
   - `source_bytes`: full containment, prorated straddle, zero-width partition, other views
     ignored, stale-schema partition ignored.
@@ -418,12 +419,19 @@ The async driver wiring in `update_on_demand_view` needs a live DB and object st
    `micromegas-query "SELECT begin_insert_time, end_insert_time, file_size FROM list_partitions() WHERE view_set_name = 'm_cap' ORDER BY begin_insert_time" --all`.
    Expected: closed partitions are narrower than the 15-minute query rung wherever a 15-minute
    bucket's source data is over 1 MB.
-4. Before dropping, run `micromegas-query "SELECT count(*) FROM m_cap" --begin 1d` against the
+4. Check the replace path against the 1 MB view while the generator runs. Query a short fixed
+   window (`--begin`/`--end` kept identical across queries) so open buckets are written as rows,
+   and record those rows from `list_partitions()`. Let the buckets close and go stale, then
+   re-query the same window. Expected: the earlier rows are replaced by finer leaves;
+   `SELECT count(*) FROM m_cap` equals `SELECT count(*) FROM measures` over the same window; a
+   self-join on `list_partitions()` for `m_cap` shows no two partitions overlapping.
+5. Before dropping, run `micromegas-query "SELECT count(*) FROM m_cap" --begin 1d` against the
    1 MB view and check in `list_partitions()` that no merged 1-hour partition exceeds 1 MB, except
    unsplittable single rows. Then run `DROP MATERIALIZED VIEW m_cap` (which retires its
    partitions), recreate the view with `max_jit_src_data = '1 GB'`, and re-run step 3. Expected:
    closed partitions at the 15-minute rung. A second query over `--begin 1d` (a 1-hour rung)
-   merges closed rows into 1-hour partitions whose `file_size` stays under the cap.
+   merges closed rows into 1-hour partitions whose `file_size` stays under the cap. Repeat the
+   `count(*)` equality check from step 4 after the 1-day query to cover promotion.
 
 ## Follow-ups
 
