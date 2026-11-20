@@ -146,20 +146,17 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
    (`file_path` when set, otherwise the exact `(begin_insert_time, end_insert_time,
    file_schema_hash)` of a row with no file), schedules their files for cleanup, then, for each
    leaf, runs the usual `RetireMatch::Containment` retire over the leaf range and inserts it.
-   Readers therefore see either the unit's old rows or all of its leaves, never a gap. This matters
-   because readers with different ranges don't share units. Say reader D's one-hour unit is
-   covered, `jit_update` has returned, and D is about to list partitions
-   (`materialized_view.rs:154`). Meanwhile reader A's one-day unit around the same rows is stale
-   and over the cap. If A retired the rows in a transaction of its own and then wrote leaves one by
-   one, D would scan a hole and silently miss data. A crash between those transactions would leave
-   the same hole.
+   Readers therefore see either the unit's old rows or all of its leaves, never a gap.
    - The identity retire removes only rows this reader fetched. A row already replaced by a
      concurrent writer is simply not found, and that writer's rows are then either contained in a
      leaf and replaced atomically by its containment retire, or they straddle a leaf and the insert
      fails on `lakehouse_partitions_no_overlap`. A pathless row holds no data, so matching one that
      a concurrent writer just inserted loses nothing.
-   - On `PartitionOverlapConflict` the whole transaction rolls back, every leaf file goes through
-     `delete_if_orphan`, and the unit goes through `resolve_conflict`. `resolve_conflict`
+   - The `lakehouse_partitions_no_overlap` to `PartitionOverlapConflict` mapping is factored out of
+     `insert_partition_transaction` into a helper that `insert_partitions_replacing` shares. On
+     any failure it sends every leaf file through `delete_if_orphan`, as `insert_partition` does for
+     its single file.
+   - On `PartitionOverlapConflict` the whole transaction rolls back, and the unit goes through `resolve_conflict`. `resolve_conflict`
      re-settles the unit around the concurrent rows and sends the recomputed unit back through
      `plan_stale_unit` (write whole only within the cap, otherwise leaves committed as one batch).
      A second conflict is an error, as today, and leaves nothing committed.
@@ -181,10 +178,10 @@ is unit-tested without a DB; `update_on_demand_view` only executes it.
 The write seam: `write_partition_from_rows` (`write_partition.rs:950`) is split into a new
 `write_partition_file` (writes the parquet file and returns the unregistered `Partition`) followed
 by the existing `insert_partition`, so its other callers (`merge.rs`, `thread_spans_view.rs`,
-`net_spans_view.rs`) are unchanged. `PartitionSpec` gains a required
-`write_file(&self, lake, logger) -> Result<Partition>`. `SqlPartitionSpec` implements it over
-`write_partition_file`, and `BlockPartitionSpec` and `MetadataPartitionSpec` implement it the same
-way, so the trait stays uniform. `lake.warm_object(file_path, file_size)` stays after registration: in
+`net_spans_view.rs`) are unchanged. `PartitionSpec` gains a provided
+`write_file(&self, lake, logger) -> Result<Partition>` that returns a "not supported for this spec"
+error. Only `SqlPartitionSpec` overrides it, over `write_partition_file`, since
+`SqlBatchView::make_batch_partition_spec` is the only spec source on the on-demand path. `lake.warm_object(file_path, file_size)` stays after registration: in
 `write_partition_from_rows` after `insert_partition`, and in the descent path for each leaf after
 `insert_partitions_replacing` commits.
 
@@ -250,15 +247,16 @@ peak.
    `view_definition_from_options`.
 3. **View wiring**: resolve the cap in `build_sql_batch_view` and add the `max_jit_src_bytes`
    parameter to `SqlBatchView::new`, updating its callers. Add the extract-only `Vec<ViewMetadata>` accumulator and return it from
-   `validate_view_definition`; store it through `with_on_demand_sources`, and update
+   `validate_view_definition` (update `try_validate_sources` in `view_definition_validation_tests.rs`
+   and its callers, which use the returned `Vec`); store it through `with_on_demand_sources`, and update
    `view_registry.rs:209` and the `view_definition.rs:429` doc comment.
    `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and discards the result, so
    it needs no change beyond compiling.
 4. **Freshness row**: add `file_size` and `file_path` to `PartitionFreshnessRow`,
    `fetch_freshness_candidates` and `freshness_row`, and update the `PartitionFreshnessRow` doc
    comment's field list. Add `write_partition_file` and
-   `insert_partitions_replacing` to `write_partition.rs`, and `PartitionSpec::write_file` with its
-   three implementations. Fix the constructors the compiler flags, mostly in tests (including the literals
+   `insert_partitions_replacing` to `write_partition.rs`, and the provided `PartitionSpec::write_file`
+   with its `SqlPartitionSpec` override. Fix the constructors the compiler flags, mostly in tests (including the literals
 in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_tests.rs:59` and
 `jit_promotion_tests.rs:37`, `:139`).
 5. **Ladder planner**: add `plan_by_source_bytes` to `partition_ladder.rs`.
@@ -290,8 +288,8 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - `rust/analytics/src/lakehouse/view_registry.rs`: the `with_on_demand_sources` call
 - `rust/analytics/src/lakehouse/write_partition.rs`: `write_partition_file` (split out of
   `write_partition_from_rows`), `insert_partitions_replacing`
-- `rust/analytics/src/lakehouse/view.rs`: `PartitionSpec::write_file`; implementations in
-  `sql_partition_spec.rs`, `block_partition_spec.rs`, `metadata_partition_spec.rs`
+- `rust/analytics/src/lakehouse/view.rs`: `PartitionSpec::write_file` (provided, erroring); override in
+  `sql_partition_spec.rs`
 - `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size` / `file_path`,
   `fetch_freshness_candidates`, the `promote_closed_buckets` call
 - `rust/analytics/src/lakehouse/jit_promotion.rs`: byte cap in `is_promotable` / `promote_one` /
@@ -368,7 +366,7 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   minutes, hour, 6 hours, day" and "roughly 24 to 288 partitions" becomes "roughly 24 to 144
   partitions". A new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
   clause listing the `validate_view_definition` return type, the new `PartitionFreshnessRow.file_size` and `file_path` fields, and the new `max_bytes`
-  argument of `is_promotable` / `promote_one` / `promote_closed_buckets`, the new required
+  argument of `is_promotable` / `promote_one` / `promote_closed_buckets`, the new provided
   `PartitionSpec::write_file` trait method, the new `max_jit_src_bytes` parameter of
   `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
   field.
@@ -381,7 +379,9 @@ helpers:
 - `view_ddl_parse_tests.rs`: `max_jit_src_data` accepted on an on-demand view, rejected with
   `update_group`, a bad unit or a non-positive value rejected, absent → `None`.
 - `view_definition_validation_tests.rs`: a `ViewOptions`
-  JSON without the field deserializes. `parse_byte_size` cases, including case and units.
+  JSON without the field deserializes. `parse_byte_size` cases, including case and units. The
+  extract-only source list includes a daemon-maintained source (e.g. `measures`) and excludes a
+  table scanned only by `merge_partitions_query` or `count_src_query`.
 - `partition_ladder_tests.rs`: the existing "each rung divides the next" test covers the new
   rungs. `select_rung` picks 15m for a 6-hour range and 30m for a 12-hour range, and keeps 1h for
   1 day and 6h for 7 days. `plan_by_source_bytes`: sparse → stays at the rung. Uniform dense
