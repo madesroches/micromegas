@@ -63,7 +63,7 @@ judged on summed counts, so no migration is needed.
 
 Because `select_rung` is shared, the change also affects the block-driven JIT views. With the
 24-bucket target, queries from 6 hours up to 12 hours move from five-minute buckets (72 for 6
-hours) to 15-minute ones (24), and queries from 12 hours up to 24 hours move from five-minute
+hours) to 15-minute ones (24 to 48), and queries from 12 hours up to 24 hours move from five-minute
 buckets (144 for 12 hours) to 30-minute ones (24 to 48). Other ranges are unchanged
 (1 day → 1 h, 7 days → 6 h). The result is fewer, larger partitions and fewer probes for medium
 ranges. This is a partition-layout change, not a SQL break. Descent (`plan_bucket`) and the open
@@ -171,7 +171,7 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
      `[PARTITION_WRITE_COMMIT]` with `file_path` for each leaf, as `insert_partition_transaction`
      does.
 
-The decision in steps 1-2 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
+The decision in steps 1-2 is a pure `plan_stale_unit(unit, bytes_fn, cap)` in
 `on_demand_jit.rs` returning either "write whole" or "replace this range with these leaves", so it
 is unit-tested without a DB; `update_on_demand_view` only executes it. The "replace" form carries
 the unit range and the leaves.
@@ -244,7 +244,9 @@ peak.
 2. **Option parsing**: add `parse_byte_size` (`checked_mul`, errors on overflow) and `DEFAULT_MAX_JIT_SRC_DATA` to
    `view_definition.rs`, and add the `ViewOptions::max_jit_src_data` field. Accept the option in
    `view_ddl.rs`, reject it on daemon views, and update the doc comment on
-   `view_definition_from_options`.
+   `view_definition_from_options`. Also reword the rejection message at `view_ddl.rs:243-244` and
+   the doc comment at `view_ddl.rs:168` to say on-demand partition sizes follow the query range,
+   bounded by `max_jit_src_data`.
 3. **View wiring**: resolve the cap in `build_sql_batch_view` and add the `max_jit_src_bytes`
    parameter to `SqlBatchView::new`, updating its callers. Add the extract-only `Vec<ViewMetadata>` accumulator and return it from
    `validate_view_definition` (update `try_validate_sources` in `view_definition_validation_tests.rs`
@@ -398,9 +400,9 @@ helpers:
     no target.
   - `promotion_targets`: a covered unit at the query rung holding finer leaf rows splits within
     the cap; open-edge finer buckets don't qualify.
-  - `plan_stale_unit`: within the cap → write whole; over the cap with no rows → leaves; over
-    the cap around an existing coarse row (e.g. a merged day) → replace the unit range with leaves
-    within the cap; grown and open units follow the same rule.
+  - `plan_stale_unit`: within the cap → write whole; over the cap → leaves; over
+    the cap for a grown unit spanning a coarse row's range (e.g. a merged day) → replace the whole
+    grown range with leaves within the cap; grown and open units follow the same rule.
 - `jit_promotion_tests.rs`: `is_promotable` (now `pub`) rejects inputs whose `file_size` sum exceeds
   `max_bytes`, and accepts them at the cap exactly.
 
@@ -429,12 +431,12 @@ The async driver wiring in `update_on_demand_view` needs a live DB and object st
    merges closed rows into 1-hour partitions whose `file_size` stays under the cap. Check that
    `SELECT count(*) FROM m_cap` equals `SELECT count(*) FROM measures` over the same range, to
    cover promotion.
-5. Check the replace path, now that 15-minute rows exist. Run `CREATE OR REPLACE MATERIALIZED VIEW m_cap`
+5. Check the replace path, now that merged 1-hour rows exist (plus 15-minute rows at the open edge). Run `CREATE OR REPLACE MATERIALIZED VIEW m_cap`
    with the same options as the 1 GB recreate, except the extract is
    `SELECT *, 1 AS v FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'` and
    `max_jit_src_data = '1 KB'`. The changed extract schema changes `file_schema_hash`, so the
    existing rows are judged stale. Re-run `micromegas-query "SELECT count(*) FROM m_cap" --begin 6h`.
-   Expected: each stale 15-minute row is replaced in one commit by finer rows with new
+   Expected: each stale 1-hour row (and open-edge 15-minute row) is replaced in one commit by finer rows with new
    `file_path`s, each 1-minute leaf counted as `on_demand_jit{outcome="over_cap"}`;
    `SELECT count(*) FROM m_cap` equals `SELECT count(*) FROM measures` over the same range; a
    self-join on `list_partitions()` for `m_cap` shows no two partitions overlapping.
