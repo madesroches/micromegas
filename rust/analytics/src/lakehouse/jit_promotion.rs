@@ -30,9 +30,13 @@ pub struct PromotionTarget {
     pub inputs: Vec<PartitionFreshnessRow>,
 }
 
-/// Whether `inputs` are worth merging: at least two of them, within the object cap, all written
-/// with the same file schema.
-pub(crate) fn is_promotable(inputs: &[&PartitionFreshnessRow], max_nb_objects: i64) -> bool {
+/// Whether `inputs` are worth merging: at least two of them, within the object cap and the byte
+/// cap on their summed `file_size`, all written with the same file schema.
+pub fn is_promotable(
+    inputs: &[&PartitionFreshnessRow],
+    max_nb_objects: i64,
+    max_bytes: i64,
+) -> bool {
     if inputs.len() < 2 {
         return false;
     }
@@ -49,7 +53,8 @@ pub(crate) fn is_promotable(inputs: &[&PartitionFreshnessRow], max_nb_objects: i
             Err(_) => return false,
         }
     }
-    sum <= max_nb_objects
+    let bytes: i64 = inputs.iter().map(|r| r.file_size).sum();
+    sum <= max_nb_objects && bytes <= max_bytes
 }
 
 /// Picks the buckets to promote. A pure function of the planner output, the verdicts and the
@@ -73,7 +78,7 @@ pub fn promotion_candidates(
             .iter()
             .filter(|r| RangeConvention::BlockHull.row_inside(r, planned.range))
             .collect();
-        if is_promotable(&inputs, max_nb_objects) {
+        if is_promotable(&inputs, max_nb_objects, i64::MAX) {
             targets.push(PromotionTarget {
                 bucket: planned.range,
                 inputs: inputs.into_iter().cloned().collect(),
@@ -113,6 +118,7 @@ fn freshness_row(p: &Partition) -> PartitionFreshnessRow {
         end_insert_time: p.end_insert_time(),
         file_schema_hash: p.view_metadata.file_schema_hash.clone(),
         source_data_hash: p.source_data_hash.clone(),
+        file_size: p.file_size,
     }
 }
 
@@ -135,6 +141,7 @@ async fn promote_one(
     view: &Arc<dyn View>,
     target: &PromotionTarget,
     max_nb_objects: i64,
+    max_bytes: i64,
     convention: RangeConvention,
 ) -> Result<Promotion> {
     let pool = &lakehouse.lake().db_pool;
@@ -174,7 +181,7 @@ async fn promote_one(
         .any(|p| convention.row_intersects(&freshness_row(p), target.bucket));
     let hull = hull_of(rows.iter());
     if straddled
-        || !is_promotable(&row_refs, max_nb_objects)
+        || !is_promotable(&row_refs, max_nb_objects, max_bytes)
         || hull != hull_of(target.inputs.iter())
     {
         return Ok(Promotion::Skipped("changed"));
@@ -209,10 +216,20 @@ pub async fn promote_closed_buckets(
     view: Arc<dyn View>,
     targets: Vec<PromotionTarget>,
     max_nb_objects: i64,
+    max_bytes: i64,
     convention: RangeConvention,
 ) {
     for target in targets {
-        match promote_one(&lakehouse, &view, &target, max_nb_objects, convention).await {
+        match promote_one(
+            &lakehouse,
+            &view,
+            &target,
+            max_nb_objects,
+            max_bytes,
+            convention,
+        )
+        .await
+        {
             Ok(Promotion::Promoted) => {
                 info!(
                     "jit promotion promoted [{}, {})",

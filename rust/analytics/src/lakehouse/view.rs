@@ -30,6 +30,17 @@ pub trait PartitionSpec: Send + Sync + Debug {
     fn get_source_data_hash(&self) -> Vec<u8>;
     /// Writes the partition to the data lake.
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()>;
+
+    /// Writes the partition file without registering it, and returns the unregistered
+    /// `Partition`. The caller registers it (see `insert_partitions_replacing`) or deletes the
+    /// file.
+    async fn write_file(
+        &self,
+        _lake: Arc<DataLakeConnection>,
+        _logger: Arc<dyn Logger>,
+    ) -> Result<Partition> {
+        anyhow::bail!("write_file is not supported for this partition spec")
+    }
 }
 
 /// Metadata about a view.

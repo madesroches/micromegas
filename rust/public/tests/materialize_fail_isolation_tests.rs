@@ -17,6 +17,7 @@ use micromegas::ingestion::data_lake_connection::{
     DataLakeConnection, WritablePolicy, connect_to_data_lake,
 };
 use micromegas::servers::maintenance::materialize_all_views;
+use micromegas_analytics::lakehouse::view_definition::DEFAULT_MAX_JIT_SRC_DATA;
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::prelude::*;
 use std::num::NonZeroUsize;
@@ -60,6 +61,7 @@ async fn make_failing_view(
         Some(update_group),
         TimeDelta::days(1),
         TimeDelta::days(1),
+        DEFAULT_MAX_JIT_SRC_DATA,
     )
     .await
 }

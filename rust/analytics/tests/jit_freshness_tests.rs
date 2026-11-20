@@ -111,6 +111,7 @@ fn row(
         end_insert_time: end,
         file_schema_hash,
         source_data_hash: existing_count.to_le_bytes().to_vec(),
+        file_size: 0,
     }
 }
 

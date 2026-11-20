@@ -1,8 +1,9 @@
 use super::{
     dataframe_time_bounds::DataFrameTimeBounds,
+    partition::Partition,
     partitioned_execution_plan::{assert_ordering_satisfied, assert_single_partition, sort_exprs},
     view::{PartitionSpec, ScanSortColumn, ViewMetadata},
-    write_partition::write_partition_from_rows,
+    write_partition::{write_partition_file, write_partition_from_rows},
 };
 use crate::{
     dfext::typed_column::typed_column_by_name,
@@ -166,17 +167,7 @@ impl PartitionSpec for SqlPartitionSpec {
 
     #[span_fn(view = self.view_metadata.view_set_name)]
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
-        // Allow empty record_count - write_partition_from_rows will create
-        // an empty partition record if no data is sent through the channel
-        let desc = format!(
-            "[{}, {}] {} {}",
-            self.view_metadata.view_set_name,
-            self.view_metadata.view_instance_id,
-            self.insert_range.begin.to_rfc3339(),
-            self.insert_range.end.to_rfc3339()
-        );
-        logger.write_log_entry(format!("writing {desc}")).await?;
-        let stream = self.extract_plan().await?;
+        let stream = self.begin_write(&logger).await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let join_handle = spawn_with_context(write_partition_from_rows(
@@ -194,9 +185,54 @@ impl PartitionSpec for SqlPartitionSpec {
 
         self.extract_stream(stream, tx, join_handle).await
     }
+
+    #[span_fn(view = self.view_metadata.view_set_name)]
+    async fn write_file(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        logger: Arc<dyn Logger>,
+    ) -> Result<Partition> {
+        let stream = self.begin_write(&logger).await?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let view_metadata = self.view_metadata.clone();
+        let schema = self.schema.clone();
+        let insert_range = self.insert_range;
+        let source_data_hash = self.get_source_data_hash();
+        let sort_order = self.sort_order.clone();
+        let join_handle = spawn_with_context(async move {
+            write_partition_file(
+                &lake,
+                view_metadata,
+                schema,
+                insert_range,
+                source_data_hash,
+                sort_order,
+                rx,
+                logger,
+            )
+            .await
+        });
+
+        self.extract_stream(stream, tx, join_handle).await
+    }
 }
 
 impl SqlPartitionSpec {
+    /// Logs the start of a write and plans the extract. An empty `record_count` is allowed: the
+    /// writer creates an empty partition record when no data is sent through the channel.
+    async fn begin_write(&self, logger: &Arc<dyn Logger>) -> Result<SendableRecordBatchStream> {
+        let desc = format!(
+            "[{}, {}] {} {}",
+            self.view_metadata.view_set_name,
+            self.view_metadata.view_instance_id,
+            self.insert_range.begin.to_rfc3339(),
+            self.insert_range.end.to_rfc3339()
+        );
+        logger.write_log_entry(format!("writing {desc}")).await?;
+        self.extract_plan().await
+    }
+
     #[span_fn(view = self.view_metadata.view_set_name)]
     async fn extract_plan(&self) -> Result<SendableRecordBatchStream> {
         let df = self.ctx.sql(&self.extract_query).await?;
@@ -205,12 +241,12 @@ impl SqlPartitionSpec {
 
     // Takes `tx` by value so the writer task sees the channel close before it is awaited.
     #[span_fn(view = self.view_metadata.view_set_name)]
-    async fn extract_stream(
+    async fn extract_stream<T>(
         &self,
         mut stream: SendableRecordBatchStream,
         tx: tokio::sync::mpsc::Sender<Result<PartitionRowSet>>,
-        join_handle: tokio::task::JoinHandle<Result<()>>,
-    ) -> Result<()> {
+        join_handle: tokio::task::JoinHandle<Result<T>>,
+    ) -> Result<T> {
         while let Some(rb_res) = stream.next().await {
             let rb = self.transformer.transform(rb_res?).await?;
             let event_time_range = self
@@ -221,8 +257,7 @@ impl SqlPartitionSpec {
                 .await?;
         }
         drop(tx);
-        join_handle.await??;
-        Ok(())
+        join_handle.await?
     }
 }
 

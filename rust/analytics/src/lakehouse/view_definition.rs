@@ -12,7 +12,7 @@ use super::{
     session_configurator::{NoOpSessionConfigurator, SessionConfigurator},
     sql_batch_view::{SqlBatchView, guarded_sql_options},
     sql_partition_spec::plan_sorted_extract,
-    view::{ScanSortColumn, View},
+    view::{ScanSortColumn, View, ViewMetadata},
     view_factory::ViewFactory,
 };
 use crate::time::TimeRange;
@@ -45,7 +45,14 @@ pub struct ViewOptions {
     pub merge_sort_order: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// On-demand views only: the most source data, as a `'<n> <unit>'` byte size, one
+    /// materialization step may read. `None` means [`DEFAULT_MAX_JIT_SRC_DATA`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_jit_src_data: Option<String>,
 }
+
+/// The `max_jit_src_data` of an on-demand view that doesn't set one (1 GiB).
+pub const DEFAULT_MAX_JIT_SRC_DATA: i64 = 1024 * 1024 * 1024;
 
 /// The normalized shape of a `CREATE MATERIALIZED VIEW` definition -- every option plus the three
 /// queries -- independent of whether it arrived over DDL or was seeded by a migration
@@ -83,6 +90,31 @@ pub fn parse_time_delta(s: &str) -> Result<TimeDelta> {
         "day" | "days" => Ok(TimeDelta::days(n)),
         other => anyhow::bail!("parse_time_delta: unknown unit {other:?} in {s:?}"),
     }
+}
+
+/// Parses a `"<n> <unit>"` string (e.g. `"1 GB"`, `"512 mb"`) into a byte count. Accepted units,
+/// case insensitive and base 1024: `B`, `KB`, `MB`, `GB`.
+pub fn parse_byte_size(s: &str) -> Result<i64> {
+    let s = s.trim();
+    let (num_str, unit) = s
+        .split_once(char::is_whitespace)
+        .with_context(|| format!("parse_byte_size: expected '<n> <unit>', got {s:?}"))?;
+    let n: i64 = num_str
+        .trim()
+        .parse()
+        .with_context(|| format!("parse_byte_size: invalid integer {num_str:?} in {s:?}"))?;
+    if n <= 0 {
+        anyhow::bail!("parse_byte_size: expected a positive integer, got {n} in {s:?}");
+    }
+    let multiplier: i64 = match unit.trim().to_lowercase().as_str() {
+        "b" => 1,
+        "kb" => 1024,
+        "mb" => 1024 * 1024,
+        "gb" => 1024 * 1024 * 1024,
+        other => anyhow::bail!("parse_byte_size: unknown unit {other:?} in {s:?}"),
+    };
+    n.checked_mul(multiplier)
+        .with_context(|| format!("parse_byte_size: {s:?} overflows"))
 }
 
 /// Fast, redundant, name-only pre-check -- also enforced, exhaustively, by
@@ -130,6 +162,11 @@ pub async fn build_sql_batch_view(
         .with_context(|| format!("{}: source_partition_delta", def.view_set_name))?;
     let merge_delta = parse_time_delta(&def.options.merge_partition_delta)
         .with_context(|| format!("{}: merge_partition_delta", def.view_set_name))?;
+    let max_jit_src_bytes = match &def.options.max_jit_src_data {
+        Some(s) => parse_byte_size(s)
+            .with_context(|| format!("{}: max_jit_src_data", def.view_set_name))?,
+        None => DEFAULT_MAX_JIT_SRC_DATA,
+    };
     let view = SqlBatchView::new(
         runtime,
         Arc::new(def.view_set_name.clone()),
@@ -144,6 +181,7 @@ pub async fn build_sql_batch_view(
         def.update_group,
         source_delta,
         merge_delta,
+        max_jit_src_bytes,
     )
     .await
     .with_context(|| format!("building SqlBatchView for '{}'", def.view_set_name))?;
@@ -298,6 +336,13 @@ fn is_banned_from_stored_scans(name: &str) -> bool {
     MUTATING_FUNCTIONS.contains(&name) || STORED_SCAN_BANNED_READ_ONLY_FUNCTIONS.contains(&name)
 }
 
+/// `ViewMetadata` has no `PartialEq`.
+fn same_view_metadata(a: &ViewMetadata, b: &ViewMetadata) -> bool {
+    a.view_set_name == b.view_set_name
+        && a.view_instance_id == b.view_instance_id
+        && a.file_schema_hash == b.file_schema_hash
+}
+
 /// Walks every `TableScan` reachable from `plan`, resolving each to a view set (to
 /// accumulate the highest `update_group` read) or to a banned table function name.
 ///
@@ -310,10 +355,17 @@ fn walk_plan_for_scans(
     max_group: &mut Option<i32>,
     mutating_hit: &mut Option<String>,
     on_demand_sources: &mut Vec<Arc<dyn View>>,
+    scanned_sources: &mut Vec<ViewMetadata>,
 ) -> datafusion::error::Result<()> {
     plan.apply_with_subqueries(|node| {
         if let LogicalPlan::TableScan(ts) = node {
-            inspect_scan(ts, max_group, mutating_hit, on_demand_sources)?;
+            inspect_scan(
+                ts,
+                max_group,
+                mutating_hit,
+                on_demand_sources,
+                scanned_sources,
+            )?;
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
@@ -325,6 +377,7 @@ fn inspect_scan(
     max_group: &mut Option<i32>,
     mutating_hit: &mut Option<String>,
     on_demand_sources: &mut Vec<Arc<dyn View>>,
+    scanned_sources: &mut Vec<ViewMetadata>,
 ) -> datafusion::error::Result<()> {
     // Checked first, and unconditionally: `view_instance` resolves to a `MaterializedView` just
     // like a well-behaved DDL view scan does (see `ViewInstanceTableFunction::call_with_args`),
@@ -349,6 +402,13 @@ fn inspect_scan(
             .downcast_ref::<MaterializedView>()
     {
         let scanned = mat_view.get_view();
+        let scanned_meta = scanned.get_meta();
+        if !scanned_sources
+            .iter()
+            .any(|m| same_view_metadata(m, &scanned_meta))
+        {
+            scanned_sources.push(scanned_meta);
+        }
         if let Some(group) = scanned.get_update_group() {
             *max_group = Some(max_group.map_or(group, |m| m.max(group)));
         }
@@ -366,7 +426,13 @@ fn inspect_scan(
     // `__<name>__partitions` form) resolves through a view-backed logical plan rather than a
     // `MaterializedView` directly -- recurse into it to find the real scan.
     if let Some(inner) = ts.source.get_logical_plan() {
-        return walk_plan_for_scans(&inner, max_group, mutating_hit, on_demand_sources);
+        return walk_plan_for_scans(
+            &inner,
+            max_group,
+            mutating_hit,
+            on_demand_sources,
+            scanned_sources,
+        );
     }
     Ok(())
 }
@@ -426,8 +492,10 @@ async fn build_narrow_validation_ctx(
 /// the registry loader has folded in so far -- which the update-group ordering check and the
 /// on-demand source collection below read.
 ///
-/// Returns the on-demand views the definition reads, for `SqlBatchView::with_on_demand_sources`.
-/// A daemon-updated definition may not read one.
+/// Returns, for `SqlBatchView::with_on_demand_sources`, the on-demand views the definition reads
+/// (a daemon-updated definition may not read one) and the metadata of every view its
+/// `extract_query` alone scans, daemon-maintained ones included: the merge and count queries can
+/// scan tables the extract never reads, and those bytes are not read by a materialization step.
 pub async fn validate_view_definition(
     def: &ViewDefinition,
     view: &SqlBatchView,
@@ -435,7 +503,7 @@ pub async fn validate_view_definition(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     session_configurator: Arc<dyn SessionConfigurator>,
-) -> Result<Vec<Arc<dyn View>>> {
+) -> Result<(Vec<Arc<dyn View>>, Vec<ViewMetadata>)> {
     let schema = view.get_file_schema();
 
     check_view_set_name_charset(&def.view_set_name)?;
@@ -534,17 +602,26 @@ pub async fn validate_view_definition(
     let mut max_group: Option<i32> = None;
     let mut mutating_hit: Option<String> = None;
     let mut on_demand_sources: Vec<Arc<dyn View>> = vec![];
+    let mut extract_sources: Vec<ViewMetadata> = vec![];
     for (label, plan) in [
         ("extract_query", extract_df.logical_plan()),
         ("merge_partitions_query", merge_df.logical_plan()),
         ("count_src_query", count_df.logical_plan()),
     ] {
         check_no_volatile_functions(plan, label)?;
+        // Only the extract plan feeds the byte-sum source list.
+        let mut discarded = vec![];
+        let scanned_sources = if label == "extract_query" {
+            &mut extract_sources
+        } else {
+            &mut discarded
+        };
         walk_plan_for_scans(
             plan,
             &mut max_group,
             &mut mutating_hit,
             &mut on_demand_sources,
+            scanned_sources,
         )?;
     }
     if let Some(name) = mutating_hit {
@@ -602,5 +679,5 @@ pub async fn validate_view_definition(
         })?;
     }
 
-    Ok(on_demand_sources)
+    Ok((on_demand_sources, extract_sources))
 }

@@ -117,6 +117,7 @@ fn row_with_schema(begin: &str, end: &str, count: i64, schema: Vec<u8>) -> Parti
         end_insert_time: at(end),
         file_schema_hash: schema,
         source_data_hash: count.to_le_bytes().to_vec(),
+        file_size: 0,
     }
 }
 

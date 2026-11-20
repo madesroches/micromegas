@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DurationRound, TimeDelta, Utc};
 use datafusion::execution::runtime_env::RuntimeEnv;
+use micromegas_analytics::lakehouse::view_definition::DEFAULT_MAX_JIT_SRC_DATA;
 use micromegas_analytics::{
     lakehouse::{
         batch_update::materialize_partition_range,
@@ -73,6 +74,7 @@ async fn make_cpu_usage_per_process_per_minute_view(
         Some(4000),
         TimeDelta::days(1),
         TimeDelta::days(1),
+        DEFAULT_MAX_JIT_SRC_DATA,
     )
     .await
 }

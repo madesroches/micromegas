@@ -29,6 +29,7 @@ use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::sql_batch_view::SqlBatchView;
 use micromegas_analytics::lakehouse::view::{ScanSortColumn, View, ViewMetadata};
+use micromegas_analytics::lakehouse::view_definition::DEFAULT_MAX_JIT_SRC_DATA;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -78,6 +79,7 @@ async fn make_test_view_with_merge_query(
         None,
         TimeDelta::days(1),
         TimeDelta::days(1),
+        DEFAULT_MAX_JIT_SRC_DATA,
     )
     .await
     .expect("SqlBatchView::new")

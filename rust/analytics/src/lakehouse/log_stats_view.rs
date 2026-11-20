@@ -87,6 +87,7 @@ pub fn log_stats_view_definition() -> ViewDefinition {
                 "target".to_string(),
             ]),
             description: Some(LOG_STATS_DESCRIPTION.to_string()),
+            max_jit_src_data: None,
         },
     }
 }

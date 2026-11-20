@@ -67,8 +67,9 @@ if you prefer it and have no embedded quotes to escape.
 | `update_group` | No | Where this view sits in the daemon's materialization order. Must be a number strictly greater than the `update_group` of every view this definition reads — the daemon materializes in ascending group order, which orders daemon-updated views. There is no default and no automatic inference. Omit it to make the view [on-demand](#on-demand-views) |
 | `time_column` | Yes, unless both of the two below are given | The event-time column bounding each partition |
 | `min_time_column` / `max_time_column` | No | Override `time_column` individually, if the minimum and maximum event-time bounds come from different columns |
-| `source_partition_delta` | No (default `'1 day'`) | How wide a fresh partition may be, as `'<n> <unit>'` (`second(s)`, `minute(s)`, `hour(s)`, `day(s)`). Rejected on an on-demand view |
-| `merge_partition_delta` | No (defaults to `source_partition_delta`) | How wide a merged partition may be. Rejected on an on-demand view |
+| `source_partition_delta` | No (default `'1 day'`) | How wide a fresh partition may be, as `'<n> <unit>'` (`second(s)`, `minute(s)`, `hour(s)`, `day(s)`). Rejected on an on-demand view, which uses `max_jit_src_data` instead |
+| `merge_partition_delta` | No (defaults to `source_partition_delta`) | How wide a merged partition may be. Rejected on an on-demand view, which uses `max_jit_src_data` instead |
+| `max_jit_src_data` | No (default `'1 GB'`) | On-demand views only, rejected with `update_group`. The most source data, as `'<n> <unit>'` with `B`, `KB`, `MB` or `GB` (case insensitive, base 1024), that writing one partition may read. See [On-demand views](#on-demand-views) |
 | `merge_sort_order` | No | Comma-separated column list the merged output is sorted by, enabling a streaming k-way merge instead of a buffering sort |
 | `description` | No | Markdown usage guide, served to every caller in the `description` column of [`list_view_sets()`](functions-reference.md#list_view_sets). Must not be empty |
 
@@ -110,15 +111,25 @@ time range, so nothing is materialized for ranges nobody reads.
 - **A query time range is required.** Reading an on-demand view with no time range fails with
   "`<name>` is an on-demand view and needs a query time range (pass begin/end with the query)",
   rather than answering from whatever partitions earlier queries left behind.
-- **Partition sizes follow the query range.** The range is cut into 1-minute, 5-minute, 1-hour,
-  6-hour and 1-day buckets, whichever gives roughly 24 buckets. Closed buckets are written at
-  that size; only the newest edge is written as finer buckets down to one minute, and the last
-  90 seconds are treated as still open. Each bucket is checked with `count_src_query` and
-  rewritten only when its count no longer matches, so a repeated query only refreshes the newest
-  edge. Closed history is merged into the query's bucket size by later queries.
-  `source_partition_delta` and `merge_partition_delta` are rejected.
+- **Partition sizes follow the query range, bounded by `max_jit_src_data`.** The range is cut
+  into buckets of 1 minute, 5 minutes, 15 minutes, 30 minutes, 1 hour, 6 hours or 1 day,
+  whichever gives roughly 24 buckets. Closed buckets are written at that size; only the newest
+  edge is written as finer buckets down to one minute, and the last 90 seconds are treated as
+  still open. Each bucket is checked with `count_src_query` and rewritten only when its count no
+  longer matches, so a repeated query only refreshes the newest edge. Closed history is merged
+  into the query's bucket size by later queries.
+- **A partition never reads more than `max_jit_src_data` of source data.** The source data of a
+  bucket is estimated from the sizes of the partitions the extract reads. When a stale bucket
+  is over the cap it is rewritten as finer buckets, as coarse as still fit, down to 1 minute. A
+  1-minute bucket is written even when it is over the cap, logged as a warning and counted as
+  `on_demand_jit{outcome="over_cap"}`. The finer partitions replace the stale ones in a single
+  commit, however coarse the stale ones were, so readers never see a gap. A merge of closed
+  history is capped twice: the merged partition must not exceed the cap in bytes, and rebuilding
+  it must not read more than the cap in source data. A merge that would go over splits into
+  finer ones.
 - **Cost.** The reader who asks pays: one count query per bucket, plus the extract of every stale
-  one, before the query itself runs. A 7-day query is about 50 count queries.
+  one, before the query itself runs. A dense stale range costs one probe per bucket and one
+  write per finer partition it is rewritten as. A 7-day query is about 50 count queries.
 - **`count_src_query` counts the rows of the tables the extract reads**, not `blocks`. For
   example, for an extract over `log_entries`:
 

@@ -222,7 +222,7 @@ flowchart TD
 **JIT ETL (On-Demand)**:
 - Triggered when querying process-specific data
 - Fetches relevant blocks, decompresses, and converts to Parquet
-- Partition size follows the query range on a minute, 5 minute, hour, 6 hour, day ladder, so a long query reads a bounded number of partitions
+- Partition size follows the query range on a minute, 5 minute, 15 minute, 30 minute, hour, 6 hour, day ladder, so a long query reads a bounded number of partitions
 - While a process is live, only the open minute is rewritten on each refresh
 - Closed history is merged into coarser partitions on demand when a longer query reads it
 - Optimized for deep-dive analysis and debugging

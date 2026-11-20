@@ -297,6 +297,7 @@ fn view_options_description_serde_round_trip() {
     let legacy = r#"{"min_time_column":"t","max_time_column":"t","source_partition_delta":"1 day","merge_partition_delta":"1 day","merge_sort_order":null}"#;
     let options: ViewOptions = serde_json::from_str(legacy).expect("legacy options");
     assert_eq!(options.description, None);
+    assert_eq!(options.max_jit_src_data, None);
     assert_eq!(serde_json::to_string(&options).unwrap(), legacy);
 
     let described = ViewOptions {
@@ -349,4 +350,48 @@ fn delta_options_with_update_group_are_unchanged() {
     assert_eq!(def.update_group, Some(9000));
     assert_eq!(def.options.source_partition_delta, "1 hour");
     assert_eq!(def.options.merge_partition_delta, "1 hour");
+}
+
+#[test]
+fn max_jit_src_data_is_accepted_on_an_on_demand_view() {
+    let sql = CREATE_SQL.replace("update_group = 9000, ", "max_jit_src_data = '512 MB', ");
+    let def = parsed_definition(&sql).unwrap();
+    assert_eq!(def.update_group, None);
+    assert_eq!(def.options.max_jit_src_data.as_deref(), Some("512 MB"));
+}
+
+#[test]
+fn max_jit_src_data_absent_is_none() {
+    let sql = CREATE_SQL.replace("update_group = 9000, ", "");
+    let def = parsed_definition(&sql).unwrap();
+    assert_eq!(def.options.max_jit_src_data, None);
+}
+
+#[test]
+fn max_jit_src_data_with_update_group_is_rejected() {
+    let sql = CREATE_SQL.replace(
+        "update_group = 9000, ",
+        "update_group = 9000, max_jit_src_data = '1 GB', ",
+    );
+    let err = parsed_definition(&sql).expect_err("max_jit_src_data on a daemon view");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("max_jit_src_data only applies to on-demand views"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn max_jit_src_data_bad_values_are_rejected() {
+    for value in ["1 TB", "0 MB", "-1 MB", "1", "lots", "99999999999 GB"] {
+        let sql = CREATE_SQL.replace(
+            "update_group = 9000, ",
+            &format!("max_jit_src_data = '{value}', "),
+        );
+        let err = parsed_definition(&sql).expect_err(value);
+        assert!(
+            format!("{err:#}").contains("max_jit_src_data"),
+            "unexpected error for {value}: {err:#}"
+        );
+    }
 }
