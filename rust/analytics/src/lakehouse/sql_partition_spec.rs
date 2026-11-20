@@ -239,6 +239,18 @@ impl SqlPartitionSpec {
         self.execute_extract_query(df).await
     }
 
+    async fn transform_batch(
+        &self,
+        rb_res: datafusion::error::Result<RecordBatch>,
+    ) -> Result<PartitionRowSet> {
+        let rb = self.transformer.transform(rb_res?).await?;
+        let event_time_range = self
+            .compute_time_bounds
+            .get_time_bounds(self.ctx.read_batch(rb.clone())?)
+            .await?;
+        Ok(PartitionRowSet::new(event_time_range, rb, None))
+    }
+
     // Takes `tx` by value so the writer task sees the channel close before it is awaited.
     #[span_fn(view = self.view_metadata.view_set_name)]
     async fn extract_stream<T>(
@@ -247,14 +259,27 @@ impl SqlPartitionSpec {
         tx: tokio::sync::mpsc::Sender<Result<PartitionRowSet>>,
         join_handle: tokio::task::JoinHandle<Result<T>>,
     ) -> Result<T> {
+        // A bare early return would close the channel, which the writer reads as a clean end of
+        // data and would upload a partial file nobody registers. Forwarding the error makes it
+        // take its failure path and delete the file.
+        let mut extract_err = None;
         while let Some(rb_res) = stream.next().await {
-            let rb = self.transformer.transform(rb_res?).await?;
-            let event_time_range = self
-                .compute_time_bounds
-                .get_time_bounds(self.ctx.read_batch(rb.clone())?)
-                .await?;
-            tx.send(Ok(PartitionRowSet::new(event_time_range, rb, None)))
-                .await?;
+            match self.transform_batch(rb_res).await {
+                Ok(row_set) => tx.send(Ok(row_set)).await?,
+                Err(e) => {
+                    extract_err = Some(e);
+                    break;
+                }
+            }
+        }
+        if let Some(e) = extract_err {
+            let msg = format!("{e:#}");
+            let _ = tx.send(Err(e)).await;
+            drop(tx);
+            return match join_handle.await? {
+                Ok(_) => Err(anyhow::anyhow!(msg)),
+                Err(writer_err) => Err(writer_err.context(msg)),
+            };
         }
         drop(tx);
         join_handle.await?
