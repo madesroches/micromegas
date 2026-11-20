@@ -118,6 +118,10 @@ evenly in insert time. That is good enough for a cap: extracts filter sources by
 the daemon's source partitions are insert-time aligned. Sources that aren't lakehouse partitions
 count as 0, which keeps today's behavior for them.
 
+`update_on_demand_view` filters the all-views snapshot down to the source partitions once per
+snapshot (and again after `resolve_conflict` re-snapshots), and passes that filtered list to every
+`source_bytes` call in sections 5 and 6, so `bytes_fn` never scans the whole snapshot.
+
 ### 5. Write descent for a stale unit
 
 After `probe_unit` returns `Stale` for any unit (planned, grown or open):
@@ -142,19 +146,16 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
 3. Write every leaf's file without registering it. Each leaf builds its own
    `make_batch_partition_spec` (one count query plus one extract per leaf) and calls a new
    `PartitionSpec::write_file`, which returns the unregistered `Partition`. Leaves are extracted
-   one at a time, so only one leaf's batches are in flight. Only the file metadata is kept.
+   one at a time, so only one leaf's batches are in flight. Only the file metadata is kept. If any leaf's `write_file`
+   fails, the descent deletes the files already written for the earlier leaves (they are
+   unregistered, so they never enter `temporary_files`) before returning the error, through
+   `delete_if_orphan`, made `pub(crate)`.
 4. Commit the descent in one transaction with a new `insert_partitions_replacing(lake, view_meta,
-   retired: &[PartitionFreshnessRow], partitions: &[Partition], logger)` in `write_partition.rs`.
-   It takes the advisory lock keyed on the unit range, retires the unit's rows by identity
-   (`file_path` when set, otherwise the exact `(begin_insert_time, end_insert_time,
-   file_schema_hash)` of a row with no file), schedules their files for cleanup, then, for each
-   leaf, runs the usual `RetireMatch::Containment` retire over the leaf range and inserts it.
+   unit_range: TimeRange, partitions: &[Partition], logger)` in `write_partition.rs`.
+   Under the advisory lock keyed on the unit range, it runs one `RetireMatch::Containment` retire
+   over `unit_range`, which removes every row of the unit and schedules their files for cleanup,
+   then inserts the leaves.
    Readers therefore see either the unit's old rows or all of its leaves, never a gap.
-   - The identity retire removes only rows this reader fetched. A row already replaced by a
-     concurrent writer is simply not found, and that writer's rows are then either contained in a
-     leaf and replaced atomically by its containment retire, or they straddle a leaf and the insert
-     fails on `lakehouse_partitions_no_overlap`. A pathless row holds no data, so matching one that
-     a concurrent writer just inserted loses nothing.
    - The `lakehouse_partitions_no_overlap` to `PartitionOverlapConflict` mapping is factored out of
      `insert_partition_transaction` into a helper that `insert_partitions_replacing` shares. On
      any failure it sends every leaf file through `delete_if_orphan`, as `insert_partition` does for
@@ -171,8 +172,9 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
      does.
 
 The decision in steps 1-2 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
-`on_demand_jit.rs` returning either "write whole" or "replace these rows with these leaves", so it
-is unit-tested without a DB; `update_on_demand_view` only executes it.
+`on_demand_jit.rs` returning either "write whole" or "replace this range with these leaves", so it
+is unit-tested without a DB; `update_on_demand_view` only executes it. The "replace" form carries
+the unit range and the leaves.
 
 The write seam: `write_partition_from_rows` (`write_partition.rs:950`) is split into a new
 `write_partition_file` (writes the parquet file and returns the unregistered `Partition`) followed
@@ -189,9 +191,8 @@ Neither the snapshot range nor the order of `update_on_demand_view` changes.
 
 ### 6. Promotion within the cap
 
-- `PartitionFreshnessRow` gains `file_size: i64` and `file_path: Option<String>` (the latter for
-  the identity retire of section 5). `fetch_freshness_candidates` selects both and
-  `freshness_row` copies both.
+- `PartitionFreshnessRow` gains `file_size: i64`. `fetch_freshness_candidates` selects it and
+  `freshness_row` copies it.
 - A merged row must stay rebuildable within the cap, so a promotion target also requires
   `source_bytes(target range) <= cap`, checked in `split_promotion` from the source snapshot
   already loaded by `update_on_demand_view`.
@@ -251,7 +252,7 @@ peak.
    `view_registry.rs:209` and the `view_definition.rs:429` doc comment.
    `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and discards the result, so
    it needs no change beyond compiling.
-4. **Freshness row**: add `file_size` and `file_path` to `PartitionFreshnessRow`,
+4. **Freshness row**: add `file_size` to `PartitionFreshnessRow`,
    `fetch_freshness_candidates` and `freshness_row`, and update the `PartitionFreshnessRow` doc
    comment's field list. Add `write_partition_file` and
    `insert_partitions_replacing` to `write_partition.rs`, and the provided `PartitionSpec::write_file`
@@ -286,10 +287,10 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   `rust/analytics/tests/{view_registry_tests,on_demand_jit_tests,view_ddl_parse_tests,view_definition_validation_tests}.rs`
 - `rust/analytics/src/lakehouse/view_registry.rs`: the `with_on_demand_sources` call
 - `rust/analytics/src/lakehouse/write_partition.rs`: `write_partition_file` (split out of
-  `write_partition_from_rows`), `insert_partitions_replacing`
+  `write_partition_from_rows`), `insert_partitions_replacing`, `delete_if_orphan` made `pub(crate)`
 - `rust/analytics/src/lakehouse/view.rs`: `PartitionSpec::write_file` (provided, erroring); override in
   `sql_partition_spec.rs`
-- `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size` / `file_path`,
+- `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size`,
   `fetch_freshness_candidates`, the `promote_closed_buckets` call
 - `rust/analytics/src/lakehouse/jit_promotion.rs`: byte cap in `is_promotable` / `promote_one` /
   `promote_closed_buckets`, `freshness_row`, `promotion_candidates` (passes `i64::MAX`)
@@ -298,7 +299,7 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   `promotion_targets`, descent in `update_on_demand_view`
 - Tests: `rust/analytics/tests/{partition_ladder_tests,on_demand_jit_tests,jit_promotion_tests,view_ddl_parse_tests,view_definition_validation_tests,jit_bucket_coverage_tests,jit_freshness_tests}.rs`
   (`jit_bucket_coverage_tests`, `jit_freshness_tests`, `on_demand_jit_tests` and
-  `jit_promotion_tests` build `PartitionFreshnessRow` literals that need `file_size` and `file_path`)
+  `jit_promotion_tests` build `PartitionFreshnessRow` literals that need `file_size`)
 - `mkdocs/docs/admin/materialized-views.md`, `mkdocs/docs/architecture/index.md`, `CHANGELOG.md`
 
 ## Trade-offs
@@ -337,6 +338,7 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   Units are planned, probed and written independently, which keeps that option open.
 - No partition is ever built from more source data than the cap (user call). A stale unit over
   the cap is rebuilt as leaves that replace its rows in one transaction, however coarse the earlier rows were.
+- The descent commit retires by containment over the unit range in the same transaction as the leaf inserts.
 - The one exception is the 1-minute floor: no known source is too dense to process a minute at
   once, so a 1-minute bucket over the cap is written, logged as a warning and counted as
   `over_cap` (user call). There are no sub-minute rungs.
@@ -366,7 +368,7 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - `CHANGELOG.md`: edit the unreleased #1496 bullet: the ladder becomes "minute, 5, 15 and 30
   minutes, hour, 6 hours, day" and "roughly 24 to 288 partitions" becomes "roughly 24 to 144
   partitions". A new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
-  clause listing only the new `PartitionFreshnessRow.file_size` and `file_path` fields, the new
+  clause listing only the new `PartitionFreshnessRow.file_size` field, the new
   `max_jit_src_bytes` parameter of `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
   field. Edit the unreleased #1778 bullet's `validate_view_definition` wording in place to describe
   the new return value (on-demand views plus the extract-only `Vec<ViewMetadata>`), as for the
@@ -397,7 +399,7 @@ helpers:
   - `promotion_targets`: a covered unit at the query rung holding finer leaf rows splits within
     the cap; open-edge finer buckets don't qualify.
   - `plan_stale_unit`: within the cap → write whole; over the cap with no rows → leaves; over
-    the cap around an existing coarse row (e.g. a merged day) → replace that row with leaves
+    the cap around an existing coarse row (e.g. a merged day) → replace the unit range with leaves
     within the cap; grown and open units follow the same rule.
 - `jit_promotion_tests.rs`: `is_promotable` (now `pub`) rejects inputs whose `file_size` sum exceeds
   `max_bytes`, and accepts them at the cap exactly.
@@ -419,22 +421,23 @@ The async driver wiring in `update_on_demand_view` needs a live DB and object st
    `micromegas-query "SELECT begin_insert_time, end_insert_time, file_size FROM list_partitions() WHERE view_set_name = 'm_cap' ORDER BY begin_insert_time" --all`.
    Expected: closed partitions are narrower than the 15-minute query rung wherever a 15-minute
    bucket's source data is over 1 MB.
-4. Check the replace path against the 1 MB view while the generator runs. Query a short fixed
-   window (`--begin`/`--end` kept identical across queries) so open buckets are written as rows,
-   and record those rows from `list_partitions()`. Let the buckets close and go stale, then
-   re-query the same window. Expected: the earlier rows (already 1 minute wide, since open
-   buckets are planned down to the finest rung) are replaced by new rows (new `file_path`s) over
-   the same 1-minute ranges, committed in one transaction by the descent path, with each
-   1-minute leaf over 1 MB counted as `on_demand_jit{outcome="over_cap"}`;
-   `SELECT count(*) FROM m_cap` equals `SELECT count(*) FROM measures` over the same window; a
-   self-join on `list_partitions()` for `m_cap` shows no two partitions overlapping.
-5. Before dropping, run `micromegas-query "SELECT count(*) FROM m_cap" --begin 1d` against the
+4. Before dropping, run `micromegas-query "SELECT count(*) FROM m_cap" --begin 1d` against the
    1 MB view and check in `list_partitions()` that no merged 1-hour partition exceeds 1 MB, except
    unsplittable single rows. Then run `DROP MATERIALIZED VIEW m_cap` (which retires its
    partitions), recreate the view with `max_jit_src_data = '1 GB'`, and re-run step 3. Expected:
    closed partitions at the 15-minute rung. A second query over `--begin 1d` (a 1-hour rung)
-   merges closed rows into 1-hour partitions whose `file_size` stays under the cap. Repeat the
-   `count(*)` equality check from step 4 after the 1-day query to cover promotion.
+   merges closed rows into 1-hour partitions whose `file_size` stays under the cap. Check that
+   `SELECT count(*) FROM m_cap` equals `SELECT count(*) FROM measures` over the same range, to
+   cover promotion.
+5. Check the replace path, now that 15-minute rows exist. Run `CREATE OR REPLACE MATERIALIZED VIEW m_cap`
+   with the same options as the 1 GB recreate, except the extract is
+   `SELECT *, 1 AS v FROM measures WHERE insert_time >= '{begin}' AND insert_time < '{end}'` and
+   `max_jit_src_data = '1 KB'`. The changed extract schema changes `file_schema_hash`, so the
+   existing rows are judged stale. Re-run `micromegas-query "SELECT count(*) FROM m_cap" --begin 6h`.
+   Expected: each stale 15-minute row is replaced in one commit by finer rows with new
+   `file_path`s, each 1-minute leaf counted as `on_demand_jit{outcome="over_cap"}`;
+   `SELECT count(*) FROM m_cap` equals `SELECT count(*) FROM measures` over the same range; a
+   self-join on `list_partitions()` for `m_cap` shows no two partitions overlapping.
 
 ## Follow-ups
 
