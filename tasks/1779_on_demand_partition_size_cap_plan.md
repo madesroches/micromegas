@@ -122,46 +122,64 @@ count as 0, which keeps today's behavior for them.
 
 After `probe_unit` returns `Stale` for any unit (planned, grown or open):
 
-1. If `source_bytes(unit.range) <= cap`, write the unit as today.
-2. Otherwise the unit is never written whole. If it holds existing rows (they are all stale, since
-   the unit is), retire them first, in their own transaction, with a new
-   `retire_exact_partitions(transaction, view_meta, rows)` in `write_partition.rs`. It retires
-   exactly the fetched rows, by identity: `file_path` when it is set, otherwise the exact
-   `(begin_insert_time, end_insert_time, file_schema_hash)` of a row with no file. Like
-   `retire_partitions`, it schedules their files for cleanup. A range retire
-   (`RetireMatch::Containment` over the unit range) is not safe here, because it is a separate
-   transaction from the leaf writes. Suppose readers A and D both fetched the same stale row. D
-   retires it, writes its leaves and starts its scan (`materialized_view.rs:154` fetches partitions
-   after `jit_update`). A range retire from A would then remove D's fresh leaves, and D's query
-   would silently miss that data. With identity retire, A's retire finds nothing to remove. A's
-   leaf writes then either replace D's identical leaves atomically (their containment retire runs
-   in the insert transaction) or conflict and go through `resolve_conflict`. A pathless row matched
-   by range holds no data, so retiring a concurrent one loses nothing. Until the leaves land, the
-   range simply has no rows. Every reader brings its own range up to date before it scans, so a
-   reader that overlaps the range rebuilds it rather than reading the gap. A crash in between
-   leaves missing buckets that the next query plans and builds.
-3. Plan the leaves with a new pure `plan_by_source_bytes(range, bytes_fn, cap) ->
-   Vec<PlannedBucket>` in `partition_ladder.rs`. It tiles the range with the coarsest aligned
-   ladder buckets that fit it, then recurses like `plan_bucket`: a bucket at or under the cap is
-   emitted at its rung, and a bucket over the cap splits into finer children, down to `LADDER[0]` (1 minute). A part of
-   the range narrower than `LADDER[0]` at the unit's edges (a grown unit can end off the minute grid,
-   e.g. around 1-second daemon partitions) is emitted as one leaf over its exact sub-range with
-   `rung = LADDER[0]`, counted as `over_cap` only when its source bytes exceed the cap, like the
-   1-minute floor. A
-   1-minute bucket is emitted even over the cap, logged as a warning and counted as `on_demand_jit{outcome="over_cap"}` in addition to its write outcome
-   (`written` / `conflict_dropped`). Picking leaves from source bytes alone means a dense first
-   query doesn't probe every intermediate rung.
-4. Write each leaf with the same conflict handling (`resolve_conflict`). Each leaf builds its own
-   `make_batch_partition_spec` (one count query plus one extract per leaf), and its `Unit` carries
-   `planned_rung = Some(leaf rung)`. After the retire there are no rows left to grow around, so
-   leaves are written as planned and don't descend again. `resolve_conflict` re-settles a grown
-   unit around concurrent rows; it sends the recomputed unit back through `plan_stale_unit` (write
-   whole only within the cap, otherwise retire and write leaves) instead of writing it whole. Any conflict while writing leaves inside `resolve_conflict` is an
-   error (no recursion, as today for a second conflict); leaves already written stay written.
+1. If `source_bytes(unit.range) <= cap`, write the unit as today. A single `spec.write` retires
+   and inserts in one transaction.
+2. Otherwise the unit is never written whole. Plan the leaves with a new pure
+   `plan_by_source_bytes(range, bytes_fn, cap) -> Vec<PlannedBucket>` in `partition_ladder.rs`. It
+   tiles the range with the coarsest aligned ladder buckets that fit it, then recurses like
+   `plan_bucket`: a bucket at or under the cap is emitted at its rung, and a bucket over the cap
+   splits into finer children, down to `LADDER[0]` (1 minute). A part of the range narrower than
+   `LADDER[0]` at the unit's edges (a grown unit can end off the minute grid, e.g. around 1-second
+   daemon partitions) is emitted as one leaf over its exact sub-range with `rung = LADDER[0]`,
+   counted as `over_cap` only when its source bytes exceed the cap, like the 1-minute floor. A
+   1-minute bucket is emitted even over the cap, logged as a warning and counted as
+   `on_demand_jit{outcome="over_cap"}` in addition to its write outcome (`written` /
+   `conflict_dropped`). Picking leaves from source bytes alone means a dense first query doesn't
+   probe every intermediate rung.
+3. Write every leaf's file without registering it. Each leaf builds its own
+   `make_batch_partition_spec` (one count query plus one extract per leaf) and calls a new
+   `PartitionSpec::write_file`, which returns the unregistered `Partition`. Leaves are extracted
+   one at a time, so only one leaf's batches are in flight. Only the file metadata is kept.
+4. Commit the descent in one transaction with a new `insert_partitions_replacing(lake, view_meta,
+   retired: &[PartitionFreshnessRow], partitions: &[Partition], logger)` in `write_partition.rs`.
+   It takes the advisory lock keyed on the unit range, retires the unit's rows by identity
+   (`file_path` when set, otherwise the exact `(begin_insert_time, end_insert_time,
+   file_schema_hash)` of a row with no file), schedules their files for cleanup, then, for each
+   leaf, runs the usual `RetireMatch::Containment` retire over the leaf range and inserts it.
+   Readers therefore see either the unit's old rows or all of its leaves, never a gap. This matters
+   because readers with different ranges don't share units. Say reader D's one-hour unit is
+   covered, `jit_update` has returned, and D is about to list partitions
+   (`materialized_view.rs:154`). Meanwhile reader A's one-day unit around the same rows is stale
+   and over the cap. If A retired the rows in a transaction of its own and then wrote leaves one by
+   one, D would scan a hole and silently miss data. A crash between those transactions would leave
+   the same hole.
+   - The identity retire removes only rows this reader fetched. A row already replaced by a
+     concurrent writer is simply not found, and that writer's rows are then either contained in a
+     leaf and replaced atomically by its containment retire, or they straddle a leaf and the insert
+     fails on `lakehouse_partitions_no_overlap`. A pathless row holds no data, so matching one that
+     a concurrent writer just inserted loses nothing.
+   - On `PartitionOverlapConflict` the whole transaction rolls back, every leaf file goes through
+     `delete_if_orphan`, and the unit goes through `resolve_conflict`. `resolve_conflict`
+     re-settles the unit around the concurrent rows and sends the recomputed unit back through
+     `plan_stale_unit` (write whole only within the cap, otherwise leaves committed as one batch).
+     A second conflict is an error, as today, and leaves nothing committed.
+   - Leaves get no `Unit` of their own and are not probed or descended again: each leaf's
+     `source_data_hash` comes from its own spec's count query.
+   - A crash after some leaf files are written but before the commit leaks those files, as a crash
+     between file write and insert does today. The window is longer, but no row references them, so
+     no reader sees them.
 
-The decision in steps 1-3 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
-`on_demand_jit.rs` returning either "write whole" or "retire these rows, then write these leaves",
-so it is unit-tested without a DB; `update_on_demand_view` only executes it.
+The decision in steps 1-2 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
+`on_demand_jit.rs` returning either "write whole" or "replace these rows with these leaves", so it
+is unit-tested without a DB; `update_on_demand_view` only executes it.
+
+The write seam: `write_partition_from_rows` (`write_partition.rs:950`) is split into a new
+`write_partition_file` (writes the parquet file and returns the unregistered `Partition`) followed
+by the existing `insert_partition`, so its other callers (`merge.rs`, `thread_spans_view.rs`,
+`net_spans_view.rs`) are unchanged. `PartitionSpec` gains a required
+`write_file(&self, lake, logger) -> Result<Partition>`. `SqlPartitionSpec` implements it over
+`write_partition_file`, and `BlockPartitionSpec` and `MetadataPartitionSpec` implement it the same
+way, so the trait stays uniform.
 
 Descent stays inside the unit, so the snapshot taken over the unit hull already covers every leaf.
 Neither the snapshot range nor the order of `update_on_demand_view` changes.
@@ -169,7 +187,7 @@ Neither the snapshot range nor the order of `update_on_demand_view` changes.
 ### 6. Promotion within the cap
 
 - `PartitionFreshnessRow` gains `file_size: i64` and `file_path: Option<String>` (the latter for
-  the identity retire in section 5). `fetch_freshness_candidates` selects both and
+  the identity retire of section 5). `fetch_freshness_candidates` selects both and
   `freshness_row` copies both.
 - A merged row must stay rebuildable within the cap, so a promotion target also requires
   `source_bytes(target range) <= cap`, checked in `split_promotion` from the source snapshot
@@ -230,8 +248,9 @@ peak.
    `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and discards the result, so
    it needs no change beyond compiling.
 4. **Freshness row**: add `file_size` and `file_path` to `PartitionFreshnessRow`,
-   `fetch_freshness_candidates` and `freshness_row`. Add `retire_exact_partitions` to
-   `write_partition.rs`. Fix the constructors the compiler flags, mostly in tests (including the literals
+   `fetch_freshness_candidates` and `freshness_row`. Add `write_partition_file` and
+   `insert_partitions_replacing` to `write_partition.rs`, and `PartitionSpec::write_file` with its
+   three implementations. Fix the constructors the compiler flags, mostly in tests (including the literals
 in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_tests.rs:59` and
 `jit_promotion_tests.rs:37`, `:139`).
 5. **Ladder planner**: add `plan_by_source_bytes` to `partition_ladder.rs`.
@@ -241,7 +260,7 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
    `is_promotable` doc comment (`jit_promotion.rs:33`, "within the object cap").
 7. **On-demand driver**: in `on_demand_jit.rs`, add `source_bytes`, `split_promotion` and
    `plan_stale_unit`, apply `split_promotion` in `promotion_targets`, execute `plan_stale_unit`
-   (retire, then write leaves) in the unit loop of `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`. Route `resolve_conflict` through `plan_stale_unit`. Add the extract-only `&[ViewMetadata]` and the
+   (write whole, or write leaf files and commit them with the retire in one transaction) in the unit loop of `update_on_demand_view`, the `over_cap` outcome, and pass the cap to `promote_closed_buckets`. Route `resolve_conflict` through `plan_stale_unit`. Add the extract-only `&[ViewMetadata]` and the
    `max_jit_src_bytes` cap as parameters of `update_on_demand_view` and `resolve_conflict`, and pass them from
    `SqlBatchView::jit_update`.
    Update the module doc (lines 1-6).
@@ -261,7 +280,10 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - `ViewOptions` literals: `log_stats_view.rs`, `view_ddl.rs`,
   `rust/analytics/tests/{view_registry_tests,on_demand_jit_tests,view_ddl_parse_tests,view_definition_validation_tests}.rs`
 - `rust/analytics/src/lakehouse/view_registry.rs`: the `with_on_demand_sources` call
-- `rust/analytics/src/lakehouse/write_partition.rs`: `retire_exact_partitions`
+- `rust/analytics/src/lakehouse/write_partition.rs`: `write_partition_file` (split out of
+  `write_partition_from_rows`), `insert_partitions_replacing`
+- `rust/analytics/src/lakehouse/view.rs`: `PartitionSpec::write_file`; implementations in
+  `sql_partition_spec.rs`, `block_partition_spec.rs`, `metadata_partition_spec.rs`
 - `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size` / `file_path`,
   `fetch_freshness_candidates`, the `promote_closed_buckets` call
 - `rust/analytics/src/lakehouse/jit_promotion.rs`: byte cap in `is_promotable` / `promote_one` /
@@ -309,7 +331,7 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - Distributing partition creation to cut the latency of the first dense query is out of scope.
   Units are planned, probed and written independently, which keeps that option open.
 - No partition is ever built from more source data than the cap (user call). A stale unit over
-  the cap has its rows retired and is rebuilt as leaves, however coarse the earlier rows were.
+  the cap is rebuilt as leaves that replace its rows in one transaction, however coarse the earlier rows were.
 - The one exception is the 1-minute floor: no known source is too dense to process a minute at
   once, so a 1-minute bucket over the cap is written, logged as a warning and counted as
   `over_cap` (user call). There are no sub-minute rungs.
@@ -338,8 +360,9 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   minutes, hour, 6 hours, day" and "roughly 24 to 288 partitions" becomes "roughly 24 to 144
   partitions". A new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
   clause listing the `validate_view_definition` return type, the new `PartitionFreshnessRow.file_size` and `file_path` fields, and the new `max_bytes`
-  argument of `is_promotable` / `promote_one` / `promote_closed_buckets`, the new
-  `max_jit_src_bytes` parameter of `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
+  argument of `is_promotable` / `promote_one` / `promote_closed_buckets`, the new required
+  `PartitionSpec::write_file` trait method, the new `max_jit_src_bytes` parameter of
+  `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
   field.
 
 ## Testing Strategy
@@ -365,7 +388,7 @@ helpers:
   - `promotion_targets`: a covered unit at the query rung holding finer leaf rows splits within
     the cap; open-edge finer buckets don't qualify.
   - `plan_stale_unit`: within the cap → write whole; over the cap with no rows → leaves; over
-    the cap around an existing coarse row (e.g. a merged day) → retire that row, then leaves
+    the cap around an existing coarse row (e.g. a merged day) → replace that row with leaves
     within the cap; grown and open units follow the same rule.
 - `jit_promotion_tests.rs`: `is_promotable` (now `pub`) rejects inputs whose `file_size` sum exceeds
   `max_bytes`, and accepts them at the cap exactly.
