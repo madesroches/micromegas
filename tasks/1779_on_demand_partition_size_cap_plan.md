@@ -422,7 +422,10 @@ The async driver wiring in `update_on_demand_view` needs a live DB and object st
 4. Check the replace path against the 1 MB view while the generator runs. Query a short fixed
    window (`--begin`/`--end` kept identical across queries) so open buckets are written as rows,
    and record those rows from `list_partitions()`. Let the buckets close and go stale, then
-   re-query the same window. Expected: the earlier rows are replaced by finer leaves;
+   re-query the same window. Expected: the earlier rows (already 1 minute wide, since open
+   buckets are planned down to the finest rung) are replaced by new rows (new `file_path`s) over
+   the same 1-minute ranges, committed in one transaction by the descent path, with each
+   1-minute leaf over 1 MB counted as `on_demand_jit{outcome="over_cap"}`;
    `SELECT count(*) FROM m_cap` equals `SELECT count(*) FROM measures` over the same window; a
    self-join on `list_partitions()` for `m_cap` shows no two partitions overlapping.
 5. Before dropping, run `micromegas-query "SELECT count(*) FROM m_cap" --begin 1d` against the
