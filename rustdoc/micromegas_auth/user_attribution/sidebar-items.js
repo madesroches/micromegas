@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["is_admin","validate_and_resolve_user_attribution_grpc"],"struct":["UserAttribution"]};

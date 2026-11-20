@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["is_promotable","promote_closed_buckets","promotion_candidates"],"struct":["PromotionTarget"]};

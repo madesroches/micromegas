@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["SettingsError"],"fn":["build_entries","settings_router"],"struct":["SettingEntry","SettingsState","StoredSetting"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ADMISSION_BUDGET_ENV","ADMISSION_MAX_PER_IDENTITY_ENV","ADMISSION_MIN_COST_ENV","ADMISSION_OPAQUE_LEAF_COST_ENV"],"fn":["admission_scheduler_from_env","gb_to_bytes","opaque_leaf_cost_from_env","parse_gb_env"],"struct":["AdmissionConfig","AdmissionPermit","AdmissionScheduler"]};

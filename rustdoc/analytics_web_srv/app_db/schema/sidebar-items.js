@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["add_screens_folder_path","add_screens_managed_by","create_data_sources_table","create_folders_table","create_tables"]};

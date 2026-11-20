@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CostPrecision"],"fn":["estimate_scan_cost"],"struct":["ScanCostEstimate"]};

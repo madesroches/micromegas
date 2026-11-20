@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ViewDdl"],"fn":["parse_view_ddl"]};

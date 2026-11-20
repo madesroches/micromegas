@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_string_accessor","string_column_by_name"],"trait":["StringColumnAccessor"]};
