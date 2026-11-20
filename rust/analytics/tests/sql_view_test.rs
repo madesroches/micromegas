@@ -12,6 +12,7 @@ use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view::View;
+use micromegas_analytics::lakehouse::view_definition::DEFAULT_MAX_JIT_SRC_DATA;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
 use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
 use micromegas_analytics::lakehouse::{sql_batch_view::SqlBatchView, view_factory::ViewFactory};
@@ -95,6 +96,7 @@ async fn make_log_entries_levels_per_process_minute_view(
         Some(4000),
         TimeDelta::days(1),
         TimeDelta::days(1),
+        DEFAULT_MAX_JIT_SRC_DATA,
     )
     .await
 }

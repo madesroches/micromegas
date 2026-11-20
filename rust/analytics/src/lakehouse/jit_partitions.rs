@@ -1067,14 +1067,15 @@ pub async fn generate_process_jit_partitions(
 }
 
 /// One `lakehouse_partitions` candidate row, as fetched by `fetch_freshness_candidates`:
-/// `(begin_insert_time, end_insert_time, file_schema_hash, source_data_hash)`. Fields are `pub` so
-/// `analytics/tests/` can build rows directly, without a live database.
+/// `(begin_insert_time, end_insert_time, file_schema_hash, source_data_hash, file_size)`. Fields
+/// are `pub` so `analytics/tests/` can build rows directly, without a live database.
 #[derive(Debug, Clone)]
 pub struct PartitionFreshnessRow {
     pub begin_insert_time: DateTime<Utc>,
     pub end_insert_time: DateTime<Utc>,
     pub file_schema_hash: Vec<u8>,
     pub source_data_hash: Vec<u8>,
+    pub file_size: i64,
 }
 
 /// Fetches every `lakehouse_partitions` row for `view_meta` whose insert range *inclusively
@@ -1086,7 +1087,7 @@ pub async fn fetch_freshness_candidates(
     range: TimeRange,
 ) -> Result<Vec<PartitionFreshnessRow>> {
     let rows = sqlx::query(
-        "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash
+        "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash, file_size
          FROM lakehouse_partitions
          WHERE view_set_name = $1
          AND view_instance_id = $2
@@ -1108,6 +1109,7 @@ pub async fn fetch_freshness_candidates(
                 end_insert_time: r.try_get("end_insert_time")?,
                 file_schema_hash: r.try_get("file_schema_hash")?,
                 source_data_hash: r.try_get("source_data_hash")?,
+                file_size: r.try_get("file_size")?,
             })
         })
         .collect()
@@ -1544,6 +1546,7 @@ pub async fn update_insert_time_jit_view(
         view,
         targets,
         config.max_nb_objects,
+        i64::MAX,
         RangeConvention::BlockHull,
     )
     .await;

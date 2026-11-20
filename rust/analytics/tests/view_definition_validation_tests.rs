@@ -9,9 +9,10 @@ use micromegas_analytics::lakehouse::log_stats_view::log_stats_view_definition;
 use micromegas_analytics::lakehouse::log_view::LogViewMaker;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
-use micromegas_analytics::lakehouse::view::View;
+use micromegas_analytics::lakehouse::view::{View, ViewMetadata};
 use micromegas_analytics::lakehouse::view_definition::{
-    ViewDefinition, ViewOptions, build_sql_batch_view, validate_view_definition,
+    DEFAULT_MAX_JIT_SRC_DATA, ViewDefinition, ViewOptions, build_sql_batch_view, parse_byte_size,
+    validate_view_definition,
 };
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, ViewMaker};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -54,6 +55,7 @@ fn base_options() -> ViewOptions {
         merge_partition_delta: "1 day".to_string(),
         merge_sort_order: None,
         description: None,
+        max_jit_src_data: None,
     }
 }
 
@@ -93,7 +95,7 @@ async fn try_validate_sources(
     lakehouse: &LakehouseContext,
     factory: Arc<ViewFactory>,
     definition: &ViewDefinition,
-) -> anyhow::Result<Vec<Arc<dyn View>>> {
+) -> anyhow::Result<(Vec<Arc<dyn View>>, Vec<ViewMetadata>)> {
     let view = build_sql_batch_view(
         definition,
         lakehouse.runtime().clone(),
@@ -612,7 +614,7 @@ async fn daemon_view_reading_an_on_demand_view_is_rejected() {
 async fn on_demand_view_reading_an_on_demand_view_returns_it_as_a_source() {
     let lakehouse = make_offline_lakehouse_context().await;
     let factory = factory_with_on_demand_view(&lakehouse).await;
-    let sources = try_validate_sources(&lakehouse, factory, &reader_of_on_demand_view(None))
+    let (sources, _) = try_validate_sources(&lakehouse, factory, &reader_of_on_demand_view(None))
         .await
         .expect("an on-demand view may read an on-demand one");
     let names: Vec<String> = sources
@@ -633,8 +635,57 @@ async fn view_reading_only_daemon_views_has_no_on_demand_sources() {
         ON_DEMAND_MERGE,
         2500,
     );
-    let sources = try_validate_sources(&lakehouse, factory, &d)
+    let (sources, _) = try_validate_sources(&lakehouse, factory, &d)
         .await
         .expect("a daemon view reading daemon views is accepted");
     assert!(sources.is_empty());
+}
+
+#[tokio::test]
+async fn extract_sources_hold_the_extract_scans_only() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let factory = Arc::new(make_base_factory(&lakehouse));
+    // The extract reads `log_entries`, a daemon-maintained view; the count query reads `blocks`,
+    // which the extract never touches.
+    let d = def(
+        "my_view",
+        ON_DEMAND_EXTRACT,
+        VALID_COUNT_SRC,
+        ON_DEMAND_MERGE,
+        2500,
+    );
+    let (_, extract_sources) = try_validate_sources(&lakehouse, factory, &d)
+        .await
+        .expect("a daemon view reading daemon views is accepted");
+    let names: Vec<String> = extract_sources
+        .iter()
+        .map(|m| m.view_set_name.to_string())
+        .collect();
+    assert_eq!(names, vec!["log_entries".to_string()]);
+}
+
+#[test]
+fn parse_byte_size_units_and_case() {
+    assert_eq!(parse_byte_size("5 B").unwrap(), 5);
+    assert_eq!(parse_byte_size("2 KB").unwrap(), 2 * 1024);
+    assert_eq!(parse_byte_size("3 mb").unwrap(), 3 * 1024 * 1024);
+    assert_eq!(parse_byte_size(" 1 Gb ").unwrap(), 1024 * 1024 * 1024);
+    assert_eq!(DEFAULT_MAX_JIT_SRC_DATA, parse_byte_size("1 GB").unwrap());
+}
+
+#[test]
+fn parse_byte_size_rejects_bad_input() {
+    for bad in [
+        "",
+        "1",
+        "MB",
+        "0 MB",
+        "-5 MB",
+        "1.5 GB",
+        "1 TB",
+        "1 megabyte",
+        "99999999999 GB",
+    ] {
+        assert!(parse_byte_size(bad).is_err(), "{bad:?} should be rejected");
+    }
 }

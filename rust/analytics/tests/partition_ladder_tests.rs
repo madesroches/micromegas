@@ -2,7 +2,8 @@
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use micromegas_analytics::lakehouse::partition_ladder::{
-    BucketCount, LADDER, PlannedBucket, finer_rung, plan_buckets, plan_dense_buckets, select_rung,
+    BucketCount, LADDER, PlannedBucket, finer_rung, plan_buckets, plan_by_source_bytes,
+    plan_dense_buckets, select_rung,
 };
 use micromegas_analytics::time::TimeRange;
 
@@ -19,11 +20,13 @@ fn range_of(width: TimeDelta) -> TimeRange {
     TimeRange::new(t0, t0 + width)
 }
 
-const MINUTE: TimeDelta = LADDER[0];
-const FIVE_MINUTES: TimeDelta = LADDER[1];
-const HOUR: TimeDelta = LADDER[2];
-const SIX_HOURS: TimeDelta = LADDER[3];
-const DAY: TimeDelta = LADDER[4];
+const MINUTE: TimeDelta = TimeDelta::seconds(60);
+const FIVE_MINUTES: TimeDelta = TimeDelta::seconds(5 * 60);
+const FIFTEEN_MINUTES: TimeDelta = TimeDelta::seconds(15 * 60);
+const THIRTY_MINUTES: TimeDelta = TimeDelta::seconds(30 * 60);
+const HOUR: TimeDelta = TimeDelta::seconds(60 * 60);
+const SIX_HOURS: TimeDelta = TimeDelta::seconds(6 * 60 * 60);
+const DAY: TimeDelta = TimeDelta::seconds(24 * 60 * 60);
 
 #[test]
 fn select_rung_at_each_threshold() {
@@ -33,8 +36,10 @@ fn select_rung_at_each_threshold() {
         (TimeDelta::minutes(15), MINUTE),
         (TimeDelta::hours(1), MINUTE),
         (TimeDelta::hours(2), FIVE_MINUTES),
-        (TimeDelta::hours(6), FIVE_MINUTES),
-        (TimeDelta::hours(23), FIVE_MINUTES),
+        (TimeDelta::hours(6), FIFTEEN_MINUTES),
+        (TimeDelta::hours(11), FIFTEEN_MINUTES),
+        (TimeDelta::hours(12), THIRTY_MINUTES),
+        (TimeDelta::hours(23), THIRTY_MINUTES),
         (TimeDelta::hours(24), HOUR),
         (TimeDelta::days(2), HOUR),
         (TimeDelta::days(5), HOUR),
@@ -255,4 +260,127 @@ fn dense_plan_of_a_future_range_is_empty() {
     assert!(
         plan_dense_buckets(insert_range, MINUTE, MINUTE, now, TimeDelta::seconds(90)).is_empty()
     );
+}
+
+fn uniform_bytes(bytes_per_minute: i64) -> impl Fn(TimeRange) -> i64 {
+    move |r| (r.end - r.begin).num_seconds() * bytes_per_minute / 60
+}
+
+fn assert_tiles(range: TimeRange, leaves: &[PlannedBucket]) {
+    assert_eq!(leaves.first().unwrap().range.begin, range.begin);
+    assert_eq!(leaves.last().unwrap().range.end, range.end);
+    for pair in leaves.windows(2) {
+        assert_eq!(pair[0].range.end, pair[1].range.begin, "gap or overlap");
+    }
+}
+
+#[test]
+fn plan_by_source_bytes_sparse_stays_at_the_rung() {
+    let hour = range_of(HOUR);
+    let leaves = plan_by_source_bytes(hour, &uniform_bytes(1), 1000);
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0].range, hour);
+    assert_eq!(leaves[0].rung, HOUR);
+}
+
+#[test]
+fn plan_by_source_bytes_uniform_dense_uses_the_rung_that_fits() {
+    let hour = range_of(HOUR);
+    // 100 bytes a minute: 1500 per quarter hour fits, 3000 per half hour does not.
+    let leaves = plan_by_source_bytes(hour, &uniform_bytes(100), 1500);
+    assert_tiles(hour, &leaves);
+    assert_eq!(leaves.len(), 4);
+    assert!(leaves.iter().all(|l| l.rung == FIFTEEN_MINUTES));
+}
+
+#[test]
+fn plan_by_source_bytes_uneven_density_mixes_rungs() {
+    let hour = range_of(HOUR);
+    let split = base_time() + TimeDelta::minutes(30);
+    let bytes = move |r: TimeRange| {
+        let dense_end = r.end.min(split);
+        let dense = (dense_end - r.begin).max(TimeDelta::zero()).num_minutes() * 100;
+        let sparse = (r.end - r.begin.max(split))
+            .max(TimeDelta::zero())
+            .num_minutes();
+        dense + sparse
+    };
+    let leaves = plan_by_source_bytes(hour, &bytes, 1500);
+    assert_tiles(hour, &leaves);
+    let rungs: Vec<TimeDelta> = leaves.iter().map(|l| l.rung).collect();
+    assert_eq!(
+        rungs,
+        vec![FIFTEEN_MINUTES, FIFTEEN_MINUTES, THIRTY_MINUTES]
+    );
+    assert!(leaves.iter().all(|l| bytes(l.range) <= 1500));
+}
+
+#[test]
+fn plan_by_source_bytes_over_the_cap_stops_at_the_finest_rung() {
+    let hour = range_of(HOUR);
+    let leaves = plan_by_source_bytes(hour, &uniform_bytes(1000), 10);
+    assert_tiles(hour, &leaves);
+    assert_eq!(leaves.len(), 60);
+    assert!(leaves.iter().all(|l| l.rung == MINUTE));
+}
+
+#[test]
+fn plan_by_source_bytes_tiles_an_unaligned_range_with_the_coarsest_buckets() {
+    let begin = base_time() + TimeDelta::minutes(5);
+    let range = TimeRange::new(begin, base_time() + HOUR);
+    let leaves = plan_by_source_bytes(range, &uniform_bytes(1), 1_000_000);
+    assert_tiles(range, &leaves);
+    let rungs: Vec<TimeDelta> = leaves.iter().map(|l| l.rung).collect();
+    assert_eq!(
+        rungs,
+        vec![FIVE_MINUTES, FIVE_MINUTES, FIFTEEN_MINUTES, THIRTY_MINUTES]
+    );
+}
+
+#[test]
+fn plan_by_source_bytes_emits_sub_minute_edges_as_exact_leaves() {
+    let range = TimeRange::new(
+        base_time() + TimeDelta::seconds(20),
+        base_time() + TimeDelta::minutes(3) + TimeDelta::seconds(40),
+    );
+    // One byte a second: each 40-second edge holds 40 bytes.
+    let per_second = |r: TimeRange| (r.end - r.begin).num_seconds();
+    for cap in [30, 100] {
+        let leaves = plan_by_source_bytes(range, &per_second, cap);
+        assert_tiles(range, &leaves);
+        let head = &leaves[0];
+        assert_eq!(head.range.end - head.range.begin, TimeDelta::seconds(40));
+        assert_eq!(head.rung, MINUTE);
+        let tail = leaves.last().unwrap();
+        assert_eq!(tail.range.end - tail.range.begin, TimeDelta::seconds(40));
+        assert_eq!(tail.rung, MINUTE);
+        // Only an edge whose own bytes exceed the cap is over it.
+        assert_eq!(per_second(head.range) > cap, cap == 30);
+        for leaf in &leaves[1..leaves.len() - 1] {
+            assert_eq!(leaf.range.end - leaf.range.begin, MINUTE);
+        }
+    }
+}
+
+#[test]
+fn plan_by_source_bytes_within_one_minute_is_a_single_exact_leaf() {
+    let range = TimeRange::new(
+        base_time() + TimeDelta::seconds(10),
+        base_time() + TimeDelta::seconds(50),
+    );
+    let leaves = plan_by_source_bytes(range, &uniform_bytes(1), 1);
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0].range, range);
+    assert_eq!(leaves[0].rung, MINUTE);
+}
+
+#[test]
+fn plan_by_source_bytes_range_across_one_minute_boundary() {
+    let range = TimeRange::new(
+        base_time() + TimeDelta::seconds(30),
+        base_time() + TimeDelta::seconds(80),
+    );
+    let leaves = plan_by_source_bytes(range, &uniform_bytes(1), 1_000_000);
+    assert_tiles(range, &leaves);
+    assert_eq!(leaves.len(), 2);
 }

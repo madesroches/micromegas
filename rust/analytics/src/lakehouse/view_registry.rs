@@ -196,7 +196,7 @@ async fn fold_definition(
     )
     .await
     .map_err(|e| ("to build", e))?;
-    let on_demand_sources = validate_view_definition(
+    let (on_demand_sources, extract_sources) = validate_view_definition(
         def,
         &view,
         factory_so_far,
@@ -206,7 +206,7 @@ async fn fold_definition(
     )
     .await
     .map_err(|e| ("validation", e))?;
-    Ok(view.with_on_demand_sources(on_demand_sources))
+    Ok(view.with_on_demand_sources(on_demand_sources, extract_sources))
 }
 
 /// A shared `Arc<ViewFactory>` (base + N DDL-defined `SqlBatchView`s) rebuilt from

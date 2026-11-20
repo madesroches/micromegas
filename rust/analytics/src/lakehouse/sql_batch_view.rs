@@ -84,6 +84,11 @@ pub struct SqlBatchView {
     /// snapshots source partitions, because the extract and count sessions cannot refresh
     /// upstream themselves.
     on_demand_sources: Vec<Arc<dyn View>>,
+    /// Every view the extract query scans: the sources whose partition bytes a materialization
+    /// step reads.
+    extract_sources: Vec<ViewMetadata>,
+    /// Most source bytes one materialization step of an on-demand view may read.
+    max_jit_src_bytes: i64,
 }
 
 impl SqlBatchView {
@@ -101,6 +106,7 @@ impl SqlBatchView {
     /// * `view_factory` - all views accessible to the `count_src_query`
     /// * `session_configurator` - configurator for registering custom tables (e.g., JSON files)
     /// * `update_group` - tells the daemon which view should be materialized and in what order
+    /// * `max_jit_src_bytes` - on-demand views only: the most source bytes one materialization step may read
     pub async fn new(
         runtime: Arc<RuntimeEnv>,
         view_set_name: Arc<String>,
@@ -115,6 +121,7 @@ impl SqlBatchView {
         update_group: Option<i32>,
         max_partition_delta_from_source: TimeDelta,
         max_partition_delta_from_merge: TimeDelta,
+        max_jit_src_bytes: i64,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
         let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
@@ -163,6 +170,8 @@ impl SqlBatchView {
             sort_order: None,
             ordered_merger: None,
             on_demand_sources: vec![],
+            extract_sources: vec![],
+            max_jit_src_bytes,
         })
     }
 
@@ -172,9 +181,15 @@ impl SqlBatchView {
         self.update_group.is_none()
     }
 
-    /// Attaches the on-demand views this view reads (see `validate_view_definition`).
-    pub fn with_on_demand_sources(mut self, sources: Vec<Arc<dyn View>>) -> Self {
+    /// Attaches the on-demand views this view reads and the views its extract query scans (see
+    /// `validate_view_definition`).
+    pub fn with_on_demand_sources(
+        mut self,
+        sources: Vec<Arc<dyn View>>,
+        extract_sources: Vec<ViewMetadata>,
+    ) -> Self {
         self.on_demand_sources = sources;
+        self.extract_sources = extract_sources;
         self
     }
 
@@ -337,6 +352,8 @@ impl View for SqlBatchView {
             lakehouse,
             Arc::new(self.clone()),
             &self.on_demand_sources,
+            &self.extract_sources,
+            self.max_jit_src_bytes,
             query_range,
         )
         .await

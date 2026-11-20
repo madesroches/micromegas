@@ -1,6 +1,6 @@
 use super::{
     session_configurator::NoOpSessionConfigurator, sql_batch_view::SqlBatchView,
-    view_factory::ViewFactory,
+    view_definition::DEFAULT_MAX_JIT_SRC_DATA, view_factory::ViewFactory,
 };
 use anyhow::Result;
 use chrono::TimeDelta;
@@ -84,6 +84,7 @@ GROUP BY process_id
         Some(2000),
         TimeDelta::days(1), // from source
         TimeDelta::days(1), // when merging
+        DEFAULT_MAX_JIT_SRC_DATA,
     )
     .await
 }

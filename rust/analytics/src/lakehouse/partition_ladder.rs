@@ -1,4 +1,4 @@
-//! Aligned bucket ladder (minute, 5 min, hour, 6 h, day) used to size JIT partitions from the
+//! Aligned bucket ladder (minute, 5 min, 15 min, 30 min, hour, 6 h, day) used to size JIT partitions from the
 //! query range, and the planner that turns per-minute block counts into the buckets to
 //! materialize.
 //!
@@ -9,9 +9,11 @@ use crate::time::TimeRange;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 
 /// Bucket widths, finest first. Each rung divides the next one.
-pub const LADDER: [TimeDelta; 5] = [
+pub const LADDER: [TimeDelta; 7] = [
     TimeDelta::seconds(60),
     TimeDelta::seconds(5 * 60),
+    TimeDelta::seconds(15 * 60),
+    TimeDelta::seconds(30 * 60),
     TimeDelta::seconds(60 * 60),
     TimeDelta::seconds(6 * 60 * 60),
     TimeDelta::seconds(24 * 60 * 60),
@@ -188,6 +190,94 @@ pub fn plan_dense_buckets(
             &mut out,
         );
         begin += rung;
+    }
+    out
+}
+
+/// Source bytes of a bucket.
+pub type BytesFn<'a> = &'a (dyn Fn(TimeRange) -> i64 + Sync);
+
+fn is_aligned(instant: DateTime<Utc>, rung: TimeDelta) -> bool {
+    instant.timestamp_subsec_nanos() == 0 && instant.timestamp() % rung.num_seconds() == 0
+}
+
+fn plan_bucket_by_bytes(
+    bucket: TimeRange,
+    rung: TimeDelta,
+    bytes: BytesFn<'_>,
+    cap: i64,
+    out: &mut Vec<PlannedBucket>,
+) {
+    let finer = finer_rung(rung);
+    match finer {
+        Some(finer) if bytes(bucket) > cap => {
+            let mut begin = bucket.begin;
+            while begin < bucket.end {
+                plan_bucket_by_bytes(TimeRange::new(begin, begin + finer), finer, bytes, cap, out);
+                begin += finer;
+            }
+        }
+        _ => out.push(exact_leaf(bucket, rung)),
+    }
+}
+
+fn exact_leaf(range: TimeRange, rung: TimeDelta) -> PlannedBucket {
+    PlannedBucket {
+        range,
+        rung,
+        closed: false,
+        nb_blocks: 0,
+        nb_objects: 0,
+    }
+}
+
+/// Tiles `range` with buckets that each cover at most `cap` source bytes (as measured by
+/// `bytes`), except at the finest rung, where a bucket is emitted whatever its size. The
+/// result is ascending and has no gap.
+///
+/// The range is first cut into the coarsest aligned ladder buckets that fit it, then every bucket
+/// over the cap splits into its finer children, down to `LADDER[0]`. Source bytes alone decide, so
+/// a dense range does not probe each intermediate rung. A part of the range narrower than
+/// `LADDER[0]` at its edges (a unit grown around rows can end off the minute grid) is emitted as
+/// one leaf over its exact range, at `LADDER[0]`.
+///
+/// `closed`, `nb_blocks` and `nb_objects` of the result are placeholders for the caller to fill.
+pub fn plan_by_source_bytes(range: TimeRange, bytes: BytesFn<'_>, cap: i64) -> Vec<PlannedBucket> {
+    let finest = LADDER[0];
+    let mut out = vec![];
+    let first_grid = if is_aligned(range.begin, finest) {
+        range.begin
+    } else {
+        range.begin.duration_trunc(finest).unwrap_or(range.begin) + finest
+    };
+    let last_grid = range.end.duration_trunc(finest).unwrap_or(range.end);
+    if first_grid > last_grid {
+        // Not even one minute boundary inside the range.
+        out.push(exact_leaf(range, finest));
+        return out;
+    }
+    if range.begin < first_grid {
+        out.push(exact_leaf(TimeRange::new(range.begin, first_grid), finest));
+    }
+    let mut begin = first_grid;
+    while begin < last_grid {
+        let rung = LADDER
+            .iter()
+            .rev()
+            .find(|r| is_aligned(begin, **r) && begin + **r <= last_grid)
+            .copied()
+            .unwrap_or(finest);
+        plan_bucket_by_bytes(
+            TimeRange::new(begin, begin + rung),
+            rung,
+            bytes,
+            cap,
+            &mut out,
+        );
+        begin += rung;
+    }
+    if last_grid < range.end {
+        out.push(exact_leaf(TimeRange::new(last_grid, range.end), finest));
     }
     out
 }

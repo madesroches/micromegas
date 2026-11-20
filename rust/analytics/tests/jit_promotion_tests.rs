@@ -4,7 +4,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_analytics::lakehouse::jit_partitions::{
     Coverage, JitBucket, PartitionFreshnessRow, RangeConvention,
 };
-use micromegas_analytics::lakehouse::jit_promotion::promotion_candidates;
+use micromegas_analytics::lakehouse::jit_promotion::{is_promotable, promotion_candidates};
 use micromegas_analytics::lakehouse::partition_ladder::PlannedBucket;
 use micromegas_analytics::time::TimeRange;
 
@@ -39,6 +39,7 @@ fn minute_rows(nb: i32, count: i64, schema: &[u8]) -> Vec<PartitionFreshnessRow>
             end_insert_time: hour_start() + TimeDelta::minutes(i as i64) + TimeDelta::seconds(30),
             file_schema_hash: schema.to_vec(),
             source_data_hash: count.to_le_bytes().to_vec(),
+            file_size: 0,
         })
         .collect()
 }
@@ -141,6 +142,7 @@ fn aligned_convention_treats_a_row_ending_at_the_bucket_end_as_inside() {
         end_insert_time: end,
         file_schema_hash: SCHEMA.to_vec(),
         source_data_hash: 1_i64.to_le_bytes().to_vec(),
+        file_size: 0,
     };
     let whole = row(bucket.begin, bucket.end);
     assert!(RangeConvention::Aligned.row_inside(&whole, bucket));
@@ -156,4 +158,16 @@ fn aligned_convention_treats_a_row_ending_at_the_bucket_end_as_inside() {
     let straddling = row(bucket.end - FIVE_MINUTES, bucket.end + FIVE_MINUTES);
     assert!(RangeConvention::Aligned.row_intersects(&straddling, bucket));
     assert!(!RangeConvention::Aligned.row_inside(&straddling, bucket));
+}
+
+#[test]
+fn is_promotable_applies_the_byte_cap_to_the_summed_file_size() {
+    let mut rows = minute_rows(4, 10, &SCHEMA);
+    for r in &mut rows {
+        r.file_size = 250;
+    }
+    let refs: Vec<&PartitionFreshnessRow> = rows.iter().collect();
+    assert!(is_promotable(&refs, i64::MAX, 1000));
+    assert!(is_promotable(&refs, i64::MAX, i64::MAX));
+    assert!(!is_promotable(&refs, i64::MAX, 999));
 }

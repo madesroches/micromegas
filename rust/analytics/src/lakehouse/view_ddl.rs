@@ -10,7 +10,7 @@
 //! therefore hand-rolls the parse off a single `Parser::try_with_sql`.
 
 use super::view_definition::{
-    ViewDefinition, ViewOptions, check_view_set_name_charset, parse_time_delta,
+    ViewDefinition, ViewOptions, check_view_set_name_charset, parse_byte_size, parse_time_delta,
 };
 use anyhow::{Context, Result};
 use datafusion::sql::sqlparser::{
@@ -165,7 +165,8 @@ fn value_to_i32(expr: &SqlExpr) -> Result<i32> {
 /// is optional, and its absence makes the view on-demand. `time_column` is required unless
 /// both `min_time_column` and `max_time_column` are given individually; `source_partition_delta`
 /// defaults to `'1 day'`; `merge_partition_delta` defaults to `source_partition_delta`; both are
-/// rejected on an on-demand view, whose partition sizes follow the query range;
+/// rejected on an on-demand view, whose partition sizes follow the query range, bounded by
+/// `max_jit_src_data` (an on-demand-only, `'<n> <unit>'` byte size, default `'1 GB'`);
 /// `merge_sort_order` is an optional comma-separated column list; `description` is an optional,
 /// non-blank markdown usage guide. Anything else is a hard error.
 fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result<ViewDefinition> {
@@ -180,6 +181,7 @@ fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result
     let mut merge_partition_delta: Option<String> = None;
     let mut merge_sort_order: Option<Vec<String>> = None;
     let mut description: Option<String> = None;
+    let mut max_jit_src_data: Option<String> = None;
 
     for opt in options {
         let SqlOption::KeyValue { key, value } = opt else {
@@ -225,6 +227,11 @@ fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result
                 }
                 description = Some(s);
             }
+            "max_jit_src_data" => {
+                let s = value_to_string(&value)?;
+                parse_byte_size(&s).with_context(|| "max_jit_src_data")?;
+                max_jit_src_data = Some(s);
+            }
             other => anyhow::bail!("unknown view option '{other}'"),
         }
     }
@@ -241,10 +248,13 @@ fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result
             if value.is_some() {
                 anyhow::bail!(
                     "{option} only applies to daemon-updated views (set `update_group`), \
-                     on-demand partition sizes follow the query range"
+                     on-demand partition sizes follow the query range, bounded by \
+                     `max_jit_src_data`"
                 );
             }
         }
+    } else if max_jit_src_data.is_some() {
+        anyhow::bail!("max_jit_src_data only applies to on-demand views (no `update_group`)");
     }
 
     let (resolved_min, resolved_max) = match (time_column, min_time_column, max_time_column) {
@@ -275,6 +285,7 @@ fn view_definition_from_options(name: String, options: Vec<SqlOption>) -> Result
             merge_partition_delta,
             merge_sort_order,
             description,
+            max_jit_src_data,
         },
     })
 }
