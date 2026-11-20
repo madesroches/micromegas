@@ -9,7 +9,7 @@ buckets on the minute / 5 min / 1 h / 6 h / 1 day ladder. A 1-day query writes 1
 whatever the data volume. For a dense source, one bucket's extract can then read far more than can
 be processed in one step. This plan adds a mandatory, per-view, customizable byte cap,
 `max_jit_src_data` (default `'1 GB'`), on how much data a single materialization step may read.
-The invariant: no partition of an on-demand view ever covers more than the cap in source bytes.
+The invariant: no partition of an on-demand view ever covers more than the cap in source bytes, except a 1-minute (or sub-minute edge) bucket, which is written over the cap and counted as `over_cap`.
 An extract reads source partitions, so a stale bucket whose source bytes exceed the cap is written
 as finer ladder buckets, down to 1 minute. The shared ladder also gains 15-minute and 30-minute rungs, so that a bucket over the cap descends
 by 3× or 2× instead of jumping 12× from one hour to five minutes.
@@ -112,7 +112,7 @@ pub fn source_bytes(partitions: &[Partition], sources: &[ViewMetadata], range: T
 
 It sums `file_size` over the source partitions, each prorated by
 `|insert range ∩ range| / |insert range|`. A zero-width partition counts whole when its insert
-time is in `[begin, end)`. Partitions that don't match a source's full `ViewMetadata` (including `file_schema_hash`) are
+time is in `[begin, end)`. Partitions whose `view_set_name`, `view_instance_id` and `file_schema_hash` don't all equal a source's (compared field by field, as `ViewMetadata` has no `PartialEq`) are
 ignored, so old-schema partitions of a source view and partitions of other views don't count. Prorating assumes data is spread
 evenly in insert time. That is good enough for a cap: extracts filter sources by insert time, and
 the daemon's source partitions are insert-time aligned. Sources that aren't lakehouse partitions
@@ -169,7 +169,9 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
      between file write and insert does today. The window is longer, but no row references them, so
      no reader sees them. To let an admin find them, `write_partition_file` logs an `info!` with the
      view, the insert range and the file path once the file is closed. A path with that line and no
-     matching `[PARTITION_WRITE_COMMIT]` line is a leaked file. Nothing sweeps unreferenced objects,
+     matching `[PARTITION_WRITE_COMMIT]` line is a leaked file. After the commit,
+     `insert_partitions_replacing` logs `[PARTITION_WRITE_COMMIT]` with `file_path` for each leaf, as
+     `insert_partition_transaction` does. Nothing sweeps unreferenced objects,
      and none is added for this rare, harmless case.
 
 The decision in steps 1-2 is a pure `plan_stale_unit(unit, rows, bytes_fn, cap)` in
@@ -182,7 +184,9 @@ by the existing `insert_partition`, so its other callers (`merge.rs`, `thread_sp
 `net_spans_view.rs`) are unchanged. `PartitionSpec` gains a required
 `write_file(&self, lake, logger) -> Result<Partition>`. `SqlPartitionSpec` implements it over
 `write_partition_file`, and `BlockPartitionSpec` and `MetadataPartitionSpec` implement it the same
-way, so the trait stays uniform.
+way, so the trait stays uniform. `lake.warm_object(file_path, file_size)` stays after registration: in
+`write_partition_from_rows` after `insert_partition`, and in the descent path for each leaf after
+`insert_partitions_replacing` commits.
 
 Descent stays inside the unit, so the snapshot taken over the unit hull already covers every leaf.
 Neither the snapshot range nor the order of `update_on_demand_view` changes.
@@ -251,7 +255,8 @@ peak.
    `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and discards the result, so
    it needs no change beyond compiling.
 4. **Freshness row**: add `file_size` and `file_path` to `PartitionFreshnessRow`,
-   `fetch_freshness_candidates` and `freshness_row`. Add `write_partition_file` and
+   `fetch_freshness_candidates` and `freshness_row`, and update the `PartitionFreshnessRow` doc
+   comment's field list. Add `write_partition_file` and
    `insert_partitions_replacing` to `write_partition.rs`, and `PartitionSpec::write_file` with its
    three implementations. Fix the constructors the compiler flags, mostly in tests (including the literals
 in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_tests.rs:59` and
