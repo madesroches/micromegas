@@ -124,11 +124,22 @@ After `probe_unit` returns `Stale` for any unit (planned, grown or open):
 
 1. If `source_bytes(unit.range) <= cap`, write the unit as today.
 2. Otherwise the unit is never written whole. If it holds existing rows (they are all stale, since
-   the unit is), retire them first, in their own transaction, with `retire_partitions`
-   (`write_partition.rs:221`, `RetireMatch::Containment` over the unit range, which contains every
-   row the unit grew around). Until the leaves land, that range simply has no rows, which is no
-   worse than the stale rows it had; a crash in between leaves missing buckets that the next query
-   plans and builds.
+   the unit is), retire them first, in their own transaction, with a new
+   `retire_exact_partitions(transaction, view_meta, rows)` in `write_partition.rs`. It retires
+   exactly the fetched rows, by identity: `file_path` when it is set, otherwise the exact
+   `(begin_insert_time, end_insert_time, file_schema_hash)` of a row with no file. Like
+   `retire_partitions`, it schedules their files for cleanup. A range retire
+   (`RetireMatch::Containment` over the unit range) is not safe here, because it is a separate
+   transaction from the leaf writes. Suppose readers A and D both fetched the same stale row. D
+   retires it, writes its leaves and starts its scan (`materialized_view.rs:154` fetches partitions
+   after `jit_update`). A range retire from A would then remove D's fresh leaves, and D's query
+   would silently miss that data. With identity retire, A's retire finds nothing to remove. A's
+   leaf writes then either replace D's identical leaves atomically (their containment retire runs
+   in the insert transaction) or conflict and go through `resolve_conflict`. A pathless row matched
+   by range holds no data, so retiring a concurrent one loses nothing. Until the leaves land, the
+   range simply has no rows. Every reader brings its own range up to date before it scans, so a
+   reader that overlaps the range rebuilds it rather than reading the gap. A crash in between
+   leaves missing buckets that the next query plans and builds.
 3. Plan the leaves with a new pure `plan_by_source_bytes(range, bytes_fn, cap) ->
    Vec<PlannedBucket>` in `partition_ladder.rs`. It tiles the range with the coarsest aligned
    ladder buckets that fit it, then recurses like `plan_bucket`: a bucket at or under the cap is
@@ -157,8 +168,9 @@ Neither the snapshot range nor the order of `update_on_demand_view` changes.
 
 ### 6. Promotion within the cap
 
-- `PartitionFreshnessRow` gains `file_size: i64`. `fetch_freshness_candidates` selects it and
-  `freshness_row` copies it.
+- `PartitionFreshnessRow` gains `file_size: i64` and `file_path: Option<String>` (the latter for
+  the identity retire in section 5). `fetch_freshness_candidates` selects both and
+  `freshness_row` copies both.
 - A merged row must stay rebuildable within the cap, so a promotion target also requires
   `source_bytes(target range) <= cap`, checked in `split_promotion` from the source snapshot
   already loaded by `update_on_demand_view`.
@@ -217,8 +229,9 @@ peak.
    `view_registry.rs:209` and the `view_definition.rs:429` doc comment.
    `flight_sql_service_impl.rs:1168` calls `validate_view_definition` and discards the result, so
    it needs no change beyond compiling.
-4. **Freshness row**: add `file_size` to `PartitionFreshnessRow`, `fetch_freshness_candidates` and
-   `freshness_row`. Fix the constructors the compiler flags, mostly in tests (including the literals
+4. **Freshness row**: add `file_size` and `file_path` to `PartitionFreshnessRow`,
+   `fetch_freshness_candidates` and `freshness_row`. Add `retire_exact_partitions` to
+   `write_partition.rs`. Fix the constructors the compiler flags, mostly in tests (including the literals
 in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_tests.rs:59` and
 `jit_promotion_tests.rs:37`, `:139`).
 5. **Ladder planner**: add `plan_by_source_bytes` to `partition_ladder.rs`.
@@ -248,7 +261,8 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - `ViewOptions` literals: `log_stats_view.rs`, `view_ddl.rs`,
   `rust/analytics/tests/{view_registry_tests,on_demand_jit_tests,view_ddl_parse_tests,view_definition_validation_tests}.rs`
 - `rust/analytics/src/lakehouse/view_registry.rs`: the `with_on_demand_sources` call
-- `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size`,
+- `rust/analytics/src/lakehouse/write_partition.rs`: `retire_exact_partitions`
+- `rust/analytics/src/lakehouse/jit_partitions.rs`: `PartitionFreshnessRow.file_size` / `file_path`,
   `fetch_freshness_candidates`, the `promote_closed_buckets` call
 - `rust/analytics/src/lakehouse/jit_promotion.rs`: byte cap in `is_promotable` / `promote_one` /
   `promote_closed_buckets`, `freshness_row`, `promotion_candidates` (passes `i64::MAX`)
@@ -257,7 +271,7 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
   `promotion_targets`, descent in `update_on_demand_view`
 - Tests: `rust/analytics/tests/{partition_ladder_tests,on_demand_jit_tests,jit_promotion_tests,view_ddl_parse_tests,view_definition_validation_tests,jit_bucket_coverage_tests,jit_freshness_tests}.rs`
   (`jit_bucket_coverage_tests`, `jit_freshness_tests`, `on_demand_jit_tests` and
-  `jit_promotion_tests` build `PartitionFreshnessRow` literals that need `file_size`)
+  `jit_promotion_tests` build `PartitionFreshnessRow` literals that need `file_size` and `file_path`)
 - `mkdocs/docs/admin/materialized-views.md`, `mkdocs/docs/architecture/index.md`, `CHANGELOG.md`
 
 ## Trade-offs
@@ -273,7 +287,10 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - **Probe at the query's rung, then descend from source bytes**, instead of descending from
   source bytes before probing. Descending first would make every repeated query of covered dense
   history probe each fine bucket (1,440 probes for a minute-grained day). This way covered history
-  costs one probe per query-rung bucket, and only stale dense buckets pay for descent.
+  costs one probe per query-rung bucket, and only stale dense buckets pay for descent. The
+  flip side: a stale unit is rebuilt in full, even when only one of its leaves changed, because
+  the probe can't tell which one. Late blocks land at the current insert time, so closed units
+  mostly go stale on a schema change, which rewrites every leaf anyway.
 - **A width cap (`max_partition_delta`) or count-driven descent** (from the issue) were rejected.
   A width doesn't adapt to density that changes over time. Thresholds in the author's
   `count_src_query` units mean something different for every view. Bytes are uniform, and they
@@ -320,7 +337,7 @@ in `jit_bucket_coverage_tests.rs`, `jit_freshness_tests.rs`, `on_demand_jit_test
 - `CHANGELOG.md`: edit the unreleased #1496 bullet: the ladder becomes "minute, 5, 15 and 30
   minutes, hour, 6 hours, day" and "roughly 24 to 288 partitions" becomes "roughly 24 to 144
   partitions". A new Unreleased bullet for #1779. It ends with a **Minor breaking change:**
-  clause listing the `validate_view_definition` return type, the new `PartitionFreshnessRow.file_size` field, and the new `max_bytes`
+  clause listing the `validate_view_definition` return type, the new `PartitionFreshnessRow.file_size` and `file_path` fields, and the new `max_bytes`
   argument of `is_promotable` / `promote_one` / `promote_closed_buckets`, the new
   `max_jit_src_bytes` parameter of `SqlBatchView::new`, and the new `ViewOptions.max_jit_src_data`
   field.
