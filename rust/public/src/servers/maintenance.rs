@@ -83,24 +83,30 @@ where
             .into_iter();
         let mut guard = AbortOnDrop(Vec::new());
         let mut running = FuturesUnordered::new();
-        loop {
-            while running.len() < concurrency.get() {
-                let Some((i, fut)) = queue.next() else {
-                    break;
-                };
-                let handle = spawn_with_context(fut);
-                guard.0.push(handle.abort_handle());
-                running.push(handle.map(move |r| (i, r)));
-            }
-            match running.next().await {
-                Some((_, Ok(Ok(())))) => {}
-                Some((i, Ok(Err(e)))) => failures.push((i, e)),
-                Some((i, Err(e))) => {
-                    failures.push((i, anyhow!("update task failed: {e}")));
+        instrument_named!(
+            async {
+                loop {
+                    while running.len() < concurrency.get() {
+                        let Some((i, fut)) = queue.next() else {
+                            break;
+                        };
+                        let handle = spawn_with_context(fut);
+                        guard.0.push(handle.abort_handle());
+                        running.push(handle.map(move |r| (i, r)));
+                    }
+                    match running.next().await {
+                        Some((_, Ok(Ok(())))) => {}
+                        Some((i, Ok(Err(e)))) => failures.push((i, e)),
+                        Some((i, Err(e))) => {
+                            failures.push((i, anyhow!("update task failed: {e}")));
+                        }
+                        None => break,
+                    }
                 }
-                None => break,
-            }
-        }
+            },
+            "update_group"
+        )
+        .await;
         offset += group.len();
     }
     // Items complete in any order; sorting keeps the error text deterministic.

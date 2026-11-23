@@ -79,6 +79,25 @@ A pass is skipped when this exceeds 10 000 ms, so alert on it approaching that
 value. `every_second_pass_duration` (`ms`) is the wall time of one
 materialization pass, emitted whether it succeeded or failed.
 
+### Spans
+
+Materialization emits spans (async events) so the time of a slow pass can be
+attributed to one step. Spans on a view's work carry a `view` property with the
+view set name.
+
+| Area | Spans |
+|---|---|
+| SQL view extract | `begin_write`, `execute_extract_query`, `plan_sorted_extract`, `extract_next_batch`, `transform_batch`, `transformer_transform`, `get_time_bounds`, `extract_channel_send`, `extract_writer_join`, `count_query_plan`, `count_query_collect` |
+| Partition writer | `write_partition_from_rows`, `write_partition_file`, `write_rows_and_track_times`, `arrow_writer_write`, `arrow_writer_flush`, `arrow_writer_close`, `finalize_partition_write`, `delete_empty_file`, `insert_partition`, `insert_partitions_replacing`, `sql_transaction_begin`, `sql_transaction_commit`, `retire_partitions` |
+| Merge | `merge_plan`, `merge_next_batch`, `get_time_bounds`, `merge_channel_send`, `merge_writer_join` |
+| Source data | `fetch_partition_source_data` |
+| Daemon loop | `update_group`: one update group's views, from the first spawn until the group drains (the barrier) |
+
+`check_non_nullable_columns` is a thread span, since it is synchronous CPU work.
+CPU spent in DataFusion's own tasks and in parquet encoding is not traced
+separately; compare it with the `cgroup_cpu_usage_usec` metric (see
+[Memory Allocator Configuration](memory-allocator.md#cgroup-cpu-metrics)).
+
 Run a **single** `telemetry-maintenance-srv` instance per lake. The scheduled
 tasks are not partitioned across instances, so multiple daemons would
 redundantly materialize the same partitions. Materialization is idempotent, so

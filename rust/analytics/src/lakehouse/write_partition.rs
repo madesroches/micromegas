@@ -218,6 +218,7 @@ pub enum RetireMatch {
 /// would otherwise match it (see `RetireMatch::Overlap`'s docs for why this is identity-, not
 /// shape-, based). Only meaningful for `RetireMatch::Overlap` -- pass `&[]` for `Containment`.
 #[expect(clippy::too_many_arguments)]
+#[span_fn]
 pub async fn retire_partitions(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     view_set_name: &str,
@@ -464,6 +465,7 @@ pub(crate) async fn delete_if_orphan(lake: &DataLakeConnection, file_path: &str)
 /// `rust/analytics/tests/` (an external crate) can drive the SQL plumbing directly in a
 /// persistence round-trip test, mirroring `thread_spans_view::update_partition`'s reason for
 /// being `pub`.
+#[span_fn]
 pub async fn insert_partition(
     lake: &DataLakeConnection,
     partition: &Partition,
@@ -486,6 +488,7 @@ pub async fn insert_partition(
     result
 }
 
+#[span_fn]
 async fn insert_partition_transaction(
     lake: &DataLakeConnection,
     partition: &Partition,
@@ -501,7 +504,7 @@ async fn insert_partition_transaction(
         partition.end_insert_time(),
     );
 
-    let mut transaction = lake.db_pool.begin().await?;
+    let mut transaction = instrument_named!(lake.db_pool.begin(), "sql_transaction_begin").await?;
 
     debug!(
         "[PARTITION_LOCK] view={}/{} time_range=[{}, {}] lock_key={} - acquiring advisory lock",
@@ -613,7 +616,9 @@ async fn insert_partition_transaction(
 
     // Commit the transaction (this also releases the advisory lock). On failure the transaction
     // rolls back and the caller's delete_if_orphan reclaims the now-unreferenced parquet file.
-    transaction.commit().await.with_context(|| "commit")?;
+    instrument_named!(transaction.commit(), "sql_transaction_commit")
+        .await
+        .with_context(|| "commit")?;
 
     info!(
         "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={:?} - lock released",
@@ -634,6 +639,7 @@ async fn insert_partition_transaction(
 /// On any failure every file of `partitions` that no row references is deleted, as
 /// `insert_partition` does for its single file; a `PartitionOverlapConflict` rolls the whole
 /// transaction back.
+#[span_fn]
 pub async fn insert_partitions_replacing(
     lake: &DataLakeConnection,
     view_meta: &ViewMetadata,
@@ -654,6 +660,7 @@ pub async fn insert_partitions_replacing(
     result
 }
 
+#[span_fn]
 async fn insert_partitions_replacing_transaction(
     lake: &DataLakeConnection,
     view_meta: &ViewMetadata,
@@ -667,7 +674,7 @@ async fn insert_partitions_replacing_transaction(
         unit_range.begin,
         unit_range.end,
     );
-    let mut transaction = lake.db_pool.begin().await?;
+    let mut transaction = instrument_named!(lake.db_pool.begin(), "sql_transaction_begin").await?;
     instrument_named!(
         sqlx::query("SELECT pg_advisory_xact_lock($1);")
             .bind(lock_key)
@@ -717,7 +724,9 @@ async fn insert_partitions_replacing_transaction(
         }
     }
 
-    transaction.commit().await.with_context(|| "commit")?;
+    instrument_named!(transaction.commit(), "sql_transaction_commit")
+        .await
+        .with_context(|| "commit")?;
 
     for partition in partitions {
         info!(
@@ -879,6 +888,7 @@ fn check_non_nullable_columns(batch: &RecordBatch, file_schema: &Schema, desc: &
 /// (`block_partition_spec.rs`), where "last wins" would be actively wrong. `thread_spans_view.rs`
 /// sends exactly one row set today, so the distinction is invisible there, but do not let that
 /// fact simplify this fold away.
+#[span_fn]
 pub async fn write_rows_and_track_times(
     rb_stream: &mut Receiver<Result<PartitionRowSet, anyhow::Error>>,
     arrow_writer: &mut AsyncArrowWriter<AsyncParquetWriter>,
@@ -914,14 +924,16 @@ pub async fn write_rows_and_track_times(
                 all_some_sort_key_time = false;
             }
         }
-        check_non_nullable_columns(&row_set.rows, file_schema, desc)?;
-        arrow_writer
-            .write(&row_set.rows)
+        {
+            // The guard is !Send, so it must not be live across the awaits below.
+            let _span = span_scope!(name = "check_non_nullable_columns");
+            check_non_nullable_columns(&row_set.rows, file_schema, desc)?;
+        }
+        instrument_named!(arrow_writer.write(&row_set.rows), "arrow_writer_write")
             .await
             .with_context(|| "arrow_writer.write")?;
         if arrow_writer.in_progress_size() > 100 * 1024 * 1024 {
-            arrow_writer
-                .flush()
+            instrument_named!(arrow_writer.flush(), "arrow_writer_flush")
                 .await
                 .with_context(|| "arrow_writer.flush")?;
         }
@@ -955,6 +967,7 @@ pub async fn write_rows_and_track_times(
 
 /// Finalizes the partition write, closing the file and creating metadata.
 #[expect(clippy::too_many_arguments)]
+#[span_fn]
 async fn finalize_partition_write(
     event_time_range: Option<TimeRange>,
     max_sort_key_time: Option<DateTime<Utc>>,
@@ -967,7 +980,7 @@ async fn finalize_partition_write(
 ) -> Result<PartitionWriteResult> {
     if let Some(event_time_range) = event_time_range {
         // Potentially non-empty partition: close the file and get metadata
-        let close_result = arrow_writer.close().await;
+        let close_result = instrument_named!(arrow_writer.close(), "arrow_writer_close").await;
 
         match close_result {
             Ok(parquet_metadata) => {
@@ -986,7 +999,9 @@ async fn finalize_partition_write(
 
                     // Delete the empty file
                     let path = object_store::path::Path::from(file_path.as_str());
-                    if let Err(delete_err) = object_store.delete(&path).await {
+                    if let Err(delete_err) =
+                        instrument_named!(object_store.delete(&path), "delete_empty_file").await
+                    {
                         warn!("failed to delete empty file {}: {}", file_path, delete_err);
                     }
 
@@ -1043,7 +1058,7 @@ async fn finalize_partition_write(
         // Try to delete any partial file that may have been created
         // (ignore errors - file may not exist if no header was written)
         let path = object_store::path::Path::from(file_path.as_str());
-        let _ = object_store.delete(&path).await;
+        let _ = instrument_named!(object_store.delete(&path), "delete_empty_file").await;
 
         Ok(PartitionWriteResult {
             num_rows: 0,
@@ -1072,6 +1087,7 @@ async fn finalize_partition_write(
 /// this whole call is normally wrapped in `spawn_with_context`, whose `Future` bound requires
 /// `'static`, which a slice borrowed from the caller's loop-local accumulator cannot satisfy.
 #[expect(clippy::too_many_arguments)]
+#[span_fn(view = view_metadata.view_set_name)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
@@ -1116,6 +1132,7 @@ pub async fn write_partition_from_rows(
 /// it, without registering it in `lakehouse_partitions`. The caller owns the file until it is
 /// registered: if it never is, it must delete the file (see `delete_if_orphan`).
 #[expect(clippy::too_many_arguments)]
+#[span_fn(view = view_metadata.view_set_name)]
 pub async fn write_partition_file(
     lake: &DataLakeConnection,
     view_metadata: ViewMetadata,

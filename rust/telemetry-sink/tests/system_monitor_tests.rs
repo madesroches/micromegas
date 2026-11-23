@@ -3,7 +3,9 @@
 //! `emit_process_memory_stats` reads from the OS via `sysinfo` regardless of
 //! which allocator is active, and `should_sample_slow` is plain arithmetic.
 
-use micromegas_telemetry_sink::system_monitor::{emit_process_memory_stats, should_sample_slow};
+use micromegas_telemetry_sink::system_monitor::{
+    CgroupCpuStat, emit_process_memory_stats, parse_cpu_stat, should_sample_slow,
+};
 use micromegas_tracing::dispatch::flush_metrics_buffer;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::metrics::MetricsMsgQueueAny;
@@ -62,4 +64,36 @@ fn should_sample_slow_fires_at_or_past_the_stated_interval() {
     assert!(!should_sample_slow(Duration::from_millis(200)));
     assert!(!should_sample_slow(Duration::from_secs(4)));
     assert!(!should_sample_slow(Duration::ZERO));
+}
+
+#[test]
+fn parse_cpu_stat_full_body() {
+    let body = "usage_usec 123456\nuser_usec 100000\nsystem_usec 23456\nnr_periods 10\nnr_throttled 3\nthrottled_usec 4500\nnr_bursts 0\n";
+    assert_eq!(
+        parse_cpu_stat(body),
+        Some(CgroupCpuStat {
+            usage_usec: 123456,
+            nr_throttled: Some(3),
+            throttled_usec: Some(4500),
+        })
+    );
+}
+
+#[test]
+fn parse_cpu_stat_missing_fields() {
+    assert_eq!(parse_cpu_stat("user_usec 1\nnr_throttled 2\n"), None);
+    assert_eq!(
+        parse_cpu_stat("usage_usec 10\n"),
+        Some(CgroupCpuStat {
+            usage_usec: 10,
+            nr_throttled: None,
+            throttled_usec: None,
+        })
+    );
+}
+
+#[test]
+fn parse_cpu_stat_garbage() {
+    assert_eq!(parse_cpu_stat(""), None);
+    assert_eq!(parse_cpu_stat("not a cpu stat\nusage_usec abc\n"), None);
 }

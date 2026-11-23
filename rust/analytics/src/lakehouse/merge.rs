@@ -441,15 +441,17 @@ pub async fn create_merged_partition(
     filtered_partitions.sort_by_key(|p| p.begin_insert_time());
     // Computed before merge_partitions runs: a pure function of the input slice alone.
     let merged_sort_order = view.get_merged_partition_sort_order(&filtered_partitions);
-    let merge_result = view
-        .merge_partitions(
+    let merge_result = instrument_named!(
+        view.merge_partitions(
             lakehouse.clone(),
             Arc::new(filtered_partitions),
             partitions_all_views,
             insert_range,
-        )
-        .await
-        .with_context(|| "view.merge_partitions")?;
+        ),
+        "merge_plan"
+    )
+    .await
+    .with_context(|| "view.merge_partitions")?;
     // A defeated ordering elision (ordering_honored: false) is already warned about, with the
     // offending plan, inside QueryMerger::execute_merge_query.
     let mut merged_stream = merge_result.stream;
@@ -472,14 +474,20 @@ pub async fn create_merged_partition(
     let ctx =
         SessionContext::new_with_config_rt(SessionConfig::default(), lakehouse.runtime().clone());
     let stream_result: Result<()> = async {
-        while let Some(rb_res) = merged_stream.next().await {
+        while let Some(rb_res) = instrument_named!(merged_stream.next(), "merge_next_batch").await {
             let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
-            let event_time_range = compute_time_bounds
-                .get_time_bounds(ctx.read_batch(rb.clone()).with_context(|| "read_batch")?)
-                .await?;
-            tx.send(Ok(PartitionRowSet::new(event_time_range, rb, None)))
-                .await
-                .with_context(|| "sending partition row set")?;
+            let event_time_range = instrument_named!(
+                compute_time_bounds
+                    .get_time_bounds(ctx.read_batch(rb.clone()).with_context(|| "read_batch")?),
+                "get_time_bounds"
+            )
+            .await?;
+            instrument_named!(
+                tx.send(Ok(PartitionRowSet::new(event_time_range, rb, None))),
+                "merge_channel_send"
+            )
+            .await
+            .with_context(|| "sending partition row set")?;
         }
         Ok(())
     }
@@ -488,7 +496,7 @@ pub async fn create_merged_partition(
     match stream_result {
         Ok(()) => {
             drop(tx);
-            join_handle.await??;
+            instrument_named!(join_handle, "merge_writer_join").await??;
             logger
                 .write_log_entry(format!(
                     "{desc}: merge completed in {:.3}s",
@@ -502,7 +510,7 @@ pub async fn create_merged_partition(
             warn!("aborting merge partition write for {desc}: {e:?}");
             let _ = tx.send(Err(anyhow::anyhow!("merge stream aborted"))).await;
             drop(tx);
-            match join_handle.await {
+            match instrument_named!(join_handle, "merge_writer_join").await {
                 Ok(Ok(())) => {}
                 Ok(Err(writer_err)) => {
                     debug!("merge writer task error during abort: {writer_err:?}");

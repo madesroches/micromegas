@@ -48,3 +48,18 @@ shared `system_monitor` sampler:
 should fall relative to the stock config, and — the more important signal — recover after a burst
 of churn ends rather than staying at its peak. See `admin/object-cache.md` for a worked example of
 diagnosing a process-memory climb with these gauges.
+
+## Cgroup CPU metrics
+
+Every process with system metrics enabled (the default) also reads the cgroup v2 `cpu.stat` file
+(`/sys/fs/cgroup/cpu.stat`) every ~5s and emits its cumulative counters as they are reported:
+
+| Metric | Unit | Meaning |
+|---|---|---|
+| `cgroup_cpu_usage_usec` | `us` | Total CPU time consumed by the cgroup. |
+| `cgroup_cpu_nr_throttled` | `count` | Number of periods in which the cgroup was throttled. |
+| `cgroup_cpu_throttled_usec` | `us` | Total time the cgroup spent throttled. |
+
+The throttling counters are only emitted when `cpu.stat` reports them, and nothing is emitted when
+the file is missing (non-Linux hosts, cgroup v1, no cgroup). A rising `cgroup_cpu_nr_throttled` or
+`cgroup_cpu_throttled_usec` means the CPU quota is being hit, which slows every span uniformly.

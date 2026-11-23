@@ -77,6 +77,7 @@ impl SqlPartitionSpec {
     /// the physical plan -- the same apply-then-plan discipline as
     /// `QueryMerger::execute_sorted_merge` -- then executes the plan it returns. The undeclared
     /// path (`sort_order: None`) plans and executes the query unsorted.
+    #[span_fn(view = self.view_metadata.view_set_name)]
     async fn execute_extract_query(&self, df: DataFrame) -> Result<SendableRecordBatchStream> {
         let columns: Option<Vec<ScanSortColumn>> = self.sort_order.as_ref().map(|sort_order| {
             sort_order
@@ -88,8 +89,12 @@ impl SqlPartitionSpec {
                 .collect()
         });
         let subject = format!("extract query for {}", self.view_metadata.view_set_name);
-        let (plan, task_ctx) =
-            plan_sorted_extract(df, columns.as_deref(), &subject, self.insert_range).await?;
+        let (plan, task_ctx) = instrument_named!(
+            plan_sorted_extract(df, columns.as_deref(), &subject, self.insert_range),
+            "plan_sorted_extract",
+            |_, span| span.set_property("view", &*self.view_metadata.view_set_name)
+        )
+        .await?;
         execute_stream(plan, task_ctx).with_context(|| "executing extract query plan")
     }
 }
@@ -221,6 +226,7 @@ impl PartitionSpec for SqlPartitionSpec {
 impl SqlPartitionSpec {
     /// Logs the start of a write and plans the extract. An empty `record_count` is allowed: the
     /// writer creates an empty partition record when no data is sent through the channel.
+    #[span_fn(view = self.view_metadata.view_set_name)]
     async fn begin_write(&self, logger: &Arc<dyn Logger>) -> Result<SendableRecordBatchStream> {
         let desc = format!(
             "[{}, {}] {} {}",
@@ -239,15 +245,25 @@ impl SqlPartitionSpec {
         self.execute_extract_query(df).await
     }
 
+    #[span_fn(view = self.view_metadata.view_set_name)]
     async fn transform_batch(
         &self,
         rb_res: datafusion::error::Result<RecordBatch>,
     ) -> Result<PartitionRowSet> {
-        let rb = self.transformer.transform(rb_res?).await?;
-        let event_time_range = self
-            .compute_time_bounds
-            .get_time_bounds(self.ctx.read_batch(rb.clone())?)
-            .await?;
+        let view = &*self.view_metadata.view_set_name;
+        let rb = instrument_named!(
+            self.transformer.transform(rb_res?),
+            "transformer_transform",
+            |_, span| span.set_property("view", view)
+        )
+        .await?;
+        let event_time_range = instrument_named!(
+            self.compute_time_bounds
+                .get_time_bounds(self.ctx.read_batch(rb.clone())?),
+            "get_time_bounds",
+            |_, span| span.set_property("view", view)
+        )
+        .await?;
         Ok(PartitionRowSet::new(event_time_range, rb, None))
     }
 
@@ -262,10 +278,21 @@ impl SqlPartitionSpec {
         // A bare early return would close the channel, which the writer reads as a clean end of
         // data and would upload a partial file nobody registers. Forwarding the error makes it
         // take its failure path and delete the file.
+        let view = &*self.view_metadata.view_set_name;
         let mut extract_err = None;
-        while let Some(rb_res) = stream.next().await {
+        while let Some(rb_res) =
+            instrument_named!(stream.next(), "extract_next_batch", |_, span| {
+                span.set_property("view", view)
+            })
+            .await
+        {
             match self.transform_batch(rb_res).await {
-                Ok(row_set) => tx.send(Ok(row_set)).await?,
+                Ok(row_set) => {
+                    instrument_named!(tx.send(Ok(row_set)), "extract_channel_send", |_, span| {
+                        span.set_property("view", view)
+                    })
+                    .await?
+                }
                 Err(e) => {
                     extract_err = Some(e);
                     break;
@@ -276,13 +303,20 @@ impl SqlPartitionSpec {
             let msg = format!("{e:#}");
             let _ = tx.send(Err(e)).await;
             drop(tx);
-            return match join_handle.await? {
+            return match instrument_named!(join_handle, "extract_writer_join", |_, span| {
+                span.set_property("view", view)
+            })
+            .await?
+            {
                 Ok(_) => Err(anyhow::anyhow!(msg)),
                 Err(writer_err) => Err(writer_err.context(msg)),
             };
         }
         drop(tx);
-        join_handle.await?
+        instrument_named!(join_handle, "extract_writer_join", |_, span| {
+            span.set_property("view", view)
+        })
+        .await?
     }
 }
 
@@ -337,6 +371,14 @@ async fn count_query(
     count_src_sql: &str,
     view_set_name: &str,
 ) -> Result<Vec<RecordBatch>> {
-    let df = ctx.sql(count_src_sql).await?;
-    Ok(df.collect().await?)
+    let df = instrument_named!(ctx.sql(count_src_sql), "count_query_plan", |_, span| {
+        span.set_property("view", view_set_name)
+    })
+    .await?;
+    Ok(
+        instrument_named!(df.collect(), "count_query_collect", |_, span| {
+            span.set_property("view", view_set_name)
+        })
+        .await?,
+    )
 }

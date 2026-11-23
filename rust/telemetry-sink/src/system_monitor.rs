@@ -69,6 +69,60 @@ pub fn emit_jemalloc_stats() {
 #[cfg(not(all(feature = "jemalloc", not(target_os = "windows"))))]
 pub fn emit_jemalloc_stats() {}
 
+/// Subset of cgroup v2 `cpu.stat` that is useful for spotting CPU throttling.
+#[derive(Debug, PartialEq)]
+pub struct CgroupCpuStat {
+    pub usage_usec: u64,
+    pub nr_throttled: Option<u64>,
+    pub throttled_usec: Option<u64>,
+}
+
+/// Parses the body of a cgroup v2 `cpu.stat` file. `usage_usec` is required;
+/// the throttling counters are absent when the cpu controller has no limit.
+pub fn parse_cpu_stat(body: &str) -> Option<CgroupCpuStat> {
+    let mut usage_usec = None;
+    let mut nr_throttled = None;
+    let mut throttled_usec = None;
+    for line in body.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(key), Some(value)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Ok(value) = value.parse::<u64>() else {
+            continue;
+        };
+        match key {
+            "usage_usec" => usage_usec = Some(value),
+            "nr_throttled" => nr_throttled = Some(value),
+            "throttled_usec" => throttled_usec = Some(value),
+            _ => {}
+        }
+    }
+    Some(CgroupCpuStat {
+        usage_usec: usage_usec?,
+        nr_throttled,
+        throttled_usec,
+    })
+}
+
+/// Emits the cgroup's cumulative CPU counters. Emits nothing when the file is
+/// missing (non-Linux, cgroup v1, no cgroup).
+pub fn emit_cgroup_cpu_stats() {
+    let Ok(body) = std::fs::read_to_string("/sys/fs/cgroup/cpu.stat") else {
+        return;
+    };
+    let Some(stat) = parse_cpu_stat(&body) else {
+        return;
+    };
+    imetric!("cgroup_cpu_usage_usec", "us", stat.usage_usec);
+    if let Some(v) = stat.nr_throttled {
+        imetric!("cgroup_cpu_nr_throttled", "count", v);
+    }
+    if let Some(v) = stat.throttled_usec {
+        imetric!("cgroup_cpu_throttled_usec", "us", v);
+    }
+}
+
 /// Continuously sends system-wide CPU and memory usage metrics.
 ///
 /// This function runs in a loop, refreshing system information at regular intervals
@@ -94,6 +148,7 @@ pub fn send_system_metrics_forever() {
         if should_sample_slow(last_slow_sample.elapsed()) {
             emit_process_memory_stats(&mut process_system);
             emit_jemalloc_stats();
+            emit_cgroup_cpu_stats();
             last_slow_sample = Instant::now();
         }
     }
