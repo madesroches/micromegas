@@ -36,7 +36,7 @@ traces exist. No SQL-visible schema changes: spans are ordinary telemetry rows.
   separated.
 - `rust/public/src/servers/maintenance.rs::run_update_groups` spawns one task per view with
   `spawn_with_context` and waits for each group to drain (the barrier); the barrier wait has no
-  span. Each per-view task already has a per-view root span from `materialize_partition_range`.
+  span. Each per-view task already has a per-view span from `materialize_partition_range`.
 - `rust/telemetry-sink/src/system_monitor.rs` already emits process RSS and jemalloc stats from
   `send_system_metrics_forever` every `SLOW_SAMPLE_INTERVAL` (5 s) via `emit_process_memory_stats`.
 - Span primitives (`rust/tracing/src/macros.rs`): `#[span_fn(key = value)]` for functions,
@@ -62,9 +62,7 @@ traces exist. No SQL-visible schema changes: spans are ordinary telemetry rows.
 `sql_partition_spec.rs`
 - `begin_write`: `#[span_fn(view = ..)]`.
 - `execute_extract_query`: `#[span_fn(view = ..)]`; inside, `instrument_named!` around
-  `plan_sorted_extract(..)` as `plan_sorted_extract` and make `execute_stream` a sync
-  `span_scope!(name = "execute_stream", ..)`, since `execute_stream` is not async. (`execute_stream`
-  only builds the stream; row production is in `stream.next()`.)
+  `plan_sorted_extract(..)` as `plan_sorted_extract`.
 - `extract_stream` loop: wrap `stream.next()` as `extract_next_batch`, `transform_batch` as
   `transform_batch` (with children `transformer_transform` and `get_time_bounds` around the two
   awaits inside it), `tx.send(..)` as `extract_channel_send`, and the final `join_handle.await`
@@ -124,7 +122,8 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    `parse_cpu_stat(&str) -> Option<CgroupCpuStat>` for testability (`pub struct CgroupCpuStat`
    with pub fields, `Debug`, `PartialEq`, since tests live in an external test crate), and emits `imetric!`s:
    `cgroup_cpu_usage_usec`, `cgroup_cpu_nr_throttled`, `cgroup_cpu_throttled_usec` (cumulative
-   counters, as the file reports them). `usage_usec` is required (`None` if absent);
+   counters, as the file reports them; units "us" for `cgroup_cpu_usage_usec` and
+   `cgroup_cpu_throttled_usec`, "count" for `cgroup_cpu_nr_throttled`). `usage_usec` is required (`None` if absent);
    `nr_throttled` and `throttled_usec` are `Option<u64>` fields, each emitted only when present. A
    missing file (non-Linux, cgroup v1, no cgroup) emits nothing.
 
@@ -163,7 +162,7 @@ Daemon loop (`public/src/servers/maintenance.rs`)
 
 ## Documentation
 
-- `mkdocs/docs/admin/maintenance.md`: list the new span names.
+- `mkdocs/docs/admin/maintenance.md`: it has no span-name list (metrics are documented under per-metric headings), so add a new "Spans" section listing the new span names.
 - `cgroup_cpu_*` metrics come from the system monitor in every process with system metrics enabled
   (the default): document them in `mkdocs/docs/admin/memory-allocator.md`, with a short note on identifying throttling
   (`cgroup_cpu_nr_throttled` / `cgroup_cpu_throttled_usec` rising).
