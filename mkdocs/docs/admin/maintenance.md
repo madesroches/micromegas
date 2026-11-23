@@ -97,7 +97,7 @@ spans link to their view's work through `parent_span_id`.
 
 `check_non_nullable_columns` is a thread span, since it is synchronous CPU work.
 CPU spent in DataFusion's own tasks and in parquet encoding is not traced
-separately; compare it with the `cgroup_cpu_usage_usec` metric (see
+separately; compare it with the `cgroup_cpu_usage` metric (see
 [Memory Allocator Configuration](memory-allocator.md#cgroup-cpu-metrics)).
 
 Run a **single** `telemetry-maintenance-srv` instance per lake. The scheduled

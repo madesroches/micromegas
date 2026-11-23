@@ -52,14 +52,14 @@ diagnosing a process-memory climb with these gauges.
 ## Cgroup CPU metrics
 
 Every process with system metrics enabled (the default) also reads the cgroup v2 `cpu.stat` file
-of the process's own cgroup (`/sys/fs/cgroup/<path>/cpu.stat`, with `<path>` taken from `/proc/self/cgroup`) every ~5s and emits its cumulative counters as they are reported:
+of the process's own cgroup (`/sys/fs/cgroup/<path>/cpu.stat`, with `<path>` taken from `/proc/self/cgroup`) every ~5s and emits its cumulative counters. The two time counters are recorded as ticks, which queries read back in seconds:
 
 | Metric | Unit | Meaning |
 |---|---|---|
-| `cgroup_cpu_usage_usec` | `us` | Total CPU time consumed by the cgroup. |
+| `cgroup_cpu_usage` | `ticks` (read as `seconds`) | Total CPU time consumed by the cgroup. |
 | `cgroup_cpu_nr_throttled` | `count` | Number of periods in which the cgroup was throttled. |
-| `cgroup_cpu_throttled_usec` | `us` | Total time the cgroup spent throttled. |
+| `cgroup_cpu_throttled` | `ticks` (read as `seconds`) | Total time the cgroup spent throttled. |
 
 The throttling counters are only emitted when `cpu.stat` reports them, and nothing is emitted when
 the file is missing (non-Linux hosts, cgroup v1, no cgroup). A rising `cgroup_cpu_nr_throttled` or
-`cgroup_cpu_throttled_usec` means the CPU quota is being hit, which slows every span uniformly.
+`cgroup_cpu_throttled` means the CPU quota is being hit, which slows every span uniformly.

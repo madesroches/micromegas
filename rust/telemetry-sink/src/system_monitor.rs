@@ -138,13 +138,28 @@ pub fn emit_cgroup_cpu_stats() {
     let Some(stat) = parse_cpu_stat(&body) else {
         return;
     };
-    imetric!("cgroup_cpu_usage_usec", "us", stat.usage_usec);
     if let Some(v) = stat.nr_throttled {
         imetric!("cgroup_cpu_nr_throttled", "count", v);
     }
-    if let Some(v) = stat.throttled_usec {
-        imetric!("cgroup_cpu_throttled_usec", "us", v);
+    // A "ticks" metric is read back in seconds, converted with the process's tick frequency.
+    let frequency = micromegas_tracing::time::frequency();
+    if frequency <= 0 {
+        return;
     }
+    imetric!(
+        "cgroup_cpu_usage",
+        "ticks",
+        usec_to_ticks(stat.usage_usec, frequency)
+    );
+    if let Some(v) = stat.throttled_usec {
+        imetric!("cgroup_cpu_throttled", "ticks", usec_to_ticks(v, frequency));
+    }
+}
+
+/// Converts microseconds to ticks at `frequency` ticks per second. Widens to `u128` because a
+/// cumulative counter times a multi-GHz frequency overflows `u64` within days.
+pub fn usec_to_ticks(usec: u64, frequency: i64) -> u64 {
+    (u128::from(usec) * frequency as u128 / 1_000_000) as u64
 }
 
 /// Continuously sends system-wide CPU and memory usage metrics.

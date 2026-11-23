@@ -5,7 +5,7 @@
 
 use micromegas_telemetry_sink::system_monitor::{
     CgroupCpuStat, cgroup_cpu_stat_path, emit_process_memory_stats, parse_cpu_stat,
-    should_sample_slow,
+    should_sample_slow, usec_to_ticks,
 };
 use micromegas_tracing::dispatch::flush_metrics_buffer;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
@@ -118,4 +118,17 @@ fn cgroup_path_no_v2_line_falls_back_to_root() {
         cgroup_cpu_stat_path("12:cpu,cpuacct:/foo\n"),
         "/sys/fs/cgroup/cpu.stat"
     );
+}
+
+#[test]
+fn usec_to_ticks_scales_by_frequency() {
+    assert_eq!(usec_to_ticks(1_000_000, 3_000_000_000), 3_000_000_000);
+    assert_eq!(usec_to_ticks(500_000, 1_000_000), 500_000);
+}
+
+#[test]
+fn usec_to_ticks_does_not_overflow_u64_intermediate() {
+    // ~11.5 days of CPU at 3 GHz: usec * frequency exceeds u64::MAX before the division.
+    let usec = 1_000_000_000_000u64;
+    assert_eq!(usec_to_ticks(usec, 3_000_000_000), 3_000_000_000_000_000);
 }
