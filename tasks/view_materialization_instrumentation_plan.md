@@ -28,9 +28,9 @@ traces exist. No SQL-visible schema changes: spans are ordinary telemetry rows.
   `instrument_named!(join_handle, "write_partition_from_rows_join")`.
 - `rust/analytics/src/lakehouse/batch_update.rs`: `materialize_partition` has `#[span_fn(view=..)]`
   and so does `materialize_partition_range` (`batch_update.rs:234`). `SqlBatchView`'s
-  `make_batch_partition_spec` has `#[span_fn]` (`sql_batch_view.rs:279`), but the block-based
-  implementations (log_view, metrics_view, thread_spans_view, async_events_view, net_spans_view...)
-  and their shared `fetch_partition_source_data` (`partition_source_data.rs:250`) have none.
+  `make_batch_partition_spec` has `#[span_fn]` (`sql_batch_view.rs:279`), but `fetch_partition_source_data`
+  (`partition_source_data.rs:250`, called only by `log_view.rs:115` and `metrics_view.rs:114`;
+  thread_spans, async_events and net_spans bail as unsupported) has none.
   `merge.rs::create_merged_partition` has a span; plan / execute / write inside it are not
   separated.
 - `rust/public/src/servers/maintenance.rs::run_update_groups` spawns one task per view with
@@ -86,13 +86,13 @@ traces exist. No SQL-visible schema changes: spans are ordinary telemetry rows.
   final encode + upload completion) and `delete_empty_file` around the empty-file
   `object_store.delete` calls.
 - `insert_partition`, `insert_partition_transaction`: `#[span_fn]`; inside the latter,
-  `db_pool.begin` (`instrument_named!`, pool-acquire wait) and `transaction.commit`.
+  `db_pool.begin` (`write_partition.rs:504`, pool-acquire wait) as `sql_transaction_begin` and
+  `transaction.commit` (`:616`) as `sql_transaction_commit`, both via `instrument_named!`.
 - `retire_partitions`: `#[span_fn]`.
 
-`batch_update.rs` / `partition_source_data.rs` / `merge.rs`
-- `fetch_partition_source_data` (`partition_source_data.rs:250`, shared by the block-based
-  `make_batch_partition_spec` impls): `#[span_fn]` with `view` where available. No new span at the
-  `materialize_partition` call site; `verify_overlapping_partitions` is already `#[span_fn]`.
+`partition_source_data.rs` / `merge.rs`
+- `fetch_partition_source_data` (`partition_source_data.rs:250`, called by log_view and
+  metrics_view): plain `#[span_fn]`, since its signature has no view name.
 - `create_merged_partition`: `merge_plan` (`instrument_named!`) around
   `view.merge_partitions(..).await`, which does the planning and `execute_stream`. In the
   `merged_stream.next()` loop, mirror the extract loop: `merge_next_batch`, `get_time_bounds`, and
@@ -115,28 +115,34 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    `materialize_all_views`), writer task, and block processor (the per-block
    `block_processor.process` tasks at `block_partition_spec.rs:139`). The writer-family monitor is
    applied once, inside `write_partition_file`'s body (`write_partition_from_rows` calls it), so no
-   spawn site changes and nothing is double-counted. A small helper in `rust/analytics` (e.g.
-   `lakehouse/task_monitors.rs`) holds named static monitors and exposes `instrument(name, fut)`
-   and `emit_task_metrics()`. `emit_task_metrics` reads each monitor's `cumulative()` and emits
-   `imetric!` for `total_poll_duration` (ns), `total_scheduled_duration`, and `total_poll_count`,
-   tagged with a `task_family` property. The maintenance daemon calls it on a 5 s interval,
-   alongside its other periodic work.
+   spawn site changes and nothing is double-counted; it also wraps the `insert_partition` call in
+   `write_partition_from_rows` (sequential in the same task, so no double count). A small helper in
+   `rust/analytics` (e.g. `lakehouse/task_monitors.rs`) holds the named monitors as
+   `LazyLock<TaskMonitor>` statics (`TaskMonitor::new` is not const) and exposes
+   `instrument(name, fut)` and `emit_task_metrics()`. `emit_task_metrics` reads each monitor's
+   `cumulative()` and emits `imetric!` for `total_poll_duration` (ns), `total_scheduled_duration`,
+   and `total_poll_count`, tagged with a `task_family` property. The maintenance daemon emits them
+   from a new `CronTask` at `TimeDelta::seconds(5)` added to `runners` in `daemon`
+   (`maintenance.rs`), with `fanout.subscribe()` shutdown, following the existing `every_second`
+   task. Only the maintenance daemon emits them (the monolith's in-process daemon included);
+   writer polls on flight-sql JIT paths are accumulated but not emitted.
 3. **cgroup `cpu.stat`.** In `telemetry-sink/src/system_monitor.rs`, add
    `emit_cgroup_cpu_stats()` next to `emit_process_memory_stats`, called from the slow-sample branch.
    It reads `/sys/fs/cgroup/cpu.stat` (cgroup v2), parses with a pure
-   `parse_cpu_stat(&str) -> Option<CgroupCpuStat>` for testability, and emits `imetric!`s:
+   `parse_cpu_stat(&str) -> Option<CgroupCpuStat>` for testability (`pub struct CgroupCpuStat`
+   with pub fields, `Debug`, `PartialEq`, since tests live in an external test crate), and emits `imetric!`s:
    `cgroup_cpu_usage_usec`, `cgroup_cpu_nr_throttled`, `cgroup_cpu_throttled_usec` (cumulative
    counters, as the file reports them). A missing file (non-Linux, cgroup v1, no cgroup) emits
    nothing.
 
 ## Implementation Steps
 
-1. `system_monitor.rs`: `CgroupCpuStat`, `pub parse_cpu_stat`, `emit_cgroup_cpu_stats`, wired into
+1. `system_monitor.rs`: `pub struct CgroupCpuStat` (pub fields, `Debug`, `PartialEq`), `pub parse_cpu_stat`, `emit_cgroup_cpu_stats`, wired into
    the slow-sample branch; parser tests in `rust/telemetry-sink/tests/system_monitor_tests.rs`.
 2. `sql_partition_spec.rs`: all spans listed above.
 3. `write_partition.rs`: all spans listed above, including the async `arrow_writer_*` spans and the
    sync `span_scope!` on `check_non_nullable_columns`.
-4. `batch_update.rs`, `partition_source_data.rs`, `merge.rs`: spans listed above.
+4. `partition_source_data.rs`, `merge.rs`: spans listed above.
 5. `maintenance.rs`: `update_group` span.
 6. `tokio-metrics` dependency, task-monitor helper, wrapping the three task families, periodic
    emission from the maintenance daemon; helper test in a new file under `rust/analytics/tests/`.
@@ -189,8 +195,10 @@ Daemon loop (`public/src/servers/maintenance.rs`)
 
 - Unit (`rust/telemetry-sink/tests/system_monitor_tests.rs`): `parse_cpu_stat` over a realistic
   `cpu.stat` body, a body missing fields, and garbage.
-- Unit (new file under `rust/analytics/tests/`): the task-monitor helper — a monitor instrumented around a trivial future reports a non-zero
-  poll count after `emit`'s pure computation step.
+- Unit (new file under `rust/analytics/tests/`): the task-monitor helper — run a trivial future through `instrument`, call
+  `emit_task_metrics` under `micromegas_tracing::test_utils::init_in_memory_tracing` (`#[serial]`,
+  see `analytics/tests/metrics_test.rs:72`), and assert `total_poll_count`,
+  `total_poll_duration` and `total_scheduled_duration` are emitted with a `task_family` property.
 - No test asserts span names (they are telemetry and carry no behavior); existing
   `sql_partition_spec` / `write_partition` tests must still pass unchanged, which covers that the
   wrapping did not alter control flow or error propagation (including the
@@ -202,8 +210,10 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    daemon run one pass, then query `view_instance('async_events', '<daemon process_id>')` using
    the begin/end join pattern in `mkdocs/docs/query-guide/async-performance-analysis.md` to get
    span durations, and confirm the new span names appear and that `extract_stream` self time
-   (duration minus children) is a small residue. Check `view_instance('thread_spans', ..)` only
-   for the `check_non_nullable_columns` thread span. Not automated: needs a live daemon and real
+   (duration minus children) is a small residue. Find the daemon's thread stream ids from
+   `streams` filtered on its process_id, then check
+   `view_instance('thread_spans', '<thread stream_id>')` only for the
+   `check_non_nullable_columns` thread span. Not automated: needs a live daemon and real
    data.
 2. Query `measures` for `cgroup_cpu_usage_usec` and `task_family` poll metrics and confirm they
    are non-zero and increasing. Skip the cgroup check on a host without `/sys/fs/cgroup/cpu.stat`.
