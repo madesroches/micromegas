@@ -129,13 +129,10 @@ pub fn cgroup_cpu_stat_path(proc_self_cgroup: &str) -> String {
 /// Emits the cgroup's cumulative CPU counters. Emits nothing when the file is
 /// missing (non-Linux, cgroup v1, no cgroup).
 pub fn emit_cgroup_cpu_stats() {
-    let own_path = std::fs::read_to_string("/proc/self/cgroup")
-        .ok()
-        .map(|c| cgroup_cpu_stat_path(&c));
-    let Ok(body) = own_path
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map_or_else(|| std::fs::read_to_string(ROOT_CPU_STAT_PATH), Ok)
-    else {
+    let Ok(proc_cgroup) = std::fs::read_to_string("/proc/self/cgroup") else {
+        return;
+    };
+    let Ok(body) = std::fs::read_to_string(cgroup_cpu_stat_path(&proc_cgroup)) else {
         return;
     };
     let Some(stat) = parse_cpu_stat(&body) else {

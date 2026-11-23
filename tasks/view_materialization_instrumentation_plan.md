@@ -118,7 +118,7 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    cron tick.
 2. **cgroup `cpu.stat`.** In `telemetry-sink/src/system_monitor.rs`, add
    `emit_cgroup_cpu_stats()` next to `emit_process_memory_stats`, called from the slow-sample branch.
-   It reads `/sys/fs/cgroup/cpu.stat` (cgroup v2), parses with a pure
+   It reads the process's own cgroup `cpu.stat` (cgroup v2), found through `/proc/self/cgroup` by a pure `pub fn cgroup_cpu_stat_path(&str) -> String` (root file when there is no v2 line), parses with a pure
    `parse_cpu_stat(&str) -> Option<CgroupCpuStat>` for testability (`pub struct CgroupCpuStat`
    with pub fields, `Debug`, `PartialEq`, since tests live in an external test crate), and emits `imetric!`s:
    `cgroup_cpu_usage_usec`, `cgroup_cpu_nr_throttled`, `cgroup_cpu_throttled_usec` (cumulative
@@ -129,7 +129,7 @@ Daemon loop (`public/src/servers/maintenance.rs`)
 
 ## Implementation Steps
 
-1. `system_monitor.rs`: `pub struct CgroupCpuStat` (pub fields, `Debug`, `PartialEq`), `pub parse_cpu_stat`, `emit_cgroup_cpu_stats`, wired into
+1. `system_monitor.rs`: `pub struct CgroupCpuStat` (pub fields, `Debug`, `PartialEq`), `pub parse_cpu_stat`, `pub fn cgroup_cpu_stat_path`, `emit_cgroup_cpu_stats`, wired into
    the slow-sample branch; parser tests in `rust/telemetry-sink/tests/system_monitor_tests.rs`.
 2. `sql_partition_spec.rs`: all spans listed above.
 3. `write_partition.rs`: all spans listed above, including the async `arrow_writer_*` spans and the
@@ -190,4 +190,4 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    `check_non_nullable_columns` thread span. Not automated: needs a live daemon and real
    data.
 2. Query `measures` for `cgroup_cpu_usage_usec` and confirm it is non-zero and increasing. Skip on a
-   host without `/sys/fs/cgroup/cpu.stat`.
+   host where the process's own cgroup has no `cpu.stat` (per `/proc/self/cgroup`).
