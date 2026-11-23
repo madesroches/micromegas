@@ -69,6 +69,99 @@ pub fn emit_jemalloc_stats() {
 #[cfg(not(all(feature = "jemalloc", not(target_os = "windows"))))]
 pub fn emit_jemalloc_stats() {}
 
+/// Subset of cgroup v2 `cpu.stat` that is useful for spotting CPU throttling.
+#[derive(Debug, PartialEq)]
+pub struct CgroupCpuStat {
+    pub usage_usec: u64,
+    pub nr_throttled: Option<u64>,
+    pub throttled_usec: Option<u64>,
+}
+
+/// Parses the body of a cgroup v2 `cpu.stat` file. `usage_usec` is required;
+/// the throttling counters are absent when the cpu controller has no limit.
+pub fn parse_cpu_stat(body: &str) -> Option<CgroupCpuStat> {
+    let mut usage_usec = None;
+    let mut nr_throttled = None;
+    let mut throttled_usec = None;
+    for line in body.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(key), Some(value)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Ok(value) = value.parse::<u64>() else {
+            continue;
+        };
+        match key {
+            "usage_usec" => usage_usec = Some(value),
+            "nr_throttled" => nr_throttled = Some(value),
+            "throttled_usec" => throttled_usec = Some(value),
+            _ => {}
+        }
+    }
+    Some(CgroupCpuStat {
+        usage_usec: usage_usec?,
+        nr_throttled,
+        throttled_usec,
+    })
+}
+
+const ROOT_CPU_STAT_PATH: &str = "/sys/fs/cgroup/cpu.stat";
+
+/// Resolves this process's own cgroup `cpu.stat` from the contents of
+/// `/proc/self/cgroup`. Without a cgroup namespace the root file would report
+/// host-wide usage, so the `0::<path>` line is followed; the root file is the
+/// fallback when there is no v2 line.
+pub fn cgroup_cpu_stat_path(proc_self_cgroup: &str) -> String {
+    let Some(rel) = proc_self_cgroup
+        .lines()
+        .find_map(|l| l.strip_prefix("0::"))
+        .map(|p| p.trim().trim_matches('/'))
+    else {
+        return ROOT_CPU_STAT_PATH.to_string();
+    };
+    if rel.is_empty() {
+        ROOT_CPU_STAT_PATH.to_string()
+    } else {
+        format!("/sys/fs/cgroup/{rel}/cpu.stat")
+    }
+}
+
+/// Emits the cgroup's cumulative CPU counters. Emits nothing when the file is
+/// missing (non-Linux, cgroup v1, no cgroup).
+pub fn emit_cgroup_cpu_stats() {
+    let Ok(proc_cgroup) = std::fs::read_to_string("/proc/self/cgroup") else {
+        return;
+    };
+    let Ok(body) = std::fs::read_to_string(cgroup_cpu_stat_path(&proc_cgroup)) else {
+        return;
+    };
+    let Some(stat) = parse_cpu_stat(&body) else {
+        return;
+    };
+    if let Some(v) = stat.nr_throttled {
+        imetric!("cgroup_cpu_nr_throttled", "count", v);
+    }
+    // A "ticks" metric is read back in seconds, converted with the process's tick frequency.
+    let frequency = micromegas_tracing::time::frequency();
+    if frequency <= 0 {
+        return;
+    }
+    imetric!(
+        "cgroup_cpu_usage",
+        "ticks",
+        usec_to_ticks(stat.usage_usec, frequency)
+    );
+    if let Some(v) = stat.throttled_usec {
+        imetric!("cgroup_cpu_throttled", "ticks", usec_to_ticks(v, frequency));
+    }
+}
+
+/// Converts microseconds to ticks at `frequency` ticks per second. Widens to `u128` because a
+/// cumulative counter times a multi-GHz frequency overflows `u64` within days.
+pub fn usec_to_ticks(usec: u64, frequency: i64) -> u64 {
+    (u128::from(usec) * frequency as u128 / 1_000_000) as u64
+}
+
 /// Continuously sends system-wide CPU and memory usage metrics.
 ///
 /// This function runs in a loop, refreshing system information at regular intervals
@@ -94,6 +187,7 @@ pub fn send_system_metrics_forever() {
         if should_sample_slow(last_slow_sample.elapsed()) {
             emit_process_memory_stats(&mut process_system);
             emit_jemalloc_stats();
+            emit_cgroup_cpu_stats();
             last_slow_sample = Instant::now();
         }
     }

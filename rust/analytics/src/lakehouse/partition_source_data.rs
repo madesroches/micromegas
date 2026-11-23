@@ -25,6 +25,7 @@ use datafusion::{
 };
 use futures::{StreamExt, stream::BoxStream};
 use micromegas_telemetry::types::block::BlockMetadata;
+use micromegas_tracing::prelude::*;
 use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -247,6 +248,7 @@ pub fn hash_to_object_count(hash: &[u8]) -> Result<i64> {
 }
 
 /// Fetches partition source data from the data lake.
+#[span_fn]
 pub async fn fetch_partition_source_data(
     lakehouse: Arc<LakehouseContext>,
     existing_partitions: Arc<PartitionCache>,
