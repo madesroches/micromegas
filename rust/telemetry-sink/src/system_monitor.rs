@@ -105,10 +105,37 @@ pub fn parse_cpu_stat(body: &str) -> Option<CgroupCpuStat> {
     })
 }
 
+const ROOT_CPU_STAT_PATH: &str = "/sys/fs/cgroup/cpu.stat";
+
+/// Resolves this process's own cgroup `cpu.stat` from the contents of
+/// `/proc/self/cgroup`. Without a cgroup namespace the root file would report
+/// host-wide usage, so the `0::<path>` line is followed; the root file is the
+/// fallback when there is no v2 line.
+pub fn cgroup_cpu_stat_path(proc_self_cgroup: &str) -> String {
+    let Some(rel) = proc_self_cgroup
+        .lines()
+        .find_map(|l| l.strip_prefix("0::"))
+        .map(|p| p.trim().trim_matches('/'))
+    else {
+        return ROOT_CPU_STAT_PATH.to_string();
+    };
+    if rel.is_empty() {
+        ROOT_CPU_STAT_PATH.to_string()
+    } else {
+        format!("/sys/fs/cgroup/{rel}/cpu.stat")
+    }
+}
+
 /// Emits the cgroup's cumulative CPU counters. Emits nothing when the file is
 /// missing (non-Linux, cgroup v1, no cgroup).
 pub fn emit_cgroup_cpu_stats() {
-    let Ok(body) = std::fs::read_to_string("/sys/fs/cgroup/cpu.stat") else {
+    let own_path = std::fs::read_to_string("/proc/self/cgroup")
+        .ok()
+        .map(|c| cgroup_cpu_stat_path(&c));
+    let Ok(body) = own_path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map_or_else(|| std::fs::read_to_string(ROOT_CPU_STAT_PATH), Ok)
+    else {
         return;
     };
     let Some(stat) = parse_cpu_stat(&body) else {

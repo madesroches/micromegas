@@ -52,7 +52,7 @@ diagnosing a process-memory climb with these gauges.
 ## Cgroup CPU metrics
 
 Every process with system metrics enabled (the default) also reads the cgroup v2 `cpu.stat` file
-(`/sys/fs/cgroup/cpu.stat`) every ~5s and emits its cumulative counters as they are reported:
+of the process's own cgroup (`/sys/fs/cgroup/<path>/cpu.stat`, with `<path>` taken from `/proc/self/cgroup`) every ~5s and emits its cumulative counters as they are reported:
 
 | Metric | Unit | Meaning |
 |---|---|---|

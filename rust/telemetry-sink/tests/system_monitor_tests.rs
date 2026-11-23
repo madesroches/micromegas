@@ -4,7 +4,8 @@
 //! which allocator is active, and `should_sample_slow` is plain arithmetic.
 
 use micromegas_telemetry_sink::system_monitor::{
-    CgroupCpuStat, emit_process_memory_stats, parse_cpu_stat, should_sample_slow,
+    CgroupCpuStat, cgroup_cpu_stat_path, emit_process_memory_stats, parse_cpu_stat,
+    should_sample_slow,
 };
 use micromegas_tracing::dispatch::flush_metrics_buffer;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
@@ -96,4 +97,25 @@ fn parse_cpu_stat_missing_fields() {
 fn parse_cpu_stat_garbage() {
     assert_eq!(parse_cpu_stat(""), None);
     assert_eq!(parse_cpu_stat("not a cpu stat\nusage_usec abc\n"), None);
+}
+
+#[test]
+fn cgroup_path_namespaced_root() {
+    assert_eq!(cgroup_cpu_stat_path("0::/\n"), "/sys/fs/cgroup/cpu.stat");
+}
+
+#[test]
+fn cgroup_path_nested() {
+    assert_eq!(
+        cgroup_cpu_stat_path("0::/system.slice/x.service\n"),
+        "/sys/fs/cgroup/system.slice/x.service/cpu.stat"
+    );
+}
+
+#[test]
+fn cgroup_path_no_v2_line_falls_back_to_root() {
+    assert_eq!(
+        cgroup_cpu_stat_path("12:cpu,cpuacct:/foo\n"),
+        "/sys/fs/cgroup/cpu.stat"
+    );
 }
