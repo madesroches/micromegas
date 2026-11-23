@@ -113,7 +113,7 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    genuinely synchronous CPU-heavy call on the write path. `AsyncArrowWriter` write / flush / close
    are async, so a `!Send` `span_scope!` guard cannot be held across their awaits, and DataFusion
    execution inside `stream.next()` is polled. CPU in DataFusion's tasks and parquet encode shows up
-   as the residue of `cgroup_cpu_usage_usec` over the traced work, and the existing
+   as the residue of `cgroup_cpu_usage` over the traced work, and the existing
    `task_tick_latency` (`rust/public/src/servers/cron_task.rs:75`) gives whole-pass wall latency per
    cron tick.
 2. **cgroup `cpu.stat`.** In `telemetry-sink/src/system_monitor.rs`, add
@@ -121,9 +121,9 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    It reads the process's own cgroup `cpu.stat` (cgroup v2), found through `/proc/self/cgroup` by a pure `pub fn cgroup_cpu_stat_path(&str) -> String` (root file when there is no v2 line), parses with a pure
    `parse_cpu_stat(&str) -> Option<CgroupCpuStat>` for testability (`pub struct CgroupCpuStat`
    with pub fields, `Debug`, `PartialEq`, since tests live in an external test crate), and emits `imetric!`s:
-   `cgroup_cpu_usage_usec`, `cgroup_cpu_nr_throttled`, `cgroup_cpu_throttled_usec` (cumulative
-   counters, as the file reports them; units "us" for `cgroup_cpu_usage_usec` and
-   `cgroup_cpu_throttled_usec`, "count" for `cgroup_cpu_nr_throttled`). `usage_usec` is required (`None` if absent);
+   `cgroup_cpu_usage`, `cgroup_cpu_nr_throttled`, `cgroup_cpu_throttled` (cumulative
+   counters; the time counters are converted from usec to ticks, unit "ticks", and
+   `cgroup_cpu_nr_throttled` is "count"). `usage_usec` is required (`None` if absent);
    `nr_throttled` and `throttled_usec` are `Option<u64>` fields, each emitted only when present. A
    missing file (non-Linux, cgroup v1, no cgroup) emits nothing.
 
@@ -165,7 +165,7 @@ Daemon loop (`public/src/servers/maintenance.rs`)
 - `mkdocs/docs/admin/maintenance.md`: it has no span-name list (metrics are documented under per-metric headings), so add a new "Spans" section listing the new span names.
 - `cgroup_cpu_*` metrics come from the system monitor in every process with system metrics enabled
   (the default): document them in `mkdocs/docs/admin/memory-allocator.md`, with a short note on identifying throttling
-  (`cgroup_cpu_nr_throttled` / `cgroup_cpu_throttled_usec` rising).
+  (`cgroup_cpu_nr_throttled` / `cgroup_cpu_throttled` rising).
 - `CHANGELOG.md`: user-visible new metrics and spans.
 
 ## Testing Strategy
@@ -189,5 +189,5 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    `view_instance('thread_spans', '<thread stream_id>')` only for the
    `check_non_nullable_columns` thread span. Not automated: needs a live daemon and real
    data.
-2. Query `measures` for `cgroup_cpu_usage_usec` and confirm it is non-zero and increasing. Skip on a
+2. Query `measures` for `cgroup_cpu_usage` and confirm it is non-zero and increasing. Skip on a
    host where the process's own cgroup has no `cpu.stat` (per `/proc/self/cgroup`).
