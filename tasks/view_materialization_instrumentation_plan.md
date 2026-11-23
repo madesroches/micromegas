@@ -110,22 +110,17 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    genuinely synchronous CPU-heavy call on the write path. `ArrowWriter` write / flush / close are
    async (`AsyncArrowWriter`) and DataFusion execution inside `stream.next()` is polled, so both
    are covered by the per-task poll metrics below rather than by thread spans.
-2. **Per-task poll-time metrics.** Add the `tokio-metrics` crate (`0.5.2`, workspace dependency)
-   and one `TaskMonitor` per task family: view update (the per-view task in
-   `materialize_all_views`), writer task, and block processor (the per-block
-   `block_processor.process` tasks at `block_partition_spec.rs:139`). The writer-family monitor is
-   applied once, inside `write_partition_file`'s body (`write_partition_from_rows` calls it), so no
-   spawn site changes and nothing is double-counted; it also wraps the `insert_partition` call in
-   `write_partition_from_rows` (sequential in the same task, so no double count). A small helper in
-   `rust/analytics` (e.g. `lakehouse/task_monitors.rs`) holds the named monitors as
-   `LazyLock<TaskMonitor>` statics (`TaskMonitor::new` is not const) and exposes
-   `instrument(name, fut)` and `emit_task_metrics()`. `emit_task_metrics` reads each monitor's
-   `cumulative()` and emits `imetric!` for `total_poll_duration` (ns), `total_scheduled_duration`,
-   and `total_poll_count`, tagged with a `task_family` property. The maintenance daemon emits them
-   from a new `CronTask` at `TimeDelta::seconds(5)` added to `runners` in `daemon`
-   (`maintenance.rs`), with `fanout.subscribe()` shutdown, following the existing `every_second`
-   task. Only the maintenance daemon emits them (the monolith's in-process daemon included);
-   writer polls on flight-sql JIT paths are accumulated but not emitted.
+2. **Per-task poll-time metrics.** A small future wrapper in `rust/analytics`
+   (`lakehouse/poll_timed.rs`) sums the time spent inside each `poll` and the poll count, and emits
+   them with `imetric!` (`task_poll_duration` in ns, `task_poll_count`) when the future completes
+   or is dropped, tagged with a `task_family` property. Metrics flow through the standard
+   micromegas stack; there is no periodic emitter, daemon task, or global state, so every process
+   that runs the wrapped work reports it, including flight-sql JIT writers. Task families: view
+   update (the per-view task in `materialize_all_views`), writer task, and block processor (the
+   per-block `block_processor.process` tasks at `block_partition_spec.rs:139`). The writer family
+   wraps `write_partition_file`'s body (`write_partition_from_rows` calls it) so no spawn site
+   changes and nothing is double-counted; it also wraps the `insert_partition` call in
+   `write_partition_from_rows` (sequential in the same task).
 3. **cgroup `cpu.stat`.** In `telemetry-sink/src/system_monitor.rs`, add
    `emit_cgroup_cpu_stats()` next to `emit_process_memory_stats`, called from the slow-sample branch.
    It reads `/sys/fs/cgroup/cpu.stat` (cgroup v2), parses with a pure
@@ -144,8 +139,8 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    sync `span_scope!` on `check_non_nullable_columns`.
 4. `partition_source_data.rs`, `merge.rs`: spans listed above.
 5. `maintenance.rs`: `update_group` span.
-6. `tokio-metrics` dependency, task-monitor helper, wrapping the three task families, periodic
-   emission from the maintenance daemon; helper test in a new file under `rust/analytics/tests/`.
+6. `poll_timed` wrapper and wrapping the three task families; helper test in a new file under
+   `rust/analytics/tests/`.
 7. Docs and changelog.
 8. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` in `rust/`.
 
@@ -158,11 +153,10 @@ Daemon loop (`public/src/servers/maintenance.rs`)
 - `rust/analytics/src/lakehouse/partition_source_data.rs`
 - `rust/analytics/src/lakehouse/merge.rs`
 - `rust/analytics/src/lakehouse/block_partition_spec.rs` (wrap the per-block `block_processor.process`
-  tasks with the block processor monitor)
-- `rust/analytics/src/lakehouse/task_monitors.rs` (new) and `lakehouse/mod.rs`
-- a new test file under `rust/analytics/tests/` (task-monitor helper)
-- `rust/public/src/servers/maintenance.rs`
-- `rust/Cargo.toml` (`tokio-metrics = "0.5.2"`, alphabetical), `rust/analytics/Cargo.toml`
+  tasks with the poll-timing wrapper)
+- `rust/analytics/src/lakehouse/poll_timed.rs` (new) and `lakehouse/mod.rs`
+- a new test file under `rust/analytics/tests/` (poll-timing wrapper)
+- `rust/public/src/servers/maintenance.rs` (`update_group` span, per-view task wrapper)
 - `CHANGELOG.md`, `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/memory-allocator.md` or
   `mkdocs/docs/admin/telemetry-sink-tuning.md`
 
@@ -174,17 +168,20 @@ Daemon loop (`public/src/servers/maintenance.rs`)
 - **Generous now, prune later** (the issue's stated approach): the cost is telemetry volume per
   batch (`extract_next_batch` etc. fire per record batch), accepted until real traces show which
   spans are noise.
-- **`tokio-metrics` vs. hand-rolled poll timing:** a hand-rolled wrapper future would avoid a
-  dependency but duplicates a maintained, tokio-team crate.
+- **Hand-rolled poll timing vs. `tokio-metrics`:** `TaskMonitor` accumulates in global state and
+  needs a periodic reader to turn it into telemetry; a wrapper that emits `imetric!` itself uses
+  the existing metrics stack and needs no emitter.
 
 ## Decisions
 
-- `TaskMonitor` overhead is accepted: a few `Instant::now` calls and atomics per task poll,
-  negligible next to per-batch work.
+- Metrics are emitted with `imetric!` by the code doing the work, not read periodically from a
+  global (user decision). No `tokio-metrics` dependency, no daemon `CronTask`.
+- Poll-wrapper overhead is accepted: two `Instant::now` calls per task poll, negligible next to
+  per-batch work.
 
 ## Documentation
 
-- `mkdocs/docs/admin/maintenance.md`: list the new span names and the `task_family` poll metrics.
+- `mkdocs/docs/admin/maintenance.md`: list the new span names and the `task_poll_*` metrics.
 - `cgroup_cpu_*` metrics come from the shared system monitor in every process: document them
   alongside the other shared-sampler metrics (`mkdocs/docs/admin/memory-allocator.md` "What to
   watch" style, or `telemetry-sink-tuning.md`), with a short note on identifying throttling
@@ -195,10 +192,11 @@ Daemon loop (`public/src/servers/maintenance.rs`)
 
 - Unit (`rust/telemetry-sink/tests/system_monitor_tests.rs`): `parse_cpu_stat` over a realistic
   `cpu.stat` body, a body missing fields, and garbage.
-- Unit (new file under `rust/analytics/tests/`): the task-monitor helper — run a trivial future through `instrument`, call
-  `emit_task_metrics` under `micromegas_tracing::test_utils::init_in_memory_tracing` (`#[serial]`,
-  see `analytics/tests/metrics_test.rs:72`), and assert `total_poll_count`,
-  `total_poll_duration` and `total_scheduled_duration` are emitted with a `task_family` property.
+- Unit (new file under `rust/analytics/tests/`): the poll-timing wrapper — run a multi-poll future
+  through it under `micromegas_tracing::test_utils::init_in_memory_tracing` (`#[serial]`, see
+  `analytics/tests/metrics_test.rs:72`), and assert `task_poll_count` and `task_poll_duration` are
+  emitted once, with the right count and a `task_family` property; also assert they are emitted
+  when the future is dropped before completion.
 - No test asserts span names (they are telemetry and carry no behavior); existing
   `sql_partition_spec` / `write_partition` tests must still pass unchanged, which covers that the
   wrapping did not alter control flow or error propagation (including the
@@ -215,5 +213,5 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    `view_instance('thread_spans', '<thread stream_id>')` only for the
    `check_non_nullable_columns` thread span. Not automated: needs a live daemon and real
    data.
-2. Query `measures` for `cgroup_cpu_usage_usec` and `task_family` poll metrics and confirm they
+2. Query `measures` for `cgroup_cpu_usage_usec` and `task_poll_*` metrics and confirm they
    are non-zero and increasing. Skip the cgroup check on a host without `/sys/fs/cgroup/cpu.stat`.
