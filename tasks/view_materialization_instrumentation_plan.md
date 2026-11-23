@@ -21,7 +21,8 @@ traces exist. No SQL-visible schema changes: spans are ordinary telemetry rows.
   `write`, `write_file` have spans. `execute_extract_query` / `plan_sorted_extract` do not.
 - `rust/analytics/src/lakehouse/write_partition.rs`: only `retire_expired_partitions*` have
   `#[span_fn]`. `write_partition_from_rows`, `write_partition_file`, `write_rows_and_track_times`,
-  `finalize_partition_write`, `insert_partition(_transaction)`, `retire_partitions`,
+  `finalize_partition_write`, `insert_partition(_transaction)`, `insert_partitions_replacing(_transaction)`
+  (`:637`, `:657`; called from `on_demand_jit.rs:459`), `retire_partitions`,
   `check_non_nullable_columns` have none.
 - `rust/analytics/src/lakehouse/block_partition_spec.rs:106,159,167` is the precedent for async
   spans on channel send and writer join: `instrument_named!(fut, "row_set_channel_send")`,
@@ -79,15 +80,18 @@ traces exist. No SQL-visible schema changes: spans are ordinary telemetry rows.
   inside `spawn_with_context`, which carries the span context, so they appear as the writer task's
   root.
 - `write_rows_and_track_times`: `#[span_fn]`; children `check_non_nullable_columns` (sync
-  `span_scope!`), `arrow_writer_write` and `arrow_writer_flush` (`instrument_named!` async spans:
-  the writer is an `AsyncArrowWriter`, so a `!Send` `span_scope!` guard cannot be held across the
-  await; encode CPU is covered by the writer task's poll-time metrics, see CPU attribution).
+  `span_scope!`, its guard scoped in a block around only the call, since the guard is `!Send` and
+  `arrow_writer.write(..).await` follows in the same loop body), `arrow_writer_write` and
+  `arrow_writer_flush` (`instrument_named!` async spans).
 - `finalize_partition_write`: `#[span_fn]`; children `arrow_writer_close` (`instrument_named!`;
-  final encode + upload completion) and `delete_empty_file` around the empty-file
-  `object_store.delete` calls.
+  final encode + upload completion) and `delete_empty_file` around the `object_store.delete` calls
+  at `write_partition.rs:989` and `:1046` only; the close-failure delete at `:1024` is left unspanned.
 - `insert_partition`, `insert_partition_transaction`: `#[span_fn]`; inside the latter,
   `db_pool.begin` (`write_partition.rs:504`, pool-acquire wait) as `sql_transaction_begin` and
   `transaction.commit` (`:616`) as `sql_transaction_commit`, both via `instrument_named!`.
+- `insert_partitions_replacing`, `insert_partitions_replacing_transaction`: `#[span_fn]`; inside the
+  latter, `db_pool.begin` (`:670`) as `sql_transaction_begin` and `transaction.commit` (`:720`) as
+  `sql_transaction_commit`, both via `instrument_named!`, mirroring `insert_partition_transaction`.
 - `retire_partitions`: `#[span_fn]`.
 
 `partition_source_data.rs` / `merge.rs`
@@ -101,34 +105,28 @@ traces exist. No SQL-visible schema changes: spans are ordinary telemetry rows.
 
 Daemon loop (`public/src/servers/maintenance.rs`)
 - Per-view cost already groups by view via the existing `materialize_partition_range` span.
-- Group drain: wrap the whole per-group spawn/drain loop in `run_update_groups`
-  (`maintenance.rs:84-103`) in one `instrument_named!` span named `update_group`.
+- Group drain: wrap the inner spawn/drain `loop` in `run_update_groups`
+  (`maintenance.rs:84-103`) in one `instrument_named!` span named `update_group`;
+  `fetch_group_context` is outside it.
 
 ### CPU attribution
 
-1. **Thread spans on sync CPU work.** `span_scope!` around `check_non_nullable_columns`, the only
-   genuinely synchronous CPU-heavy call on the write path. `ArrowWriter` write / flush / close are
-   async (`AsyncArrowWriter`) and DataFusion execution inside `stream.next()` is polled, so both
-   are covered by the per-task poll metrics below rather than by thread spans.
-2. **Per-task poll-time metrics.** A small future wrapper in `rust/analytics`
-   (`lakehouse/poll_timed.rs`) sums the time spent inside each `poll` and the poll count, and emits
-   them with `imetric!` (`task_poll_duration` in ns, `task_poll_count`) when the future completes
-   or is dropped, tagged with a `task_family` property. Metrics flow through the standard
-   micromegas stack; there is no periodic emitter, daemon task, or global state, so every process
-   that runs the wrapped work reports it, including flight-sql JIT writers. Task families: view
-   update (the per-view task in `materialize_all_views`), writer task, and block processor (the
-   per-block `block_processor.process` tasks at `block_partition_spec.rs:139`). The writer family
-   wraps `write_partition_file`'s body (`write_partition_from_rows` calls it) so no spawn site
-   changes and nothing is double-counted; it also wraps the `insert_partition` call in
-   `write_partition_from_rows` (sequential in the same task).
-3. **cgroup `cpu.stat`.** In `telemetry-sink/src/system_monitor.rs`, add
+1. **Thread span on sync CPU work.** `span_scope!` around `check_non_nullable_columns`, the only
+   genuinely synchronous CPU-heavy call on the write path. `AsyncArrowWriter` write / flush / close
+   are async, so a `!Send` `span_scope!` guard cannot be held across their awaits, and DataFusion
+   execution inside `stream.next()` is polled. CPU in DataFusion's tasks and parquet encode shows up
+   as the residue of `cgroup_cpu_usage_usec` over the traced work, and the existing
+   `task_tick_latency` (`rust/public/src/servers/cron_task.rs:75`) gives whole-pass wall latency per
+   cron tick.
+2. **cgroup `cpu.stat`.** In `telemetry-sink/src/system_monitor.rs`, add
    `emit_cgroup_cpu_stats()` next to `emit_process_memory_stats`, called from the slow-sample branch.
    It reads `/sys/fs/cgroup/cpu.stat` (cgroup v2), parses with a pure
    `parse_cpu_stat(&str) -> Option<CgroupCpuStat>` for testability (`pub struct CgroupCpuStat`
    with pub fields, `Debug`, `PartialEq`, since tests live in an external test crate), and emits `imetric!`s:
    `cgroup_cpu_usage_usec`, `cgroup_cpu_nr_throttled`, `cgroup_cpu_throttled_usec` (cumulative
-   counters, as the file reports them). A missing file (non-Linux, cgroup v1, no cgroup) emits
-   nothing.
+   counters, as the file reports them). `usage_usec` is required (`None` if absent);
+   `nr_throttled` and `throttled_usec` are `Option<u64>` fields, each emitted only when present. A
+   missing file (non-Linux, cgroup v1, no cgroup) emits nothing.
 
 ## Implementation Steps
 
@@ -139,10 +137,8 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    sync `span_scope!` on `check_non_nullable_columns`.
 4. `partition_source_data.rs`, `merge.rs`: spans listed above.
 5. `maintenance.rs`: `update_group` span.
-6. `poll_timed` wrapper and wrapping the three task families; helper test in a new file under
-   `rust/analytics/tests/`.
-7. Docs and changelog.
-8. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` in `rust/`.
+6. Docs and changelog.
+7. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` in `rust/`.
 
 ## Files to Modify
 
@@ -152,51 +148,32 @@ Daemon loop (`public/src/servers/maintenance.rs`)
 - `rust/telemetry-sink/tests/system_monitor_tests.rs`
 - `rust/analytics/src/lakehouse/partition_source_data.rs`
 - `rust/analytics/src/lakehouse/merge.rs`
-- `rust/analytics/src/lakehouse/block_partition_spec.rs` (wrap the per-block `block_processor.process`
-  tasks with the poll-timing wrapper)
-- `rust/analytics/src/lakehouse/poll_timed.rs` (new) and `lakehouse/mod.rs`
-- a new test file under `rust/analytics/tests/` (poll-timing wrapper)
-- `rust/public/src/servers/maintenance.rs` (`update_group` span, per-view task wrapper)
-- `CHANGELOG.md`, `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/memory-allocator.md` or
-  `mkdocs/docs/admin/telemetry-sink-tuning.md`
+- `rust/public/src/servers/maintenance.rs` (`update_group` span)
+- `CHANGELOG.md`, `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/memory-allocator.md`
 
 ## Trade-offs
 
 - **Spans per step vs. a profiler.** A sampling profiler would attribute CPU without code changes
   but is not available in the deployed container; spans and metrics flow through the existing
   telemetry path and are queryable in SQL.
-- **Generous now, prune later** (the issue's stated approach): the cost is telemetry volume per
-  batch (`extract_next_batch` etc. fire per record batch), accepted until real traces show which
-  spans are noise.
-- **Hand-rolled poll timing vs. `tokio-metrics`:** `TaskMonitor` accumulates in global state and
-  needs a periodic reader to turn it into telemetry; a wrapper that emits `imetric!` itself uses
-  the existing metrics stack and needs no emitter.
 
 ## Decisions
 
-- Metrics are emitted with `imetric!` by the code doing the work, not read periodically from a
-  global (user decision). No `tokio-metrics` dependency, no daemon `CronTask`.
-- Poll-wrapper overhead is accepted: two `Instant::now` calls per task poll, negligible next to
-  per-batch work.
+- No per-task poll-time metrics (user decision): the wrapper cannot see DataFusion's internally spawned tasks, task_tick_latency covers whole-pass latency, and cgroup cpu.stat covers throttling.
 
 ## Documentation
 
-- `mkdocs/docs/admin/maintenance.md`: list the new span names and the `task_poll_*` metrics.
-- `cgroup_cpu_*` metrics come from the shared system monitor in every process: document them
-  alongside the other shared-sampler metrics (`mkdocs/docs/admin/memory-allocator.md` "What to
-  watch" style, or `telemetry-sink-tuning.md`), with a short note on identifying throttling
+- `mkdocs/docs/admin/maintenance.md`: list the new span names.
+- `cgroup_cpu_*` metrics come from the system monitor in every process with system metrics enabled
+  (the default): document them in `mkdocs/docs/admin/memory-allocator.md`, with a short note on identifying throttling
   (`cgroup_cpu_nr_throttled` / `cgroup_cpu_throttled_usec` rising).
 - `CHANGELOG.md`: user-visible new metrics and spans.
 
 ## Testing Strategy
 
 - Unit (`rust/telemetry-sink/tests/system_monitor_tests.rs`): `parse_cpu_stat` over a realistic
-  `cpu.stat` body, a body missing fields, and garbage.
-- Unit (new file under `rust/analytics/tests/`): the poll-timing wrapper — run a multi-poll future
-  through it under `micromegas_tracing::test_utils::init_in_memory_tracing` (`#[serial]`, see
-  `analytics/tests/metrics_test.rs:72`), and assert `task_poll_count` and `task_poll_duration` are
-  emitted once, with the right count and a `task_family` property; also assert they are emitted
-  when the future is dropped before completion.
+  `cpu.stat` body, a body missing fields (asserts `usage_usec` absent gives `None`, and absent `nr_throttled` /
+  `throttled_usec` give `None` fields), and garbage.
 - No test asserts span names (they are telemetry and carry no behavior); existing
   `sql_partition_spec` / `write_partition` tests must still pass unchanged, which covers that the
   wrapping did not alter control flow or error propagation (including the
@@ -213,5 +190,5 @@ Daemon loop (`public/src/servers/maintenance.rs`)
    `view_instance('thread_spans', '<thread stream_id>')` only for the
    `check_non_nullable_columns` thread span. Not automated: needs a live daemon and real
    data.
-2. Query `measures` for `cgroup_cpu_usage_usec` and `task_poll_*` metrics and confirm they
-   are non-zero and increasing. Skip the cgroup check on a host without `/sys/fs/cgroup/cpu.stat`.
+2. Query `measures` for `cgroup_cpu_usage_usec` and confirm it is non-zero and increasing. Skip on a
+   host without `/sys/fs/cgroup/cpu.stat`.
