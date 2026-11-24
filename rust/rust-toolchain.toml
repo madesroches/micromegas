@@ -1,4 +1,4 @@
 [toolchain]
-channel = "1.99.0"
+channel = "1.100.0"
 components = ["clippy", "rustfmt", "rust-analyzer"]
 targets = ["wasm32-unknown-unknown", "x86_64-pc-windows-gnu"]

@@ -54,9 +54,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && corepack prepare yarn@4.14.1 --activate \
     && chmod -R a+rX /opt/corepack
 
-# Go 1.25 (matches grafana/go.mod and .github/workflows/grafana-plugin.yml)
+# Go 1.26 (matches grafana/go.mod and .github/workflows/grafana-plugin.yml)
 RUN GOARCH=$([ "$(uname -m)" = "x86_64" ] && echo "amd64" || echo "arm64") \
-    && curl -fsSL "https://go.dev/dl/go1.25.10.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xz
+    && curl -fsSL "https://go.dev/dl/go1.26.11.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Poetry, pytest (the latter for `build/test_rust_ci.py`, run on every rust.yml CI pass)
