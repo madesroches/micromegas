@@ -195,7 +195,7 @@ fn parse_pod_instance_bounded<'a>(
     for member_meta in &udt.members {
         if budget.nodes_left == 0 {
             bail!(
-                "corrupt metadata: udt {} exceeds {MAX_UDT_NODES_PER_INSTANCE} members per instance",
+                "corrupt metadata: instance member budget of {MAX_UDT_NODES_PER_INSTANCE} exhausted at udt {}",
                 udt.name
             );
         }
