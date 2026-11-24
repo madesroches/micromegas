@@ -128,6 +128,7 @@ files for cleanup` context), failing the write, since the following `insert_part
 - Register the cleanup path with a standalone autocommit INSERT rather than joining the partition-insert transaction.
 - Keep the inline delete for case 3 and the `write_rows_and_track_times` error path.
 - Propagate a cleanup-registration failure rather than warning.
+- AFK: Keep the `## Trade-offs` section and Design §2's "(see Trade-offs)" pointer as written; it holds the reasoning behind the first Decisions entry, and deleting it doesn't affect anything the issue requires.
 
 ## Testing Strategy
 
