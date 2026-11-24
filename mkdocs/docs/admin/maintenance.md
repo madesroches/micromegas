@@ -90,7 +90,7 @@ spans link to their view's work through `parent_span_id`.
 | Area | Spans |
 |---|---|
 | SQL view extract | `begin_write`, `execute_extract_query`, `plan_sorted_extract`, `extract_next_batch`, `transform_batch`, `transformer_transform`, `get_time_bounds`, `extract_channel_send`, `extract_writer_join`, `count_query_plan`, `count_query_collect` |
-| Partition writer | `write_partition_from_rows`, `write_partition_file`, `write_rows_and_track_times`, `arrow_writer_write`, `arrow_writer_flush`, `arrow_writer_close`, `finalize_partition_write`, `delete_empty_file`, `insert_partition`, `insert_partition_transaction`, `insert_partitions_replacing`, `insert_partitions_replacing_transaction`, `sql_transaction_begin`, `sql_transaction_commit`, `retire_partitions` |
+| Partition writer | `write_partition_from_rows`, `write_partition_file`, `write_rows_and_track_times`, `arrow_writer_write`, `arrow_writer_flush`, `arrow_writer_close`, `finalize_partition_write`, `sql_insert_temporary_file`, `insert_partition`, `insert_partition_transaction`, `insert_partitions_replacing`, `insert_partitions_replacing_transaction`, `sql_transaction_begin`, `sql_transaction_commit`, `retire_partitions` |
 | Merge | `merge_plan`, `merge_next_batch`, `get_time_bounds`, `merge_channel_send`, `merge_writer_join` |
 | Source data | `fetch_partition_source_data` |
 | Daemon loop | `update_group`: one update group's views, from the first spawn until the group drains (the barrier) |
@@ -129,7 +129,7 @@ The hourly task performs cleanup automatically:
   objects under `blobs/`) are removed per stream according to the two retention settings
   below; streams and processes with no blocks left, and lakehouse partitions, are removed
   once they are older than the default horizon.
-- **Deletes expired temporary files** left behind by query execution.
+- **Deletes expired temporary files** left behind by query execution and by empty partition writes.
 
 Raw payload retention is controlled by two [settings](authorization.md#settings), editable
 from **Admin → Settings** with no restart:
