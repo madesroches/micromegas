@@ -70,15 +70,12 @@ Existing callers change from `add_file_for_cleanup(transaction, …)` /
 `add_file_for_cleanup(&mut *transaction, …)`; the new call site passes `&lake.db_pool`.
 
 A failure to register propagates as an error (with the existing `adding file … to temporary
-files for cleanup` context), failing the write. A PG failure here means the following
-`insert_partition` would fail too, and propagating keeps the cleanup crash-safe rather than
-silently leaking the object.
+files for cleanup` context), failing the write, since the following `insert_partition` would fail too.
 
 ### 3. Signature change
 
-`finalize_partition_write` takes `db_pool: &sqlx::PgPool` (or `&DataLakeConnection`) in place of
-`object_store: Arc<dyn ObjectStore>` for cases 1–2; case 3 still needs the object store, so pass
-`&DataLakeConnection` and derive both from it (`lake.db_pool`, `lake.blob_storage.inner()`).
+`finalize_partition_write` takes `lake: &DataLakeConnection` in place of `object_store`, deriving
+`lake.db_pool` and `lake.blob_storage.inner()` from it.
 
 ### 4. Unchanged
 
@@ -101,7 +98,11 @@ silently leaking the object.
 4. `write_partition_file`: pass `lake` to `finalize_partition_write`.
 5. Add tests (below), run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p
    micromegas-analytics`.
-6. `CHANGELOG.md`: note the change (unreleased section).
+6. `CHANGELOG.md`: note the change (unreleased section); the entry ends with "**Minor breaking
+   change:** `add_file_for_cleanup` takes any `sqlx::PgExecutor` instead of `&mut Transaction`".
+7. `mkdocs/docs/admin/maintenance.md`: in the spans table "Partition writer" row, replace
+   `delete_empty_file` with `sql_insert_temporary_file`; widen the "Deletes expired temporary files"
+   bullet to also cover files left by empty partition writes.
 
 ## Files to Modify
 
@@ -110,6 +111,7 @@ silently leaking the object.
 - `rust/analytics/src/lakehouse/retire_partition_by_metadata_udf.rs`
 - `rust/analytics/tests/write_partition_tests.rs`
 - `CHANGELOG.md`
+- `mkdocs/docs/admin/maintenance.md`
 
 ## Trade-offs
 
@@ -117,23 +119,29 @@ silently leaking the object.
   Joining would need the cleanup path carried on `Partition` or alongside it through both
   consumers (`insert_partition` and `insert_partitions_replacing`), touching every `Partition`
   constructor. After step 1, the deferred path only fires for case 2 (row sets arrived but were
-  all empty), which is uncommon; one extra autocommit INSERT there is far cheaper than the S3
+  all empty), which is uncommon in the maintenance daemon (routine only for empty `thread_spans` JIT
+  partitions, which always send one row set); one extra autocommit INSERT there is far cheaper than the S3
   round trip it replaces, and still crash-safe. Not worth the plumbing.
-- **Keep the inline delete for case 3** rather than a standalone transaction: rare error path,
-  matching the issue's own allowance.
-- **Propagate vs. warn on registration failure**: propagate — see Design §2.
-
 ## Decisions
+
+- Register the cleanup path with a standalone autocommit INSERT rather than joining the partition-insert transaction.
+- Keep the inline delete for case 3 and the `write_rows_and_track_times` error path.
+- Propagate a cleanup-registration failure rather than warning.
 
 ## Documentation
 
-No user-facing docs cover this path; only `CHANGELOG.md`.
+`mkdocs/docs/admin/maintenance.md`: the spans table row for the partition writer swaps
+`delete_empty_file` for `sql_insert_temporary_file`, and the temporary-files cleanup bullet also
+covers empty partition files. Also `CHANGELOG.md`.
 
 ## Testing Strategy
 
 No-DB unit tests in `rust/analytics/tests/write_partition_tests.rs`, calling `write_partition_file`
-with a `DataLakeConnection` built from `PgPool::connect_lazy("postgres://user:pass@127.0.0.1:1/db")`
-(precedent: `merge_scan_partitioning_tests.rs:50`) and an `InMemory` blob store:
+with a `DataLakeConnection` built from a pool created with
+`PgPoolOptions::new().acquire_timeout(Duration::from_millis(50)).connect_lazy("postgres://user:pass@127.0.0.1:1/db")`
+(precedent: `rust/ingestion/tests/process_audience_cache_test.rs:21-25`; sqlx's default 30 s
+acquire timeout would otherwise hang test 2) and an `InMemory` blob store wrapped in
+`BlobStorage::new(store, Path::default())` so keys are unprefixed:
 
 1. **No row set (case 1)**: drop the sender without sending anything. Expect `Ok(partition)` with
    `file_path == None`, `num_rows == 0`, and an empty `InMemory` listing. Because any PG query
