@@ -122,17 +122,12 @@ files for cleanup` context), failing the write, since the following `insert_part
   all empty), which is uncommon in the maintenance daemon (routine only for empty `thread_spans` JIT
   partitions, which always send one row set); one extra autocommit INSERT there is far cheaper than the S3
   round trip it replaces, and still crash-safe. Not worth the plumbing.
+
 ## Decisions
 
 - Register the cleanup path with a standalone autocommit INSERT rather than joining the partition-insert transaction.
 - Keep the inline delete for case 3 and the `write_rows_and_track_times` error path.
 - Propagate a cleanup-registration failure rather than warning.
-
-## Documentation
-
-`mkdocs/docs/admin/maintenance.md`: the spans table row for the partition writer swaps
-`delete_empty_file` for `sql_insert_temporary_file`, and the temporary-files cleanup bullet also
-covers empty partition files. Also `CHANGELOG.md`.
 
 ## Testing Strategy
 
@@ -140,16 +135,18 @@ No-DB unit tests in `rust/analytics/tests/write_partition_tests.rs`, calling `wr
 with a `DataLakeConnection` built from a pool created with
 `PgPoolOptions::new().acquire_timeout(Duration::from_millis(50)).connect_lazy("postgres://user:pass@127.0.0.1:1/db")`
 (precedent: `rust/ingestion/tests/process_audience_cache_test.rs:21-25`; sqlx's default 30 s
-acquire timeout would otherwise hang test 2) and an `InMemory` blob store wrapped in
+acquire timeout would otherwise hang test 2) and an `InMemory` blob store wrapped in a small delete-counting `ObjectStore` wrapper (modelled on
+`CountingStore` in `rust/object-cache/tests/l1_store_tests.rs:113`; delegates to the inner store and
+counts deletes via `delete_stream`, which is how object_store 0.13's `delete` is routed) and then
 `BlobStorage::new(store, Path::default())` so keys are unprefixed:
 
 1. **No row set (case 1)**: drop the sender without sending anything. Expect `Ok(partition)` with
-   `file_path == None`, `num_rows == 0`, and an empty `InMemory` listing. Because any PG query
-   against the unreachable pool would error and registration errors propagate, success proves the
-   common path issues neither a DELETE-worth of cleanup nor a PG round trip.
+   `file_path == None`, `num_rows == 0`, an empty `InMemory` listing, and zero deletes
+   counted by the wrapper. Because any PG query against the unreachable pool would error and
+   registration errors propagate, success also proves the common path makes no PG round trip.
 2. **Only empty row sets (case 2)**: send a `PartitionRowSet` with a 0-row batch. Expect `Err`
    whose chain contains `temporary files for cleanup` (the deferred path was taken), and the
-   `InMemory` store still holds the uploaded object under `views/…` (no inline delete).
+   `InMemory` store still holds the uploaded object under `views/…` and the wrapper counted zero deletes.
 
 Existing `#[ignore]` DB tests are not extended (no live-DB test for a feature, per `CLAUDE.md`).
 
