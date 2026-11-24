@@ -481,3 +481,109 @@ fn parse_pod_instance_rejects_missing_reference_dependency() {
     let window = 123u64.to_ne_bytes();
     assert!(parse_pod_instance(&bump, &udts[0], &udts, &deps, &window).is_err());
 }
+
+#[test]
+fn parse_pod_instance_rejects_self_referential_udt() {
+    let bump = Bump::new();
+    let udts = vec![pod_udt("A", 8, vec![member("m", "A", 0, 8, false)])];
+    let deps = HashMap::new();
+    let window = [0u8; 8];
+    assert!(parse_pod_instance(&bump, &udts[0], &udts, &deps, &window).is_err());
+}
+
+#[test]
+fn parse_pod_instance_rejects_zero_size_self_referential_udt() {
+    let bump = Bump::new();
+    let udts = vec![pod_udt("A", 0, vec![member("m", "A", 0, 0, false)])];
+    let deps = HashMap::new();
+    let window: [u8; 0] = [];
+    assert!(parse_pod_instance(&bump, &udts[0], &udts, &deps, &window).is_err());
+}
+
+#[test]
+fn parse_pod_instance_rejects_mutually_recursive_udts() {
+    let bump = Bump::new();
+    let udts = vec![
+        pod_udt("A", 8, vec![member("b", "B", 0, 8, false)]),
+        pod_udt("B", 8, vec![member("a", "A", 0, 8, false)]),
+    ];
+    let deps = HashMap::new();
+    let window = [0u8; 8];
+    assert!(parse_pod_instance(&bump, &udts[0], &udts, &deps, &window).is_err());
+}
+
+#[test]
+fn parse_pod_instance_rejects_exponential_fan_out() {
+    let bump = Bump::new();
+    let depth = 10;
+    let mut udts = vec![];
+    for level in 0..depth {
+        let next = format!("T{}", level + 1);
+        let members = (0..8)
+            .map(|i| member(&format!("m{i}"), &next, 0, 8, false))
+            .collect();
+        udts.push(pod_udt(&format!("T{level}"), 8, members));
+    }
+    udts.push(pod_udt(
+        &format!("T{depth}"),
+        8,
+        vec![member("v", "u64", 0, 8, false)],
+    ));
+    let deps = HashMap::new();
+    let window = [0u8; 8];
+    assert!(parse_pod_instance(&bump, &udts[0], &udts, &deps, &window).is_err());
+}
+
+#[test]
+fn parse_pod_instance_accepts_legitimate_nesting() {
+    let bump = Bump::new();
+    let udts = vec![
+        pod_udt(
+            "Outer",
+            16,
+            vec![
+                member("tag", "u32", 0, 4, false),
+                member("mid", "Mid", 4, 12, false),
+            ],
+        ),
+        pod_udt(
+            "Mid",
+            12,
+            vec![
+                member("flag", "u32", 0, 4, false),
+                member("leaf", "Leaf", 4, 8, false),
+            ],
+        ),
+        pod_udt("Leaf", 8, vec![member("v", "u64", 0, 8, false)]),
+    ];
+    let mut window = vec![];
+    window.extend_from_slice(&1u32.to_ne_bytes());
+    window.extend_from_slice(&2u32.to_ne_bytes());
+    window.extend_from_slice(&42u64.to_ne_bytes());
+    let deps = HashMap::new();
+    let value = parse_pod_instance(&bump, &udts[0], &udts, &deps, &window).unwrap();
+    let Value::Object(outer) = value else {
+        panic!("expected object");
+    };
+    assert_eq!(outer.get::<u32>("tag").unwrap(), 1);
+    let Value::Object(mid) = *outer.get_ref("mid").unwrap() else {
+        panic!("expected nested object");
+    };
+    assert_eq!(mid.get::<u32>("flag").unwrap(), 2);
+    let Value::Object(leaf) = *mid.get_ref("leaf").unwrap() else {
+        panic!("expected nested object");
+    };
+    assert_eq!(leaf.get::<u64>("v").unwrap(), 42);
+}
+
+#[test]
+fn parse_object_buffer_rejects_self_referential_udt() {
+    let bump = Bump::new();
+    let udts = vec![pod_udt("A", 8, vec![member("m", "A", 0, 8, false)])];
+    let mut buffer = vec![0u8];
+    buffer.extend_from_slice(&[0u8; 8]);
+    let deps = HashMap::new();
+    let custom_readers = CustomReaderMap::new();
+    let res = parse_object_buffer(&bump, &custom_readers, &deps, &udts, &buffer, |_| Ok(true));
+    assert!(res.is_err());
+}

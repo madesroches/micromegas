@@ -152,6 +152,17 @@ fn parse_custom_instance<'a>(
     }
 }
 
+// Stream metadata is untrusted: a self-referential or heavily fanned-out type
+// would otherwise overflow the stack or exhaust memory, both of which abort
+// the process. Real types nest a few levels with tens of members.
+const MAX_UDT_NESTING_DEPTH: usize = 32;
+const MAX_UDT_NODES_PER_INSTANCE: usize = 4096;
+
+struct ParseBudget {
+    depth: usize,
+    nodes_left: usize,
+}
+
 pub fn parse_pod_instance<'a>(
     bump: &'a Bump,
     udt: &'a UserDefinedType,
@@ -159,8 +170,36 @@ pub fn parse_pod_instance<'a>(
     dependencies: &HashMap<u64, Value<'a>>,
     object_window: &'a [u8],
 ) -> Result<Value<'a>> {
+    let mut budget = ParseBudget {
+        depth: 0,
+        nodes_left: MAX_UDT_NODES_PER_INSTANCE,
+    };
+    parse_pod_instance_bounded(bump, udt, udts, dependencies, object_window, &mut budget)
+}
+
+fn parse_pod_instance_bounded<'a>(
+    bump: &'a Bump,
+    udt: &'a UserDefinedType,
+    udts: &'a [UserDefinedType],
+    dependencies: &HashMap<u64, Value<'a>>,
+    object_window: &'a [u8],
+    budget: &mut ParseBudget,
+) -> Result<Value<'a>> {
+    if budget.depth >= MAX_UDT_NESTING_DEPTH {
+        bail!(
+            "corrupt metadata: udt {} nesting exceeds {MAX_UDT_NESTING_DEPTH} levels",
+            udt.name
+        );
+    }
     let mut members = bumpalo::collections::Vec::with_capacity_in(udt.members.len(), bump);
     for member_meta in &udt.members {
+        if budget.nodes_left == 0 {
+            bail!(
+                "corrupt metadata: udt {} exceeds {MAX_UDT_NODES_PER_INSTANCE} members per instance",
+                udt.name
+            );
+        }
+        budget.nodes_left -= 1;
         let name: &'a str = member_meta.name.as_str();
         // Bounds the reference-key read and every intrinsic read below against
         // the object window (member metadata is untrusted, same as the payload).
@@ -231,14 +270,17 @@ pub fn parse_pod_instance<'a>(
                                 object_window.len()
                             ),
                         };
-                        parse_pod_instance(
+                        budget.depth += 1;
+                        let nested = parse_pod_instance_bounded(
                             bump,
                             member_udt,
                             udts,
                             dependencies,
                             &object_window[member_meta.offset..udt_end],
-                        )
-                        .with_context(|| "parse_pod_instance")?
+                            budget,
+                        );
+                        budget.depth -= 1;
+                        nested.with_context(|| "parse_pod_instance")?
                     } else {
                         bail!("unknown member type {}", non_intrinsic_member_type_name);
                     }
