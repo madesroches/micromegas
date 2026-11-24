@@ -143,7 +143,7 @@ impl RetirePartitionByMetadata {
         if let Some(file_path) = file_path_opt {
             let file_size: i64 = partition_row.try_get("file_size")?;
             // Add to temporary files for cleanup (expires in 1 hour)
-            add_file_for_cleanup(transaction, &file_path, file_size).await?;
+            add_file_for_cleanup(&mut **transaction, &file_path, file_size).await?;
         }
 
         // Remove from active partitions

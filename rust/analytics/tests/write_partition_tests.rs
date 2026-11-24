@@ -2,16 +2,28 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::arrow::array::{Int32Array, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::parquet::arrow::AsyncArrowWriter;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use micromegas_analytics::lakehouse::async_parquet_writer::AsyncParquetWriter;
+use micromegas_analytics::lakehouse::view::ViewMetadata;
 use micromegas_analytics::lakehouse::write_partition::{
-    PartitionRowSet, write_rows_and_track_times,
+    PartitionRowSet, write_partition_file, write_rows_and_track_times,
 };
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_telemetry::blob_storage::BlobStorage;
 use object_store::buffered::BufWriter;
 use object_store::memory::InMemory;
 use object_store::path::Path;
+use object_store::{
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult,
+};
+use sqlx::postgres::PgPoolOptions;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, atomic::AtomicI64};
+use std::time::Duration;
 
 fn one_column_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]))
@@ -249,4 +261,163 @@ async fn write_rows_accepts_null_when_field_declared_nullable() {
     )
     .await
     .expect("a NULL under a declared nullable column must succeed");
+}
+
+/// Delegates to an `InMemory` store and counts deletes (`delete` is routed through
+/// `delete_stream` in object_store 0.13).
+#[derive(Debug)]
+struct DeleteCountingStore {
+    inner: Arc<InMemory>,
+    deletes: Arc<AtomicUsize>,
+}
+
+impl std::fmt::Display for DeleteCountingStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DeleteCountingStore({})", self.inner)
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for DeleteCountingStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        let deletes = self.deletes.clone();
+        self.inner
+            .delete_stream(locations)
+            .inspect(move |_| {
+                deletes.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed()
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+/// A lake whose Postgres pool can never connect: any query fails after a short acquire timeout.
+fn make_unreachable_lake() -> (DataLakeConnection, Arc<InMemory>, Arc<AtomicUsize>) {
+    let inner = Arc::new(InMemory::new());
+    let deletes = Arc::new(AtomicUsize::new(0));
+    let store = Arc::new(DeleteCountingStore {
+        inner: inner.clone(),
+        deletes: deletes.clone(),
+    });
+    let blob_storage = Arc::new(BlobStorage::new(store, Path::default()));
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(50))
+        .connect_lazy("postgres://user:pass@127.0.0.1:1/db")
+        .expect("lazy pool creation is infallible");
+    (DataLakeConnection::new(pool, blob_storage), inner, deletes)
+}
+
+fn test_view_metadata() -> ViewMetadata {
+    ViewMetadata {
+        view_set_name: Arc::new("test_view".to_string()),
+        view_instance_id: Arc::new("global".to_string()),
+        file_schema_hash: vec![0],
+    }
+}
+
+async fn run_write_partition_file(
+    lake: &DataLakeConnection,
+    rx: tokio::sync::mpsc::Receiver<Result<PartitionRowSet, anyhow::Error>>,
+) -> anyhow::Result<micromegas_analytics::lakehouse::partition::Partition> {
+    let t0 = Utc::now();
+    let logger: Arc<dyn micromegas_analytics::response_writer::Logger> =
+        Arc::new(ResponseWriter::new(None));
+    write_partition_file(
+        lake,
+        test_view_metadata(),
+        one_column_schema(),
+        TimeRange::new(t0, t0 + TimeDelta::seconds(1)),
+        vec![],
+        None,
+        rx,
+        logger,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn empty_partition_without_row_sets_touches_neither_store_nor_db() {
+    let (lake, inner, deletes) = make_unreachable_lake();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<PartitionRowSet, anyhow::Error>>(1);
+    drop(tx);
+
+    let partition = run_write_partition_file(&lake, rx)
+        .await
+        .expect("an empty partition needs no DB round trip");
+
+    assert!(partition.file_path.is_none());
+    assert_eq!(partition.num_rows, 0);
+    assert_eq!(inner.list(None).count().await, 0);
+    assert_eq!(deletes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn zero_row_file_is_deleted_inline_when_cleanup_registration_fails() {
+    let (lake, inner, deletes) = make_unreachable_lake();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<PartitionRowSet, anyhow::Error>>(1);
+    let t0 = Utc::now();
+    let empty_rows = RecordBatch::new_empty(one_column_schema());
+    tx.send(Ok(PartitionRowSet::new(
+        TimeRange::new(t0, t0 + TimeDelta::seconds(1)),
+        empty_rows,
+        None,
+    )))
+    .await
+    .expect("send");
+    drop(tx);
+
+    let err = run_write_partition_file(&lake, rx)
+        .await
+        .expect_err("registering the file for cleanup needs the unreachable DB");
+
+    assert!(
+        format!("{err:#}").contains("temporary files for cleanup"),
+        "unexpected error: {err:#}"
+    );
+    assert_eq!(inner.list(None).count().await, 0);
+    assert_eq!(deletes.load(Ordering::SeqCst), 1);
 }

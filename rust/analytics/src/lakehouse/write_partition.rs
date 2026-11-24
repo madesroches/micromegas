@@ -27,11 +27,10 @@ use super::{partition::Partition, partition_source_data, view::ViewMetadata};
 ///
 /// Files added to temporary_files will be automatically deleted by the cleanup process
 /// after the expiration time. The default expiration is 1 hour from now.
-pub async fn add_file_for_cleanup(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    file_path: &str,
-    file_size: i64,
-) -> Result<()> {
+pub async fn add_file_for_cleanup<'c, E>(executor: E, file_path: &str, file_size: i64) -> Result<()>
+where
+    E: sqlx::PgExecutor<'c>,
+{
     let expiration = Utc::now()
         + TimeDelta::try_hours(1)
             .with_context(|| "calculating expiration time for temporary file")?;
@@ -41,7 +40,7 @@ pub async fn add_file_for_cleanup(
             .bind(file_path)
             .bind(file_size)
             .bind(expiration)
-            .execute(&mut **transaction),
+            .execute(executor),
         "sql_insert_temporary_file"
     )
     .await
@@ -117,7 +116,7 @@ async fn retire_expired_partitions_batch(
         let file_size: i64 = row.try_get("file_size")?;
         if let Some(path) = file_path {
             debug!("retiring expired partition file {path} ({file_size} bytes)");
-            add_file_for_cleanup(&mut transaction, &path, file_size).await?;
+            add_file_for_cleanup(&mut *transaction, &path, file_size).await?;
         }
     }
     transaction.commit().await.with_context(|| "commit")?;
@@ -337,7 +336,7 @@ pub async fn retire_partitions(
                     "adding out of date partition {path} to temporary files to be deleted"
                 ))
                 .await?;
-            add_file_for_cleanup(transaction, &path, file_size).await?;
+            add_file_for_cleanup(&mut **transaction, &path, file_size).await?;
             file_paths.push(path);
         }
     }
@@ -965,6 +964,31 @@ pub async fn write_rows_and_track_times(
     })
 }
 
+/// Disposes of the object-store file of a partition that turned out empty.
+///
+/// The delete is deferred to the batched `temporary_files` cleanup so the object-store round
+/// trip stays off the materialization path. The writer bumps `byte_counter` before handing bytes
+/// to the store, so a zero counter means the object can't exist and there is nothing to clean up.
+async fn release_empty_file(
+    lake: &DataLakeConnection,
+    file_path: &str,
+    byte_counter: &Arc<AtomicI64>,
+) -> Result<()> {
+    let bytes_written = byte_counter.load(std::sync::atomic::Ordering::Relaxed);
+    if bytes_written == 0 {
+        return Ok(());
+    }
+    if let Err(register_err) = add_file_for_cleanup(&lake.db_pool, file_path, bytes_written).await {
+        // No caller receives this file path on error, so nothing else would ever remove it.
+        let path = object_store::path::Path::from(file_path);
+        if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
+            warn!("failed to delete unregistered empty file {file_path}: {delete_err}");
+        }
+        return Err(register_err);
+    }
+    Ok(())
+}
+
 /// Finalizes the partition write, closing the file and creating metadata.
 #[expect(clippy::too_many_arguments)]
 #[span_fn]
@@ -976,7 +1000,7 @@ async fn finalize_partition_write(
     byte_counter: &Arc<AtomicI64>,
     logger: &Arc<dyn Logger>,
     desc: &str,
-    object_store: Arc<dyn object_store::ObjectStore>,
+    lake: &DataLakeConnection,
 ) -> Result<PartitionWriteResult> {
     if let Some(event_time_range) = event_time_range {
         // Potentially non-empty partition: close the file and get metadata
@@ -997,13 +1021,7 @@ async fn finalize_partition_write(
                         .await
                         .with_context(|| "writing log entry")?;
 
-                    // Delete the empty file
-                    let path = object_store::path::Path::from(file_path.as_str());
-                    if let Err(delete_err) =
-                        instrument_named!(object_store.delete(&path), "delete_empty_file").await
-                    {
-                        warn!("failed to delete empty file {}: {}", file_path, delete_err);
-                    }
+                    release_empty_file(lake, &file_path, byte_counter).await?;
 
                     return Ok(PartitionWriteResult {
                         num_rows: 0,
@@ -1036,7 +1054,7 @@ async fn finalize_partition_write(
                     file_path
                 );
                 let path = object_store::path::Path::from(file_path.as_str());
-                if let Err(delete_err) = object_store.delete(&path).await {
+                if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
                     warn!(
                         "failed to delete partial file {}: {}",
                         file_path, delete_err
@@ -1046,8 +1064,8 @@ async fn finalize_partition_write(
             }
         }
     } else {
-        // Empty partition: no data was written, but the arrow writer may have written
-        // a partial file header. Drop the writer and delete any partial file.
+        // Empty partition: no row set was ever handed to the writer, so there is no file to
+        // keep; `release_empty_file` registers cleanup only if bytes were written.
         drop(arrow_writer);
 
         logger
@@ -1055,10 +1073,7 @@ async fn finalize_partition_write(
             .await
             .with_context(|| "writing log entry")?;
 
-        // Try to delete any partial file that may have been created
-        // (ignore errors - file may not exist if no header was written)
-        let path = object_store::path::Path::from(file_path.as_str());
-        let _ = instrument_named!(object_store.delete(&path), "delete_empty_file").await;
+        release_empty_file(lake, &file_path, byte_counter).await?;
 
         Ok(PartitionWriteResult {
             num_rows: 0,
@@ -1228,7 +1243,7 @@ pub async fn write_partition_file(
         &byte_counter,
         &logger,
         &desc,
-        lake.blob_storage.inner(),
+        lake,
     )
     .await?;
 
