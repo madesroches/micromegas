@@ -9,7 +9,7 @@ client through `/ingestion/insert_stream`, so it is untrusted. A self-referentia
 (`A { m: A @ 0 }`) overflows the stack, and a stack overflow aborts the whole process
 (flight-sql-srv, maintenance daemon, or monolith) on every retry. This plan bounds the recursion
 so hostile metadata produces an ordinary `Err`, which the existing corrupt-block handling already
-logs and skips.
+logs and skips during materialization (or fails that one query).
 
 ## Current State
 - `rust/transit/src/parser.rs:155` `parse_pod_instance(bump, udt, udts, dependencies, window)` is
@@ -56,10 +56,6 @@ fn parse_pod_instance_bounded<'a>(..., budget: &mut ParseBudget) -> Result<Value
 - Both limits are far above any real type: depth of a handful, and tens of members. Exceeding
   either one means the metadata is malformed, not that a client is being stingy.
 
-No cycle check at metadata load time. The depth limit already turns cycles into errors at the
-one place they hurt, and a load-time graph walk would add a second code path for the same
-property (see Trade-offs).
-
 ## Implementation Steps
 1. `rust/transit/src/parser.rs`: add the two constants and `ParseBudget`. Move the body of
    `parse_pod_instance` into `parse_pod_instance_bounded`, adding the depth check on entry, the
@@ -87,8 +83,6 @@ property (see Trade-offs).
   input. The budget is one counter in the same struct, so it's included.
 - **Constants vs. configuration.** These are sanity limits on malformed input, not tuning knobs,
   so they're hard-coded.
-
-## Decisions
 
 ## Documentation
 No user-facing docs describe transit parsing internals. No mkdocs change is needed.
