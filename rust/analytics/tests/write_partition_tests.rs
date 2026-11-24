@@ -396,7 +396,7 @@ async fn empty_partition_without_row_sets_touches_neither_store_nor_db() {
 }
 
 #[tokio::test]
-async fn zero_row_file_is_registered_for_deferred_cleanup_not_deleted() {
+async fn zero_row_file_is_deleted_inline_when_cleanup_registration_fails() {
     let (lake, inner, deletes) = make_unreachable_lake();
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<PartitionRowSet, anyhow::Error>>(1);
     let t0 = Utc::now();
@@ -418,15 +418,6 @@ async fn zero_row_file_is_registered_for_deferred_cleanup_not_deleted() {
         format!("{err:#}").contains("temporary files for cleanup"),
         "unexpected error: {err:#}"
     );
-    let objects: Vec<_> = inner.list(None).collect().await;
-    assert_eq!(objects.len(), 1);
-    assert!(
-        objects[0]
-            .as_ref()
-            .expect("listing")
-            .location
-            .as_ref()
-            .starts_with("views/")
-    );
-    assert_eq!(deletes.load(Ordering::SeqCst), 0);
+    assert_eq!(inner.list(None).count().await, 0);
+    assert_eq!(deletes.load(Ordering::SeqCst), 1);
 }

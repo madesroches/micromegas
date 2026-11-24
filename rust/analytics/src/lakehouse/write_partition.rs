@@ -978,7 +978,15 @@ async fn release_empty_file(
     if bytes_written == 0 {
         return Ok(());
     }
-    add_file_for_cleanup(&lake.db_pool, file_path, bytes_written).await
+    if let Err(register_err) = add_file_for_cleanup(&lake.db_pool, file_path, bytes_written).await {
+        // No caller receives this file path on error, so nothing else would ever remove it.
+        let path = object_store::path::Path::from(file_path);
+        if let Err(delete_err) = lake.blob_storage.inner().delete(&path).await {
+            warn!("failed to delete unregistered empty file {file_path}: {delete_err}");
+        }
+        return Err(register_err);
+    }
+    Ok(())
 }
 
 /// Finalizes the partition write, closing the file and creating metadata.
@@ -1056,8 +1064,8 @@ async fn finalize_partition_write(
             }
         }
     } else {
-        // Empty partition: no data was written, but the arrow writer may have written
-        // a partial file header. Drop the writer and delete any partial file.
+        // Empty partition: no row set was ever handed to the writer, so there is no file to
+        // keep; `release_empty_file` registers cleanup only if bytes were written.
         drop(arrow_writer);
 
         logger
