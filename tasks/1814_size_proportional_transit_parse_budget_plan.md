@@ -19,14 +19,20 @@ parse work and arena use are linear in the block's byte count.
   `ParseBudget { depth: 0, nodes_left: MAX_UDT_NODES_PER_INSTANCE }` and delegates to
   `parse_pod_instance_bounded`. That function decrements `nodes_left` once per visited member
   (intrinsic, reference, or nested) and fails with a `corrupt metadata` error at zero.
-- Every caller passes `parse_pod_instance` a window sized to the UDT being parsed:
-  - `read_dependencies` passes `&buffer[offset..object_end]`, with `object_end` set to
-    `offset + udt.size`.
-  - `parse_object_buffer` does the same for static-size objects.
+- Callers of `parse_pod_instance` pass a window sized to the UDT being parsed:
+  - `read_dependencies` passes `&buffer[offset..object_end]` in its POD branch only, with
+    `object_end` set to `offset + udt.size`. Its `StaticStringDependency` and custom-reader
+    branches pass `advance_window(buffer, offset)`, the whole remaining buffer, and then jump
+    `offset` to `object_end`. `parse_property_set` (registered for the size-0
+    `PropertySetDependency`) bounds `nb_properties` against that unbounded window, so a
+    property set with a small declared size can parse properties spanning the rest of the
+    buffer, and later objects re-parse them: O(B^2).
+  - `parse_object_buffer` passes `&buffer[offset..object_end]` for static-size objects.
   - The custom readers in `rust/tracing/src/parsing.rs` pass `StaticStringRef`/`StringId`
     windows of `metadata.size` and `Property` windows of `property_layout.size`.
 
-  So the window length is the object's byte footprint.
+  So for the POD and `parse_object_buffer` paths the window length is the object's byte
+  footprint.
 - `rust/analytics/src/payload.rs` `parse_block` uses one `Bump` for the whole block. Nothing
   is freed between objects.
 - Real layouts are sparse. Each intrinsic leaf occupies at least 1 byte, a reference at least
@@ -60,8 +66,8 @@ for {len}-byte instance exhausted at udt {name}`).
 **Bound.** Objects in a block are disjoint, and each one costs at least 2 buffer bytes (type
 index plus a nonzero static size; size 0 means dynamic, which takes the custom-reader path). So
 the visited members across a block are at most `2·B + 8·(B/2) = 6·B` for a buffer of `B` bytes.
-Parse work and arena growth become linear in the decompressed block size. The same argument
-covers `read_dependencies`. Bounding the block's own LZ4 decompression (`decompress` in
+Parse work and arena growth become linear in the decompressed block size. `read_dependencies` has the same
+bound once its non-POD branches get bounded windows (step 2). Bounding the block's own LZ4 decompression (`decompress` in
 `rust/telemetry/src/compression.rs` has no output cap) is a separate amplification vector and
 out of scope here.
 
@@ -71,11 +77,19 @@ reasoning #1813 used against load-time cycle rejection.
 
 ## Implementation Steps
 1. `rust/transit/src/parser.rs`: add `UDT_NODES_PER_BYTE`, `UDT_NODES_SLACK`, and
-   `instance_node_budget`. In `parse_pod_instance`, seed `nodes_left` with it. Carry the
-   initial budget in `ParseBudget`, or pass it to the error site, so the exhaustion message
-   can report it. Update the comment above the constants.
-2. `rust/transit/tests/test_corrupt_input.rs`: add the regression tests below.
-3. `CHANGELOG.md`: Unreleased fix entry citing #1814 (done by the `pr` step).
+   `instance_node_budget`. In `parse_pod_instance`, seed `nodes_left` with it. Add
+   `initial_nodes` and `instance_len` to `ParseBudget`, set in `parse_pod_instance` and used in
+   the exhaustion `bail!` to report `{n}` and `{len}`. In `parse_pod_instance_bounded`, reserve
+   `udt.members.len().min(budget.nodes_left)` instead of `udt.members.len()` in
+   `with_capacity_in`, so the reservation isn't set by the metadata. Update the comment above
+   the constants.
+2. `rust/transit/src/parser.rs` `read_dependencies`: pass `&buffer[offset..object_end]` to the
+   `StaticStringDependency` branch and to custom readers (as `parse_object_buffer` already
+   does), and remove the now-stale comments there. Rust and Unreal writers emit exact sizes
+   (`PropertySetDependency::get_value_size`, `StaticStringDependency::get_value_size`, Unreal
+   `Serializer<PropertySetDependency>::GetSize`), so bounding is safe for real data.
+3. `rust/transit/tests/test_corrupt_input.rs`: add the regression tests below.
+4. `CHANGELOG.md`: Unreleased fix entry citing #1814 (done by the `pr` step).
 
 ## Files to Modify
 - `rust/transit/src/parser.rs`
@@ -95,6 +109,7 @@ reasoning #1813 used against load-time cycle rejection.
   knobs, so they stay hard-coded, as in #1813.
 
 ## Decisions
+None.
 
 ## Documentation
 No user-facing docs cover transit parsing internals. No mkdocs change is needed.
@@ -103,13 +118,17 @@ No user-facing docs cover transit parsing internals. No mkdocs change is needed.
 The bug is reachable in the wild through ingestion, and unit tests with constructed UDTs and
 buffers reproduce it exactly. In `rust/transit/tests/test_corrupt_input.rs`, each test pins
 #1814:
-- `parse_pod_instance_rejects_fan_out_on_tiny_object`: the issue's shape. `T0 { v: u8 }` and
-  `T1..T3`, where each has 16 members of the previous type at offset 0, size 1, against a
-  1-byte window. Returns `Err`. Under the #1813 constant cap it parsed thousands of values
-  successfully, so this test fails before the fix.
+- `parse_pod_instance_rejects_fan_out_on_tiny_object`: the issue's shape. `T0 { v: u8 }`,
+  `T1` and `T2`, where `T1` and `T2` each have 16 members of the previous type at offset 0,
+  size 1, parsed as `T2` against a 1-byte window. That is 528 visited members: under the
+  #1813 cap of 4096 it returns `Ok`, and under the new 1-byte budget of 10 it returns `Err`,
+  so this test fails before the fix.
 - `parse_object_buffer_rejects_fan_out_on_tiny_objects`: the same types as a buffer of many
-  2-byte objects (`[type_index, 0]` repeated) through `parse_object_buffer` returns `Err` on the
+  2-byte objects (`[idx_of_T2, 0]` repeated) through `parse_object_buffer` returns `Err` on the
   first object.
+- `read_dependencies_rejects_dependency_larger_than_declared_size`: a dependency (e.g.
+  `PropertySetDependency` through the custom reader, or `StaticStringDependency`) whose
+  declared size is smaller than its payload returns `Err`.
 - `parse_pod_instance_accepts_dense_u8_struct`: a 64-byte UDT of 64 `u8` members parses, which
   confirms the densest legitimate layout fits the budget.
 - The existing `parse_pod_instance_accepts_legitimate_nesting` and the `rust/tracing` /
