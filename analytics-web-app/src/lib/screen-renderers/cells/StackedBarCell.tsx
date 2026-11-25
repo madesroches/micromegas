@@ -138,6 +138,8 @@ export interface StackedBarBarLayout {
   labelY: number
   segments: StackedBarSegmentLayout[]
   totalLabel: StackedBarTotalLabel | null
+  /** The category's full clickable band in plot-svg coordinates. */
+  hitBand: { x: number; y: number; width: number; height: number }
 }
 
 export interface StackedBarValueTick {
@@ -321,7 +323,19 @@ export function buildStackedBarLayout(
       }
     }
 
-    return { category, displayLabel, x, width: barWidth, total, labelX, rowY: 0, labelY: 0, segments, totalLabel }
+    return {
+      category,
+      displayLabel,
+      x,
+      width: barWidth,
+      total,
+      labelX,
+      rowY: 0,
+      labelY: 0,
+      segments,
+      totalLabel,
+      hitBand: { x: yAxisWidth + band * c, y: 0, width: band, height },
+    }
   })
 
   return {
@@ -405,6 +419,7 @@ export function buildHorizontalBarLayout(
       labelY,
       segments,
       totalLabel,
+      hitBand: { x: 0, y: rowY, width, height: ROW_HEIGHT },
     }
   })
 
@@ -482,6 +497,23 @@ export function buildBarSelection(
     ...(columns.series ? { [columns.series]: data.series[hit.seriesIndex].name } : {}),
     [columns.value]: data.values[hit.categoryIndex][hit.seriesIndex],
   }
+}
+
+/** Series index of the segment nearest to `pos` along the value axis; null when the bar has no segments. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function nearestSegmentSeries(bar: StackedBarBarLayout, orientation: BarOrientation, pos: number): number | null {
+  let best: number | null = null
+  let bestDist = Infinity
+  for (const seg of bar.segments) {
+    const lo = orientation === 'vertical' ? seg.y : seg.x
+    const hi = lo + (orientation === 'vertical' ? seg.height : seg.width)
+    const dist = pos < lo ? lo - pos : pos > hi ? pos - hi : 0
+    if (dist < bestDist) {
+      best = seg.seriesIndex
+      bestDist = dist
+    }
+  }
+  return best
 }
 
 // =============================================================================
@@ -569,9 +601,49 @@ function StackedBarView({
 
   const handleBackgroundClick = onBackgroundClick
     ? (e: React.MouseEvent<SVGSVGElement>) => {
-        if (!(e.target as Element).closest('[data-segment]')) onBackgroundClick()
+        if (!(e.target as Element).closest('[data-bar-hit]')) onBackgroundClick()
       }
     : undefined
+
+  const handleBandClick = onSegmentClick
+    ? (bi: number, e: React.MouseEvent<SVGElement>) => {
+        const svg = e.currentTarget.ownerSVGElement
+        const bar = layout?.bars[bi]
+        if (!svg || !bar) return
+        const rect = svg.getBoundingClientRect()
+        const pos = horizontal ? e.clientX - rect.left : e.clientY - rect.top
+        const seriesIndex = nearestSegmentSeries(bar, orientation, pos)
+        if (seriesIndex !== null) onSegmentClick({ categoryIndex: bi, seriesIndex })
+      }
+    : undefined
+
+  const hitRects =
+    layout && handleBandClick
+      ? layout.bars.map((bar, bi) =>
+          bar.segments.length > 0 ? (
+            <rect
+              key={bi}
+              x={bar.hitBand.x}
+              y={bar.hitBand.y}
+              width={bar.hitBand.width}
+              height={bar.hitBand.height}
+              fill="transparent"
+              data-bar-hit
+              className="cursor-pointer"
+              onClick={(e) => handleBandClick(bi, e)}
+            />
+          ) : null,
+        )
+      : null
+
+  const labelHitProps = (bi: number) =>
+    handleBandClick && layout && layout.bars[bi].segments.length > 0
+      ? {
+          'data-bar-hit': true,
+          className: 'cursor-pointer',
+          onClick: (e: React.MouseEvent<SVGElement>) => handleBandClick(bi, e),
+        }
+      : {}
 
   const segmentColor = (c: number, s: number) => resolvedData.categoryColors?.[c] ?? resolvedData.series[s].color
 
@@ -589,7 +661,7 @@ function StackedBarView({
               <path
                 key={seg.seriesIndex}
                 d={d}
-                data-segment
+                data-bar-hit
                 fill={color}
                 className="cursor-pointer transition-opacity hover:opacity-85"
                 style={dimmed ? { opacity: DIM_FILL } : undefined}
@@ -665,6 +737,7 @@ function StackedBarView({
                 viewBox={`0 0 ${layout.contentWidth} ${AXIS_HEIGHT}`}
                 className="sticky top-0 z-10 block bg-app-panel"
                 data-testid="bar-axis"
+                onClick={handleBackgroundClick}
               >
                 <line
                   x1={layout.labelColumnWidth}
@@ -696,6 +769,7 @@ function StackedBarView({
                 onClick={handleBackgroundClick}
                 onMouseLeave={() => setHover(null)}
               >
+                {hitRects}
                 {layout.valueTicks.map((tick, i) => (
                   <line
                     key={i}
@@ -717,6 +791,7 @@ function StackedBarView({
                     fontSize={11}
                     textAnchor="end"
                     dominantBaseline="middle"
+                    {...labelHitProps(bi)}
                   >
                     <title>{bar.category}</title>
                     {bar.displayLabel}
@@ -734,6 +809,7 @@ function StackedBarView({
               onClick={handleBackgroundClick}
               onMouseLeave={() => setHover(null)}
             >
+              {hitRects}
               {layout.valueTicks.map((tick, i) => (
                 <g key={i} className="pointer-events-none">
                   <line
@@ -766,6 +842,7 @@ function StackedBarView({
                   fontSize={11}
                   textAnchor={layout.rotateLabels ? 'end' : 'middle'}
                   transform={layout.rotateLabels ? `rotate(${ROTATE_DEG} ${bar.labelX} ${rotatedLabelY})` : undefined}
+                  {...labelHitProps(bi)}
                 >
                   <title>{bar.category}</title>
                   {bar.displayLabel}
