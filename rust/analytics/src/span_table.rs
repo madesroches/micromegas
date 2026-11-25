@@ -210,10 +210,14 @@ fn for_each_node_in_tree<NodeFun>(
 where
     NodeFun: FnMut(&CallTreeNode, i64, u32) -> Result<()>,
 {
-    process_node(node, parent, depth)?;
-    let span_id = node.id.unwrap_or(-1);
-    for child in &node.children {
-        for_each_node_in_tree(child, span_id, depth + 1, process_node)?;
+    let mut pending = vec![(node, parent, depth)];
+    while let Some((node, parent, depth)) = pending.pop() {
+        process_node(node, parent, depth)?;
+        let span_id = node.id.unwrap_or(-1);
+        // Reversed so children pop in `Vec` order.
+        for child in node.children.iter().rev() {
+            pending.push((child, span_id, depth + 1));
+        }
     }
     Ok(())
 }

@@ -1,11 +1,14 @@
 use datafusion::arrow::array::{Array, AsArray, TimestampNanosecondArray};
 use datafusion::arrow::datatypes::Int32Type;
 use micromegas_analytics::arrow_properties::serialize_property_set_to_jsonb;
-use micromegas_analytics::call_tree::CallTreeBuilder;
+use micromegas_analytics::call_tree::{
+    CallTree, CallTreeBuilder, CallTreeNode, MAX_CALL_TREE_DEPTH,
+};
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::lakehouse::thread_spans_view::ensure_begin_non_decreasing;
+use micromegas_analytics::properties::jsonb_dictionary::JsonbDictionary;
 use micromegas_analytics::properties::property_set::PropertySet;
-use micromegas_analytics::scope::BorrowedScopeDesc;
+use micromegas_analytics::scope::{BorrowedScopeDesc, ScopeDesc, ScopeHashMap};
 use micromegas_analytics::span_table::SpanRecordBuilder;
 use micromegas_analytics::thread_block_processor::ThreadBlockProcessor;
 use micromegas_analytics::time::ConvertTicks;
@@ -333,4 +336,131 @@ fn test_trees_sharing_a_set_share_one_dictionary_value() {
     // the empty set and one shared set
     assert_eq!(dict.values().len(), 2);
     assert_eq!(batch.num_rows(), 4);
+}
+
+const SMALL_STACK: usize = 256 * 1024;
+const DEEP_CHAIN: usize = 100_000;
+
+#[test]
+fn test_begin_past_max_depth_returns_err() {
+    let mut builder = CallTreeBuilder::new(
+        1000,
+        1_000_000_000,
+        None,
+        make_convert_ticks(),
+        "test_thread".into(),
+    );
+    for i in 0..MAX_CALL_TREE_DEPTH {
+        builder
+            .on_begin_thread_scope("block1", i as i64, scope("A"), 2000 + i as i64)
+            .expect("begin within the cap");
+    }
+    // Filtered before the push, so it must not trip the cap.
+    builder
+        .on_begin_thread_scope("block1", -1, scope("A"), 500)
+        .expect("begin before the range is not pushed");
+    let err = builder
+        .on_begin_thread_scope("block1", -2, scope("A"), 1_000_000)
+        .expect_err("begin past the cap");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("call tree depth exceeds"), "got: {msg}");
+}
+
+#[test]
+fn test_unmatched_ends_past_max_depth_return_err() {
+    let mut builder = CallTreeBuilder::new(
+        0,
+        1_000_000_000,
+        None,
+        make_convert_ticks(),
+        "test_thread".into(),
+    );
+    let names: Vec<String> = (0..=MAX_CALL_TREE_DEPTH).map(|i| format!("S{i}")).collect();
+    let mut failure = None;
+    for (i, name) in names.iter().enumerate() {
+        if let Err(e) = builder.on_end_thread_scope(
+            "block1",
+            i as i64,
+            scope(name),
+            100 + i as i64,
+            PropertySet::empty(),
+        ) {
+            failure = Some((i, format!("{e:?}")));
+            break;
+        }
+    }
+    let (failed_at, msg) = failure.expect("unmatched ends must hit the cap");
+    assert_eq!(failed_at, MAX_CALL_TREE_DEPTH - 1);
+    assert!(msg.contains("call tree depth exceeds"), "got: {msg}");
+}
+
+fn deep_chain(depth: usize, hash: u32) -> CallTreeNode {
+    let mut node = CallTreeNode {
+        id: Some(depth as i64),
+        hash,
+        begin: depth as i64,
+        end: 1_000_000,
+        children: Vec::new(),
+        properties: 0,
+    };
+    for i in (0..depth).rev() {
+        node = CallTreeNode {
+            id: Some(i as i64),
+            hash,
+            begin: i as i64,
+            end: 1_000_000,
+            children: vec![node],
+            properties: 0,
+        };
+    }
+    node
+}
+
+#[test]
+fn test_dropping_a_deep_tree_does_not_overflow_the_stack() {
+    let root = deep_chain(DEEP_CHAIN, 0);
+    std::thread::Builder::new()
+        .stack_size(SMALL_STACK)
+        .spawn(move || drop(root))
+        .expect("spawn")
+        .join()
+        .expect("drop completed");
+}
+
+#[test]
+fn test_traversing_a_deep_tree_does_not_overflow_the_stack() {
+    let desc = ScopeDesc::new(
+        "deep".to_owned().into(),
+        "".to_owned().into(),
+        "".to_owned().into(),
+        0,
+    );
+    let hash = desc.hash;
+    let mut scopes = ScopeHashMap::new();
+    scopes.insert(hash, desc);
+    let tree = CallTree {
+        scopes,
+        call_tree_root: Some(deep_chain(DEEP_CHAIN, hash)),
+        property_sets: JsonbDictionary::new(),
+    };
+    let batch = std::thread::Builder::new()
+        .stack_size(SMALL_STACK)
+        .spawn(move || {
+            let mut builder = SpanRecordBuilder::with_capacity(DEEP_CHAIN + 1);
+            builder.append_call_tree(&tree).expect("append_call_tree");
+            builder.finish().expect("finish")
+        })
+        .expect("spawn")
+        .join()
+        .expect("traversal completed");
+    assert_eq!(batch.num_rows(), DEEP_CHAIN + 1);
+    let depths = typed_column_by_name::<datafusion::arrow::array::UInt32Array>(&batch, "depth")
+        .expect("depth column");
+    let ids = typed_column_by_name::<datafusion::arrow::array::Int64Array>(&batch, "id")
+        .expect("id column");
+    let parents = typed_column_by_name::<datafusion::arrow::array::Int64Array>(&batch, "parent")
+        .expect("parent column");
+    let last = DEEP_CHAIN;
+    assert_eq!(depths.value(last), DEEP_CHAIN as u32);
+    assert_eq!(parents.value(last), ids.value(last - 1));
 }
