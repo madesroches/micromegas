@@ -1447,7 +1447,7 @@ describe('extractStackedBarData', () => {
     }
   })
 
-  it('returns an error for the wrong column count', () => {
+  it('returns an error when the second column of a 2-column query is not numeric', () => {
     const table = createMockTable(
       [
         { name: 'category', type: createUtf8Type() },
@@ -1458,7 +1458,73 @@ describe('extractStackedBarData', () => {
     const result = extractStackedBarData(table as never)
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.error).toContain('category, series, and value columns')
+      expect(result.error).toMatch(/Second column must be numeric type for value/)
+    }
+  })
+
+  it('returns an error for 1 and 4 non-color columns', () => {
+    const one = extractStackedBarData(
+      createMockTable([{ name: 'category', type: createUtf8Type() }], []) as never
+    )
+    expect(one.ok).toBe(false)
+    if (!one.ok) expect(one.error).toContain('category and value columns')
+    const four = extractStackedBarData(
+      createMockTable(
+        [
+          { name: 'a', type: createUtf8Type() },
+          { name: 'b', type: createUtf8Type() },
+          { name: 'c', type: createFloatType() },
+          { name: 'd', type: createFloatType() },
+        ],
+        []
+      ) as never
+    )
+    expect(four.ok).toBe(false)
+    if (!four.ok) expect(four.error).toContain('category and value columns')
+  })
+
+  it('treats a 2-column query as one implicit series named after the value column', () => {
+    const table = createMockTable(
+      [
+        { name: 'user', type: createIntType() },
+        { name: 'cost', type: createFloatType() },
+        { name: 'color', type: createUtf8Type() },
+      ],
+      [
+        { user: 7, cost: 5, color: null },
+        { user: 7, cost: 1, color: '#ff0000' },
+        { user: 8, cost: 2, color: '#00ff00' },
+        { user: 9, cost: 3, color: null },
+      ]
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.singleSeries).toBe(true)
+      expect(result.data.series).toEqual([{ name: 'cost' }])
+      expect(result.data.categories).toEqual(['7', '8', '9'])
+      expect(result.data.categoryValues).toEqual([7, 8, 9])
+      expect(result.data.values).toEqual([[6], [2], [3]])
+      expect(result.data.categoryColors).toEqual(['#ff0000ff', '#00ff00ff', undefined])
+      expect(result.data.columns).toEqual({ category: 'user', value: 'cost' })
+    }
+  })
+
+  it('records source column names for the 3-column shape', () => {
+    const table = createMockTable(
+      [
+        { name: 'user', type: createUtf8Type() },
+        { name: 'model', type: createUtf8Type() },
+        { name: 'cost', type: createFloatType() },
+      ],
+      [{ user: 'a', model: 'm', cost: 1 }]
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.singleSeries).toBe(false)
+      expect(result.data.columns).toEqual({ category: 'user', series: 'model', value: 'cost' })
+      expect(result.data.categoryColors).toBeUndefined()
     }
   })
 
@@ -1511,7 +1577,14 @@ describe('extractStackedBarData', () => {
     const result = extractStackedBarData(table as never)
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.data).toEqual({ categories: [], series: [], values: [] })
+      expect(result.data).toEqual({
+        categories: [],
+        categoryValues: [],
+        series: [],
+        values: [],
+        columns: { category: 'category', series: 'series', value: 'value' },
+        singleSeries: false,
+      })
     }
   })
 })
