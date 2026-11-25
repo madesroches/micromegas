@@ -14,6 +14,11 @@ use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
+/// Maximum nesting depth of a call tree. Far above real instrumented call depth, so it only
+/// rejects malformed or hostile blocks, which a few bytes per unmatched begin event can make
+/// arbitrarily deep.
+pub const MAX_CALL_TREE_DEPTH: usize = 4096;
+
 /// A node in a call tree, representing a single scope instance.
 #[derive(Debug)]
 pub struct CallTreeNode {
@@ -30,6 +35,16 @@ pub struct CallTreeNode {
     /// Index into `CallTree::property_sets` of the properties on the span's end event; 0 is the
     /// empty set.
     pub properties: i32,
+}
+
+impl Drop for CallTreeNode {
+    // The derived drop recurses once per level and overflows the stack on deep chains.
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.children);
+        while let Some(mut node) = pending.pop() {
+            pending.append(&mut node.children);
+        }
+    }
 }
 
 /// A call tree, representing the execution of a single thread.
@@ -51,6 +66,9 @@ pub struct CallTreeBuilder {
     limit: Option<i64>,
     nb_spans: i64,
     stack: Vec<CallTreeNode>,
+    // Root wrapping deepens the tree without growing `stack`, so the stack length alone does
+    // not bound the depth.
+    tree_depth: usize,
     scopes: ScopeHashMap,
     property_sets: JsonbDictionary,
     convert_ticks: ConvertTicks,
@@ -80,6 +98,7 @@ impl CallTreeBuilder {
             limit,
             nb_spans: 0,
             stack: Vec::new(),
+            tree_depth: 0,
             scopes,
             property_sets: JsonbDictionary::new(),
             convert_ticks,
@@ -110,11 +129,16 @@ impl CallTreeBuilder {
         }
     }
 
-    fn add_child_to_top(&mut self, node: CallTreeNode) {
+    fn add_child_to_top(&mut self, block_id: &str, node: CallTreeNode) -> Result<()> {
         if let Some(mut top) = self.stack.pop() {
             top.children.push(node);
             self.stack.push(top);
         } else {
+            let wrapped_depth = self.tree_depth.max(1);
+            if wrapped_depth >= MAX_CALL_TREE_DEPTH {
+                anyhow::bail!("call tree depth exceeds {MAX_CALL_TREE_DEPTH} in block {block_id}");
+            }
+            self.tree_depth = wrapped_depth + 1;
             let new_root = CallTreeNode {
                 id: None,
                 hash: self.root_hash,
@@ -126,6 +150,7 @@ impl CallTreeBuilder {
             self.stack.push(new_root);
             self.nb_spans += 1;
         }
+        Ok(())
     }
 
     fn intern_properties(&mut self, properties: &PropertySet<'_>) -> Result<i32> {
@@ -153,7 +178,7 @@ impl CallTreeBuilder {
 impl ThreadBlockProcessor for CallTreeBuilder {
     fn on_begin_thread_scope(
         &mut self,
-        _block_id: &str,
+        block_id: &str,
         event_id: i64,
         scope: BorrowedScopeDesc<'_>,
         ts: i64,
@@ -168,6 +193,9 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         if time > self.end_range_ns {
             return Ok(false);
         }
+        if self.stack.len() >= MAX_CALL_TREE_DEPTH {
+            anyhow::bail!("call tree depth exceeds {MAX_CALL_TREE_DEPTH} in block {block_id}");
+        }
         let hash = scope.hash;
         self.record_scope_desc(scope);
         let node = CallTreeNode {
@@ -179,13 +207,14 @@ impl ThreadBlockProcessor for CallTreeBuilder {
             properties: 0,
         };
         self.stack.push(node);
+        self.tree_depth = self.tree_depth.max(self.stack.len());
         self.nb_spans += 1;
         Ok(true) // continue even if we reached the limit to allow the opportunity to close than span
     }
 
     fn on_end_thread_scope(
         &mut self,
-        _block_id: &str,
+        block_id: &str,
         event_id: i64,
         scope: BorrowedScopeDesc<'_>,
         ts: i64,
@@ -205,13 +234,13 @@ impl ThreadBlockProcessor for CallTreeBuilder {
             if old_top.hash == hash {
                 old_top.end = time;
                 old_top.properties = properties;
-                self.add_child_to_top(old_top);
+                self.add_child_to_top(block_id, old_top)?;
             } else if old_top.hash == self.root_hash {
                 old_top.id = Some(event_id);
                 old_top.hash = hash;
                 old_top.end = time;
                 old_top.properties = properties;
-                self.add_child_to_top(old_top);
+                self.add_child_to_top(block_id, old_top)?;
             } else {
                 let ending_name = self.scopes.get(&hash).map_or("?", |s| s.name.as_str());
                 let open_name = self
@@ -219,7 +248,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                     .get(&old_top.hash)
                     .map_or("?", |s| s.name.as_str());
                 anyhow::bail!(
-                    "top scope mismatch in block {_block_id}: closing '{ending_name}' but '{open_name}' is open"
+                    "top scope mismatch in block {block_id}: closing '{ending_name}' but '{open_name}' is open"
                 );
             }
         } else {
@@ -234,7 +263,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                 children: Vec::new(),
                 properties,
             };
-            self.add_child_to_top(node);
+            self.add_child_to_top(block_id, node)?;
         }
         Ok(true)
     }
