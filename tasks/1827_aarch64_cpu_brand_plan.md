@@ -89,9 +89,6 @@ common dev hardware — not an exhaustive database:
 - Apple (`0x61`) is not listed: macOS gets its name from sysctl, and Asahi Linux users get the
   raw ids.
 
-Names intentionally do not include cloud product names (Graviton) — the mapping from core to
-product is the cloud vendor's, not the CPU's identity, and the raw ids disambiguate anyway.
-
 ### macOS (aarch64)
 Call `sysctlbyname` through a minimal `extern "C"` declaration (libSystem is always linked on
 macOS, so no new crate dependency): query the size with a null buffer, allocate, query again,
@@ -123,8 +120,9 @@ changes.
    `rust/telemetry-sink/Cargo.toml`.
 6. Update docs (see Documentation).
 7. Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas-tracing`,
-   and `cargo check -p micromegas-tracing -p micromegas-telemetry-sink --target aarch64-linux-android`
-   (that target is installed locally and exercises the aarch64 Linux-family cfg branch).
+   `rustup target add aarch64-unknown-linux-gnu` (from inside `rust/`), then
+   `cargo check -p micromegas-tracing -p micromegas-telemetry-sink --target aarch64-unknown-linux-gnu`
+   (exercises the aarch64 `target_os = "linux"` cfg branch).
 
 ## Files to Modify
 - `rust/tracing/src/cpu_brand.rs` (new)
@@ -137,19 +135,14 @@ changes.
 - `CHANGELOG.md` (via the `pr` step)
 
 ## Trade-offs
-- **Own MIDR decoder vs. `sysinfo`.** `sysinfo` already decodes ARM implementer/part and reads
-  the macOS brand string, but it is a heavy dependency for the instrumentation library
-  (`micromegas-tracing` is meant to stay lean and is embedded in game engines), its brand string
-  drops the raw part number the issue wants for unknown chips, and it reads only `/proc/cpuinfo`.
-  A ~100-line decoder with a small table is cheaper and gives the exact format requested.
-- **Helper location: `micromegas-tracing`.** Both callers already depend on it, and it is the
-  crate that owns `ProcessInfo`. A separate crate would add packaging for one function.
-- **`cpu0` only.** Heterogeneous (big.LITTLE) SoCs report the first core's part. Server parts are
-  homogeneous, and the goal is distinguishing hosts, not describing every core.
-- **No caching.** `get_cpu_brand()` runs once per call site per process start; a `OnceLock` would
-  add state for no measurable gain.
+- **Own MIDR decoder vs. `sysinfo`.** `sysinfo` is too heavy for the lean, engine-embedded
+  `micromegas-tracing`, and a small table gives the exact format requested.
 
 ## Decisions
+- No cloud product names (Graviton) in core names; the raw ids disambiguate.
+- Helper lives in `micromegas-tracing`, which both callers already depend on.
+- Only `cpu0` is read; the goal is distinguishing hosts, not describing every core.
+- No caching; `get_cpu_brand()` runs once per call site per process start.
 
 ## Documentation
 - `mkdocs/docs/query-guide/schema-reference.md` (lines 47 and 144): describe `cpu_brand` as the CPU
@@ -170,7 +163,7 @@ Unit tests in `rust/tracing/src/cpu_brand.rs`, compiled and run on the x86_64 CI
 
 The aarch64 and macOS I/O wrappers are thin and not reachable from x86_64 CI; their parsing
 logic is covered by the pure-function tests, and the cfg branch is type-checked by the
-`aarch64-linux-android` `cargo check` in step 7.
+`aarch64-unknown-linux-gnu` `cargo check` in step 7, which exercises the `target_os = "linux"` branch directly.
 
 ## Manual Verification
 On an aarch64 Linux host (e.g. a Graviton instance), run any instrumented process against a local
@@ -178,5 +171,3 @@ ingestion server and query
 `micromegas-query "SELECT cpu_brand FROM processes ORDER BY start_time DESC LIMIT 1"` — expect
 e.g. `Neoverse-V1 (0x41:0xd40)`. Not automated: CI has no aarch64 runner. If no aarch64 host is
 available, this step is skipped and recorded as such.
-
-## Open Questions
