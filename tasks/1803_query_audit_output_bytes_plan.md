@@ -99,8 +99,8 @@ answer for a setup failure.
    `QueryAuditState` and its initialiser; record in `CompletionTrackedStream::poll_next` on `Ok`;
    populate the record and emit `query_output_bytes` in `emit()`.
 3. `rust/public/tests/query_audit_tests.rs`: add the new fields to both record literals and the
-   new tests below. `rust/public/tests/read_policy_threading_tests.rs`: add the two in-process
-   stream/emit tests below.
+   new tests below. `rust/public/tests/read_policy_threading_tests.rs`: add the in-process
+   stream/emit test below.
 4. `mkdocs/docs/query-guide/query-audit-log.md`: add both fields to the table, an example "egress
    by caller" query, and mention `output_bytes` in the `incomplete` note.
 5. `CHANGELOG.md`: Unreleased entry (audit record gains two fields; new `query_output_bytes`
@@ -137,10 +137,10 @@ Unit tests in `rust/public/tests/query_audit_tests.rs` (no DB):
 - Serialization: `full_record` sets non-zero values and asserts `output_bytes`/`output_messages`
   appear; the "absent optionals" record sets 0 and asserts both keys are still present with 0.
 
-No-DB in-process tests in `rust/public/tests/read_policy_threading_tests.rs` (real
+No-DB in-process test in `rust/public/tests/read_policy_threading_tests.rs` (real
 `FlightSqlServiceImpl` over tonic, via `make_offline_lakehouse_context`, `start_server`, `connect`,
 `init_in_memory_tracing`, `collect_audit_records(&guard.sink)`):
 
 - Drain `SELECT 1`; the "ok" audit record has `output_bytes > 0` and `output_messages >= 2`.
-- Run a query that fails at planning (e.g. unknown column); the "error" audit record has
-  `output_bytes == 0` and `output_messages == 0`.
+
+The test is `#[tokio::test]` + `#[serial]` and starts with `let guard = init_in_memory_tracing(); set_max_level(LevelFilter::Trace);` like `query_cancelled_while_queued_is_audited_and_leaks_no_budget`, then drains the `do_get` stream fully before reading `collect_audit_records(&guard.sink)`.
