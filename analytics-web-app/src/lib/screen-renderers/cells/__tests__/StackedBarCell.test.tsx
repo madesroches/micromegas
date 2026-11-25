@@ -699,6 +699,17 @@ describe('StackedBarCell selection and orientation', () => {
       expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'second', value: 30 })
     })
 
+    it('picks the nearest segment from clientY, not clientX, in vertical orientation', () => {
+      const onSelectionChange = vi.fn()
+      const { container } = render(
+        <StackedBarCell {...createMockProps({ data: [stacked()], selectionMode: 'single', onSelectionChange })} />,
+      )
+      fireEvent.click(hitRects(container)[0], { clientX: 0, clientY: 0 })
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'second', value: 30 })
+      fireEvent.click(hitRects(container)[0], { clientX: 500, clientY: 250 })
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'first', value: 10 })
+    })
+
     it('clears the selection when the axis svg is clicked', () => {
       const onSelectionChange = vi.fn()
       const { container } = render(
