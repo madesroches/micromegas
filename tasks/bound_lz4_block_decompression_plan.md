@@ -16,8 +16,8 @@ exhausting memory.
   builds an `lz4::Decoder` and calls `read_to_end` with no bound.
 - `rust/analytics/src/payload.rs:69-74`: `parse_block` decompresses `payload.dependencies` and
   `payload.objects`, logs a failure through `log_decompress_err` (`corrupt block payload: ...`)
-  and propagates the `Err`. Callers already treat that `Err` as a corrupt block, which they log
-  and skip.
+  and propagates the `Err`. Callers propagate it: materialization logs and skips the block
+  (`lakehouse/block_partition_spec.rs`), while query-time paths fail the query.
 - `rust/analytics/tests/parse_corrupt_block_tests.rs:269-270`: the only other caller. A test
   helper that mirrors `parse_block`.
 - `rust/public/src/servers/ingestion.rs:182-183`: transit routes use `DefaultBodyLimit::disable()`
@@ -41,7 +41,7 @@ pub fn decompress(compressed: &[u8], max_decompressed_bytes: usize) -> Result<Ve
     let mut decompressed = Vec::new();
     let decoder = lz4::Decoder::new(compressed).with_context(|| "allocating lz4 decoder")?;
     // `take` truncates silently; reading one byte past the cap makes the overflow detectable.
-    let mut limited = decoder.take(max_decompressed_bytes as u64 + 1);
+    let mut limited = decoder.take((max_decompressed_bytes as u64).saturating_add(1));
     limited.read_to_end(&mut decompressed).with_context(|| "reading lz4-compressed buffer")?;
     if decompressed.len() > max_decompressed_bytes {
         anyhow::bail!("decompressed lz4 buffer exceeds {max_decompressed_bytes} bytes");
@@ -65,7 +65,9 @@ pub const MAX_DECOMPRESSED_BLOCK_BUFFER_BYTES: usize = 128 * 1024 * 1024;
 `parse_block` passes this constant to both `decompress` calls. The existing
 `log_decompress_err`/`with_context` chain logs and propagates the over-cap error unchanged.
 
-The worst case per parsed block drops from about 24 GB to 2 × 128 MiB.
+The worst case per parsed block drops from about 24 GB to about 2 × 256 MiB: `read_to_end` grows
+the `Vec` by amortized doubling and the lz4 decoder gives no size hint, so reading up to 128 MiB
+can reserve about 256 MiB of capacity per buffer.
 
 ## Implementation Steps
 1. `rust/telemetry/src/compression.rs`: add the `max_decompressed_bytes` parameter and the
@@ -106,12 +108,10 @@ Unit tests in a new `rust/telemetry/tests/compression_tests.rs` (alongside the e
 - Round trip: `decompress(&compress(data)?, data.len())` returns `data`, exactly at the cap.
 - Over the cap: `compress(&vec![0u8; 4097])` with a 4096 cap returns `Err`, and the error
   message names the cap.
-- Bomb shape: `compress(&vec![0u8; 8 * 1024 * 1024])` (a highly compressible input) with a
-  1 MiB cap returns `Err`, which shows the read stops near the cap instead of expanding the
-  whole input.
 - Empty input with cap 0 round-trips.
 
 The existing `parse_corrupt_block_tests.rs` tests keep checking that valid blocks still
 decompress with the production constant.
 
 ## Decisions
+None.
