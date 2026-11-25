@@ -56,7 +56,7 @@ hitBand: { x: number; y: number; width: number; height: number }
 
 Adjacent bands touch, so the only empty space left inside a plot svg is the y-axis gutter and the
 right margin (vertical), or the top and bottom padding (horizontal). Clicking there, on the
-horizontal axis svg, or on the selected band again clears the selection.
+horizontal axis svg, or on the selected segment again (in the 2-column shape, anywhere in the selected bar) clears the selection.
 
 ### Which segment a band click selects
 
@@ -124,19 +124,22 @@ The hover tooltip stays on segments only.
    - `nearestSegmentSeries`: inside a segment, past the end (end segment), before the baseline
      (first segment), in a segment's gap, and no segments (`null`), for both orientations.
    - Component (jsdom's `getBoundingClientRect` returns zeros, so `clientX`/`clientY` are plot-svg
-     coordinates):
+     coordinates, except in the stubbed-rect test below):
      - 2-column horizontal: clicking a row's `[data-bar-hit]` rect publishes that row, and
        clicking it again clears.
      - Clicking a category label selects that category.
      - 3-column: a band click past the bar's end selects the end segment.
      - A click on the horizontal axis svg clears.
+     - Rect conversion (horizontal only): stub the plot svg's `getBoundingClientRect` with non-zero
+       `left`/`top`, click a `[data-bar-hit]` rect at offset client coordinates past the bar's end,
+       then inside the first segment of a stacked bar; assert the end segment, then the first segment.
      - With `selectionMode` unset, no hit rects render.
    - Existing tests select segments with `svg path` and clear by clicking the `svg`, so they keep
      passing.
 3. `mkdocs/docs/web-app/notebooks/cell-types.md`: update line 24 ("Click a bar or segment …") and
    the Row Selection bullet at line 45. A click anywhere in a category's row or column, or on its
    label, selects it. In the stacked shape, the nearest segment along the value axis is selected.
-   The axis gutter, the margins, and clicking the selected bar again clear it.
+   The axis gutter, the margins, and clicking the selected segment again (in the 2-column shape, a click anywhere in the selected bar) clear it.
 4. `yarn lint`, `yarn type-check`, `yarn test` in `analytics-web-app/`.
 
 ## Files to Modify
@@ -174,12 +177,10 @@ The hover tooltip stays on segments only.
 
 The band geometry and the segment resolver are pure functions covered by the unit tests in step
 2. The click wiring (hit rects, label handlers, marker-based background suppression, toggling) is
-covered by jsdom component tests. The tests rely on jsdom's zeroed `getBoundingClientRect`, so
-client coordinates equal plot-svg coordinates.
+covered by jsdom component tests.
 
 ## Manual Verification
 
-Real-browser coordinate conversion inside a scrolled plot can't be reproduced in jsdom. A broken
-conversion would be obvious on first use. In a notebook with a horizontal `stackedbar`, set
+Real-browser scrolling and 1:1 viewBox rendering can't be reproduced in jsdom. In a notebook with a horizontal `stackedbar`, set
 `selectionMode: 'single'`, scroll the plot, then click to the right of a short bar and on its
 label: both select that row, and clicking the row again clears.
