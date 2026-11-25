@@ -7,6 +7,13 @@ use std::sync::Arc;
 
 use crate::metadata::StreamMetadata;
 
+/// Ceiling on each decompressed buffer (dependencies, objects) of one block. Real blocks are
+/// at most a few tens of MiB (a configured buffer size can be exceeded by the last object), and
+/// an incompressible image payload can't exceed the 100 MiB ingestion body limit. 128 MiB
+/// leaves headroom for both (a raw 8K RGBA frame is about 126.6 MiB) while capping a
+/// decompression bomb's footprint.
+pub const MAX_DECOMPRESSED_BLOCK_BUFFER_BYTES: usize = 128 * 1024 * 1024;
+
 thread_local! {
     /// The custom-reader map is identical for every block, so build it once per
     /// worker thread instead of rebuilding a `HashMap` of `Arc<dyn Fn>` on every
@@ -66,10 +73,10 @@ where
     };
     // Bind the decompressed buffers and the arena to locals so every parsed
     // Value borrows from storage that outlives the parse below.
-    let deps_buf = decompress(&payload.dependencies)
+    let deps_buf = decompress(&payload.dependencies, MAX_DECOMPRESSED_BLOCK_BUFFER_BYTES)
         .with_context(|| "decompressing dependencies payload")
         .inspect_err(log_decompress_err)?;
-    let objs_buf = decompress(&payload.objects)
+    let objs_buf = decompress(&payload.objects, MAX_DECOMPRESSED_BLOCK_BUFFER_BYTES)
         .with_context(|| "decompressing objects payload")
         .inspect_err(log_decompress_err)?;
     let bump = Bump::new();
