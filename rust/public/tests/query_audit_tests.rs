@@ -3,7 +3,9 @@
 //   omission of absent optionals, SQL text containing `{`/`}` and quotes
 //   round-tripping through `serde_json`).
 // - `aggregate_scan_metrics` walking a hand-built physical plan tree.
+// - `OutputStats::record` counting `FlightData` header + body bytes and messages.
 
+use micromegas::arrow_flight::FlightData;
 use micromegas::datafusion::arrow::datatypes::Schema;
 use micromegas::datafusion::error::Result as DataFusionResult;
 use micromegas::datafusion::execution::TaskContext;
@@ -16,7 +18,7 @@ use micromegas::datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use micromegas::servers::query_audit::{QueryAuditRecord, aggregate_scan_metrics};
+use micromegas::servers::query_audit::{OutputStats, QueryAuditRecord, aggregate_scan_metrics};
 use std::sync::Arc;
 
 /// Minimal `ExecutionPlan` used only to exercise `aggregate_scan_metrics`'s
@@ -233,6 +235,8 @@ fn full_record(sql: &str) -> QueryAuditRecord {
         partition_bytes: Some(10_240),
         admission_cost: Some(8_388_608),
         queue_wait_ms: Some(12.5),
+        output_bytes: 65_536,
+        output_messages: 3,
     }
 }
 
@@ -310,6 +314,8 @@ fn query_audit_record_omits_absent_optionals() {
         partition_bytes: None,
         admission_cost: None,
         queue_wait_ms: None,
+        output_bytes: 0,
+        output_messages: 0,
     };
 
     let json = serde_json::to_string(&record).expect("serialization should succeed");
@@ -340,6 +346,8 @@ fn query_audit_record_omits_absent_optionals() {
     assert_eq!(value["error_class"], "internal");
     assert_eq!(value["query_id"], "22222222-2222-2222-2222-222222222222");
     assert_eq!(value["client_ip"], "unknown");
+    assert_eq!(value["output_bytes"], 0);
+    assert_eq!(value["output_messages"], 0);
     assert_eq!(value["bytes_scanned"], 0);
     assert_eq!(value["peak_memory_bytes"], 0);
     assert_eq!(value["spilled_bytes"], 0);
@@ -413,7 +421,7 @@ fn query_audit_record_serializes_denied_error_class() {
 }
 
 #[test]
-fn query_audit_record_appends_estimate_and_admission_fields_after_sql_hash() {
+fn query_audit_record_appends_new_fields_after_sql_hash_in_order() {
     let json = serde_json::to_string(&full_record("SELECT 1")).expect("serialization");
     let sql_hash = json.find("\"sql_hash\"").expect("sql_hash present");
     let mut previous = sql_hash;
@@ -423,6 +431,8 @@ fn query_audit_record_appends_estimate_and_admission_fields_after_sql_hash() {
         "partition_bytes",
         "admission_cost",
         "queue_wait_ms",
+        "output_bytes",
+        "output_messages",
     ] {
         let at = json
             .find(&format!("\"{field}\""))
@@ -439,4 +449,28 @@ fn query_audit_record_appends_estimate_and_admission_fields_after_sql_hash() {
     assert_eq!(value["partition_bytes"], 10_240);
     assert_eq!(value["admission_cost"], 8_388_608);
     assert_eq!(value["queue_wait_ms"], 12.5);
+    assert_eq!(value["output_bytes"], 65_536);
+    assert_eq!(value["output_messages"], 3);
+}
+
+#[test]
+fn output_stats_counts_header_and_body_bytes_and_messages() {
+    let mut stats = OutputStats::default();
+    stats.record(&FlightData {
+        data_header: vec![0; 40].into(),
+        ..Default::default()
+    });
+    stats.record(&FlightData {
+        data_header: vec![0; 8].into(),
+        data_body: vec![0; 100].into(),
+        app_metadata: vec![0; 999].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        stats,
+        OutputStats {
+            bytes: 148,
+            messages: 2
+        }
+    );
 }

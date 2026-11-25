@@ -161,4 +161,23 @@ pub struct QueryAuditRecord {
     /// Milliseconds spent waiting in the admission queue. Absent when admission is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue_wait_ms: Option<f64>,
+    /// Arrow IPC bytes sent to the client (`data_header` + `data_body` of every `FlightData`
+    /// message), before gRPC framing and transport compression. 0 when no message was sent.
+    pub output_bytes: u64,
+    /// Number of `FlightData` messages sent, including the schema message.
+    pub output_messages: u64,
+}
+
+/// Egress counter fed with every `FlightData` message handed to the transport.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct OutputStats {
+    pub bytes: u64,
+    pub messages: u64,
+}
+
+impl OutputStats {
+    pub fn record(&mut self, data: &arrow_flight::FlightData) {
+        self.bytes += (data.data_header.len() + data.data_body.len()) as u64;
+        self.messages += 1;
+    }
 }
