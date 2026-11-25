@@ -974,3 +974,46 @@ async fn query_cancelled_while_queued_is_audited_and_leaks_no_budget() {
     .expect("do_get");
     stream.try_next().await.expect("reading the third query");
 }
+
+#[tokio::test]
+#[serial]
+async fn drained_query_audit_records_output_bytes_and_messages() {
+    let guard = init_in_memory_tracing();
+    set_max_level(LevelFilter::Trace);
+
+    let addr = start_server(
+        Some(api_key_provider("test", "secret")),
+        Arc::new(EveryReadPolicy),
+        default_settings(),
+        None,
+    )
+    .await;
+    let mut client = connect(addr).await;
+    client.set_token("secret".to_string());
+    let info = client
+        .execute("SELECT 1".to_string(), None)
+        .await
+        .expect("planning");
+    let mut stream = client
+        .do_get(info.endpoint[0].ticket.clone().expect("ticket"))
+        .await
+        .expect("do_get");
+    while stream.try_next().await.expect("draining").is_some() {}
+
+    let ok = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let records: Vec<_> = collect_audit_records(&guard.sink)
+                .into_iter()
+                .filter(|r| r["status"] == "ok")
+                .collect();
+            if let Some(record) = records.into_iter().next() {
+                return record;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the drained query should be audited");
+    assert!(ok["output_bytes"].as_u64().expect("output_bytes") > 0);
+    assert!(ok["output_messages"].as_u64().expect("output_messages") >= 2);
+}

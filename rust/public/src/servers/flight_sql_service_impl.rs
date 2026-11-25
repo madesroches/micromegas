@@ -1,6 +1,6 @@
 use super::http_utils::get_client_ip;
 use super::query_admission::{AdmissionPermit, AdmissionScheduler};
-use super::query_audit::{QueryAuditRecord, ScanMetrics, aggregate_scan_metrics};
+use super::query_audit::{OutputStats, QueryAuditRecord, ScanMetrics, aggregate_scan_metrics};
 use super::sqlinfo::{
     SQL_INFO_DATE_TIME_FUNCTIONS, SQL_INFO_NUMERIC_FUNCTIONS, SQL_INFO_SQL_KEYWORDS,
     SQL_INFO_STRING_FUNCTIONS, SQL_INFO_SYSTEM_FUNCTIONS,
@@ -357,6 +357,7 @@ struct QueryAuditState {
     partition_bytes: Option<u64>,
     admission_cost: Option<u64>,
     queue_wait_ms: Option<f64>,
+    output: OutputStats,
     /// Held until the audit state is dropped, which every terminal path does -- including the
     /// early `fail` returns and a stream dropped mid-drain -- so the admission budget is
     /// released on all of them without extra plumbing.
@@ -408,6 +409,7 @@ impl QueryAuditState {
         };
         let peak_memory_bytes = self.pool.peak() as u64;
         imetric!("query_peak_memory_bytes", "bytes", peak_memory_bytes);
+        imetric!("query_output_bytes", "bytes", self.output.bytes);
         let total_ms = self.request_start.elapsed().as_secs_f64() * 1000.0;
         let record = QueryAuditRecord {
             query_id: self.query_id.clone(),
@@ -446,6 +448,8 @@ impl QueryAuditState {
             partition_bytes: self.partition_bytes,
             admission_cost: self.admission_cost,
             queue_wait_ms: self.queue_wait_ms,
+            output_bytes: self.output.bytes,
+            output_messages: self.output.messages,
         };
         match serde_json::to_string(&record) {
             Ok(json) => info!(target: "flightsql_query_audit", "{json}"),
@@ -517,6 +521,11 @@ where
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.inner).poll_next(cx) {
             Poll::Ready(Some(result)) => {
+                if let Ok(ref data) = result
+                    && let Some(state) = self.audit.as_mut()
+                {
+                    state.output.record(data);
+                }
                 // Every `Status` reaching this stream was already logged once by
                 // `classify_flight_error` (the sole `map_err` feeding it) when it
                 // built that `Status` -- this arm only reads the code to derive
@@ -855,6 +864,7 @@ impl FlightSqlServiceImpl {
             partition_bytes: None,
             admission_cost: None,
             queue_wait_ms: None,
+            output: OutputStats::default(),
             _admission_permit: None,
         };
 

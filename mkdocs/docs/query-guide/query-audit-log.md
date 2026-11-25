@@ -142,6 +142,26 @@ GROUP BY identity
 ORDER BY avg_queue_wait_ms DESC;
 ```
 
+### Egress by caller
+
+```sql
+WITH q AS (
+  SELECT time, jsonb_parse(msg) AS j
+  FROM log_entries
+  WHERE target = 'flightsql_query_audit'
+    AND time >= NOW() - INTERVAL '1 hour'
+)
+SELECT
+  coalesce(jsonb_as_string(jsonb_get(j, 'service_account_name')),
+           jsonb_as_string(jsonb_get(j, 'email'))) AS caller,
+  count(*) AS queries,
+  sum(jsonb_as_i64(jsonb_get(j, 'output_bytes')))    AS output_bytes,
+  sum(jsonb_as_i64(jsonb_get(j, 'bytes_scanned')))   AS bytes_scanned
+FROM q
+GROUP BY caller
+ORDER BY output_bytes DESC;
+```
+
 ### Top offenders by fingerprint, for the query deny list
 
 Groups by `sql_hash` (the normalized fingerprint, literals stripped) rather than raw `sql`, so a
@@ -235,6 +255,8 @@ ORDER BY failures DESC;
 | `partition_bytes` | integer | with `estimated_scan_bytes` | Total size of the partition files the plan reads, unprojected. Exact whatever the footer cache holds. Compared with `estimated_scan_bytes` it shows what column projection saves, and compared with `bytes_scanned` what row-group pruning saves |
 | `admission_cost` | integer | when [query admission](../admin/flight-sql.md#query-admission) is enabled | The cost charged against the admission budget: the estimate, raised to the minimum cost and capped at the per-identity maximum |
 | `queue_wait_ms` | float | when query admission is enabled | Time spent waiting in the admission queue. Near zero when the query started at once |
+| `output_bytes` | integer | always | Arrow IPC bytes sent to the client: `data_header` plus `data_body` of every `FlightData` message, before gRPC framing and transport compression. `0` when nothing was sent |
+| `output_messages` | integer | always | Number of `FlightData` messages sent, including the schema message |
 
 `context_init_ms` / `planning_ms` / `execution_ms` / `setup_ms` / `queue_wait_ms` / `total_ms` are measured with
 `std::time::Instant`, independently of the raw-TSC-tick `imetric!` timings emitted elsewhere in
@@ -267,7 +289,8 @@ that were never reached read `0.0`; `total_ms` still covers the full request.
   has been fully drained (or has errored), since `total_ms`, `status`, `output_rows`, and
   `bytes_scanned` only settle at that point. If a client abandons the stream mid-drain (disconnect
   or cancellation), a record is still emitted with `status = "incomplete"`; its cost fields reflect
-  the work done up to that point.
+  the work done up to that point. `output_bytes` counts messages handed to the transport, some of
+  which may not have reached the client.
 - **`bytes_scanned` is a per-query, cache-aware signal.** It counts bytes the lakehouse parquet
   reader requested from its (possibly L1-cache-backed) object store, i.e. the bytes the query
   logically needed — not necessarily bytes fetched from origin storage. The `range_cache_origin_block_bytes`
