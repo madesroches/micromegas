@@ -6,7 +6,7 @@
 
 `list_view_sets()` tells callers (people, the MCP server, the query skill) which columns a view
 is already sorted by, so they know which filter or join is cheap. Today it reports `NULL` for
-`blocks`, whose partitions are sorted by `insert_time`, and for every view set that has only a
+`blocks`, whose new partitions are written sorted by `insert_time`, and for every view set that has only a
 `ViewMaker` (`thread_spans` among them, which declares a `Concatenated` ordering on `begin`).
 This plan makes the catalog report each view set's real sort order without changing how any
 query is planned.
@@ -94,7 +94,7 @@ values get more accurate. Update the `ViewSetInfo::sort_order` doc comment to ma
 5. Implement it in the seven makers; in `thread_spans_view.rs`, extract
    `thread_spans_scan_ordering()` and use it from both the view and the maker.
 6. `catalog.rs`: use `global_view.get_reported_sort_order()` in the first loop and
-   `view_maker.get_scan_output_ordering().sort_columns()` in the second; update the field doc.
+   `view_maker.get_scan_output_ordering().sort_columns()` in the second; update the field doc; remove the now-unused `ScanOrdering` import (`catalog.rs:8`).
 7. Tests (see Testing Strategy).
 8. Docs and `CHANGELOG.md` (see Documentation).
 9. Run `build/sync_claude_plugin_skills.py` to regenerate the claude-plugin copy of the query skill.
@@ -126,19 +126,18 @@ values get more accurate. Update the `ViewSetInfo::sort_order` doc comment to ma
 - **Catalog falls back to the merger's `merge_scan_ordering`**: would need a new accessor on
   `PartitionMerger` and would couple the catalog to merge internals. An explicit
   `get_reported_sort_order()` override is simpler and local to the view.
-- **Derive the maker's ordering by building an instance**: needs a valid instance id per maker
-  (e.g. a stream id), so a maker-level method is used instead.
 
 ## Documentation
 
-- `mkdocs/docs/admin/functions-reference.md`: describe the `sort_order` row as the columns the
-  view set's partitions are written sorted by, reported for maker-only view sets as well (drop
-  "or when the view set has no global instance").
+- `mkdocs/docs/admin/functions-reference.md`: describe the `sort_order` row as the order the
+  view set's partitions are normally written in (informational, not guaranteed for every
+  partition), reported for maker-only view sets as well (drop "or when the view set has no
+  global instance").
 - `mkdocs/docs/query-guide/functions-reference.md`: reword "the `sort_order` of its scan" to
   match.
 - `rust/public/src/servers/mcp/skills/micromegas-query/SKILL.md` (line 232): reword "`sort_order` lists the
-  columns a scan is already ordered by" to describe the columns the view set's partitions are
-  written sorted by. Then run `build/sync_claude_plugin_skills.py` to update the claude-plugin copy.
+  columns a scan is already ordered by" to the order the view set's partitions are normally
+  written in (informational, not guaranteed for every partition). Then run `build/sync_claude_plugin_skills.py` to update the claude-plugin copy.
 - `CHANGELOG.md`: an Unreleased entry for the fix, with a **Minor breaking change** clause:
   `ViewMaker` gains a required `get_scan_output_ordering()`.
 
@@ -151,4 +150,3 @@ No-DB unit tests in `rust/analytics/tests/catalog_tests.rs`:
 - New test: a factory with `ThreadSpansViewMaker` reports `thread_spans` as `Some(["begin"])`.
 - `test_list_view_sets_description_and_columns` keeps asserting that `measures` (an unordered
   maker) reports `None`; update its message, since maker-only sets can now carry an order.
-- A unit test for `ScanOrdering::sort_columns()` covering all three variants.
