@@ -9,7 +9,7 @@ zeros about 239:1, so one block near the 100 MiB ingestion body limit expands to
 inside flight-sql-srv, the maintenance daemon or the monolith, which kills the process with an
 OOM. This plan gives `decompress` a required maximum output size. `parse_block` passes a fixed
 per-buffer ceiling, so an over-sized payload fails like any other corrupt block. This bounds
-each block's decompression to a fixed ceiling, about 100× below today's worst case.
+each block's decompression to a fixed ceiling, about 50× below today's worst case.
 
 ## Current State
 - `rust/telemetry/src/compression.rs:25`: `decompress(compressed: &[u8]) -> Result<Vec<u8>>`
@@ -23,9 +23,9 @@ each block's decompression to a fixed ceiling, about 100× below today's worst c
 - `rust/public/src/servers/ingestion.rs:182-183`: transit routes use `DefaultBodyLimit::disable()`
   plus `RequestBodyLimitLayer::new(100 * 1024 * 1024)`. Ingestion stores the CBOR block as-is and
   never decompresses the LZ4 buffers.
-- Precedent: `rust/otel-ingestion/src/cloudwatch_logs.rs:56` caps a gzip record with
-  `GzDecoder::new(raw).take(MAX + 1).read_to_end(..)` and then a length check
-  (`MAX_DECOMPRESSED_RECORD_BYTES = 64 MiB`).
+- Precedent: `rust/otel-ingestion/src/cloudwatch_logs.rs` caps a gzip record with
+  `GzDecoder::new(raw).take(MAX + 1).read_to_end(..)` (`:97`) and then a length check
+  (`MAX_DECOMPRESSED_RECORD_BYTES = 64 MiB`, `:56`).
 - Sizes that real instrumentation emits: the Rust sink defaults to 10 MiB logs and threads
   buffers and a 1 MiB metrics buffer (`rust/telemetry-sink/src/lib.rs:212-214`); the tracing
   docs example uses 16 MiB spans. Unreal uses 10 MiB log, metrics and thread buffers and 8 MiB
@@ -71,9 +71,7 @@ pub const MAX_DECOMPRESSED_BLOCK_BUFFER_BYTES: usize = 128 * 1024 * 1024;
 
 The worst case per parsed block drops from about 24 GB to about 2 × 256 MiB: `read_to_end` grows
 the `Vec` by amortized doubling and the lz4 decoder gives no size hint, so reading up to 128 MiB
-can reserve about 256 MiB of capacity per buffer. Across the process the bound is roughly the
-number of blocks parsed concurrently (limited by tokio worker threads, since `parse_block` is
-synchronous) × ~512 MiB.
+can reserve about 256 MiB of capacity per buffer.
 
 ## Implementation Steps
 1. `rust/telemetry/src/compression.rs`: add the `max_decompressed_bytes` parameter and the
@@ -94,8 +92,7 @@ synchronous) × ~512 MiB.
 
 ## Trade-offs
 - **Required parameter vs. a hard-coded cap inside `decompress`.** The parameter keeps policy
-  with the caller (block parsing), lets tests use a small cap instead of allocating 128 MiB, and
-  makes the compiler find every caller.
+  with the caller (block parsing), and lets tests use a small cap instead of allocating 128 MiB.
 - **128 MiB vs. a tighter cap such as 32 MiB.** A tighter cap would reject legitimate image
   blocks holding a large frame (`send_image` accepts any format and size), and blocks that
   overshoot buffers configured above the defaults. The goal is
@@ -121,6 +118,6 @@ The existing `parse_corrupt_block_tests.rs` tests keep checking that valid block
 decompress with the production constant.
 
 ## Decisions
-- Accepted residual risk: concurrent bomb blocks can still add up to workers × ~512 MiB. A
-  process-wide decompression budget, or a lower cap, is separate follow-up work; lowering the cap
+- Accepted residual risk: concurrent bomb blocks can still add up to workers × ~512 MiB (limited by tokio worker
+  threads, since `parse_block` is synchronous). A process-wide decompression budget, or a lower cap, is separate follow-up work; lowering the cap
   would risk rejecting legitimate large blocks.
