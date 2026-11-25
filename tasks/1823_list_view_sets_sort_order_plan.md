@@ -20,8 +20,7 @@ query is planned.
   declares `Concatenated` on `insert_time` / `OrderingBounds::InsertTime` (`blocks_view.rs:108`),
   and `get_merged_partition_sort_order` records `["insert_time"]` (`blocks_view.rs:258`), but
   only when every input partition already carries that recorded `sort_order`
-  (`all_inputs_ordered_or_empty`). Older partitions may have none, so the ordering is a
-  per-partition fact that the merger checks, not a guarantee that holds across every partition.
+  (`all_inputs_ordered_or_empty`).
 - `ThreadSpansView::get_scan_output_ordering()` (`thread_spans_view.rs:443`) returns
   `Concatenated` on `begin` (`MIN_TIME_COLUMN`) with `OrderingBounds::EventTime`.
   `ThreadSpansViewMaker` (`thread_spans_view.rs:56`) exposes nothing about it.
