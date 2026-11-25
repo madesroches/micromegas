@@ -55,8 +55,8 @@ hitBand: { x: number; y: number; width: number; height: number }
   label column and the space past the bar's end.
 
 Adjacent bands touch, so the only empty space left inside a plot svg is the y-axis gutter and the
-right margin (vertical), or the top and bottom padding (horizontal). Clicking there, on the
-horizontal axis svg, or on the selected segment again (in the 2-column shape, anywhere in the selected bar) clears the selection.
+right margin (vertical), or the top and bottom padding (horizontal). Clicking there, or on the
+horizontal axis svg, clears the selection.
 
 ### Which segment a band click selects
 
@@ -95,7 +95,7 @@ In `StackedBarView`, only when `onSegmentClick` is present (selection enabled):
   the label needs its own handler bound to its own category, not just the band rect under it.
 - Both call a shared `handleBandClick(bi, e)`. It converts the click to plot-svg coordinates with
   `e.currentTarget.ownerSVGElement.getBoundingClientRect()` (each svg renders at its viewBox size,
-  1:1). It takes y in vertical mode or x in horizontal mode, resolves `nearestSegmentSeries`, and
+  1:1), returning early when `ownerSVGElement` is null. It takes y in vertical mode or x in horizontal mode, resolves `nearestSegmentSeries`, and
   calls `onSegmentClick({ categoryIndex: bi, seriesIndex })` when the result is non-null.
 - Rename the segment marker `data-segment` to `data-bar-hit` on segment paths as well.
   `handleBackgroundClick` ignores clicks inside `[data-bar-hit]`, so a band or label click doesn't
@@ -115,7 +115,8 @@ The hover tooltip stays on segments only.
 1. `StackedBarCell.tsx`:
    - Add `hitBand` to `StackedBarBarLayout` and fill it in `buildStackedBarLayout` and
      `buildHorizontalBarLayout` as above.
-   - Add `nearestSegmentSeries` next to `buildBarSelection` in the Selection section.
+   - Add `nearestSegmentSeries` next to `buildBarSelection` in the Selection section, with the same
+     `// eslint-disable-next-line react-refresh/only-export-components` comment.
    - In `StackedBarView`, add the hit rects, label click handlers, `handleBandClick`, the
      `data-segment` → `data-bar-hit` rename, and the axis-svg background click.
 2. `__tests__/StackedBarCell.test.tsx`:
@@ -127,7 +128,8 @@ The hover tooltip stays on segments only.
      coordinates, except in the stubbed-rect test below):
      - 2-column horizontal: clicking a row's `[data-bar-hit]` rect publishes that row, and
        clicking it again clears.
-     - Clicking a category label selects that category.
+     - Horizontal, 3-column: clicking a category label selects that category's first (baseline)
+       segment.
      - 3-column: a band click past the bar's end selects the end segment.
      - A click on the horizontal axis svg clears.
      - Rect conversion (horizontal only): stub the plot svg's `getBoundingClientRect` with non-zero
