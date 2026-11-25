@@ -99,36 +99,26 @@ answer for a setup failure.
    `QueryAuditState` and its initialiser; record in `CompletionTrackedStream::poll_next` on `Ok`;
    populate the record and emit `query_output_bytes` in `emit()`.
 3. `rust/public/tests/query_audit_tests.rs`: add the new fields to both record literals and the
-   new tests below.
+   new tests below. `rust/public/tests/read_policy_threading_tests.rs`: add the two in-process
+   stream/emit tests below.
 4. `mkdocs/docs/query-guide/query-audit-log.md`: add both fields to the table, an example "egress
    by caller" query, and mention `output_bytes` in the `incomplete` note.
 5. `CHANGELOG.md`: Unreleased entry (audit record gains two fields; new `query_output_bytes`
-   metric; no SQL changes; Rust API gains `OutputStats`).
+   metric; no SQL changes; Rust API gains `OutputStats`; "**Minor breaking change:**
+   `QueryAuditRecord` gains `output_bytes` and `output_messages`").
 
 ## Files to Modify
 
 - `rust/public/src/servers/query_audit.rs`
 - `rust/public/src/servers/flight_sql_service_impl.rs`
 - `rust/public/tests/query_audit_tests.rs`
+- `rust/public/tests/read_policy_threading_tests.rs`
 - `mkdocs/docs/query-guide/query-audit-log.md`
 - `CHANGELOG.md`
 
-## Trade-offs
-
-- **`output_messages` instead of the issue's `output_batches`.** The issue defines the field as
-  "the number of `FlightData` messages", which includes the schema message (and any dictionary
-  messages); calling that "batches" would overcount record batches by at least one and mislead the
-  tiny-batch analysis it is meant for. Naming it for what it counts avoids a correction later.
-  Counting only record-batch messages would require decoding the IPC header, which is more than a
-  counter increment for little gain.
-- **Counter on `QueryAuditState` rather than on `CompletionTrackedStream`.** `emit()` already reads
-  everything from the state, and the state is what every terminal path holds, so storing the
-  counts there needs no new parameter on `emit` and keeps setup-failure paths at 0 for free.
-- **A public `OutputStats` type rather than inlining the arithmetic.** It gives the integration
-  test crate something to call with constructed `FlightData`, since the stream wrapper and state
-  are private and building a `QueryAuditState` needs a memory pool and attribution.
-
 ## Decisions
+
+- `output_messages` instead of the issue's `output_batches`: it counts every `FlightData` message, including the schema message, so "batches" would overcount.
 
 ## Documentation
 
@@ -144,24 +134,13 @@ Unit tests in `rust/public/tests/query_audit_tests.rs` (no DB):
 - `record` over a few constructed `FlightData` values (empty body schema-like message, messages
   with header and body) sums `data_header.len() + data_body.len()` and counts messages; fields
   outside header/body (`app_metadata`) are not counted.
-- Encoding a real non-empty `RecordBatch` through `FlightDataEncoderBuilder` and recording every
-  message gives `bytes > 0` and `messages >= 2` (schema + batch).
 - Serialization: `full_record` sets non-zero values and asserts `output_bytes`/`output_messages`
   appear; the "absent optionals" record sets 0 and asserts both keys are still present with 0.
 
-The one-line wiring in `poll_next`/`emit` is covered by manual verification below.
+No-DB in-process tests in `rust/public/tests/read_policy_threading_tests.rs` (real
+`FlightSqlServiceImpl` over tonic, via `make_offline_lakehouse_context`, `start_server`, `connect`,
+`init_in_memory_tracing`, `collect_audit_records(&guard.sink)`):
 
-## Manual Verification
-
-Checks the private stream wiring, which needs a running server; a regression would be obvious
-the first time anyone reads the field.
-
-1. `python3 local_test_env/ai_scripts/start_services.py`
-2. `micromegas-query "SELECT * FROM log_entries LIMIT 100" --begin 1h` and
-   `micromegas-query "SELECT nonexistent_column FROM log_entries" --begin 1h`
-3. `micromegas-query "SELECT msg FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY time DESC LIMIT 2" --begin 10m`
-   — the successful query's record has `output_bytes > 0` and `output_messages >= 2`; the failed
-   one has `output_bytes: 0`, `output_messages: 0`.
-4. `python3 local_test_env/ai_scripts/stop_services.py`
-
-## Open Questions
+- Drain `SELECT 1`; the "ok" audit record has `output_bytes > 0` and `output_messages >= 2`.
+- Run a query that fails at planning (e.g. unknown column); the "error" audit record has
+  `output_bytes == 0` and `output_messages == 0`.
