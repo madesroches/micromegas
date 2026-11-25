@@ -3,6 +3,7 @@
 //   omission of absent optionals, SQL text containing `{`/`}` and quotes
 //   round-tripping through `serde_json`).
 // - `aggregate_scan_metrics` walking a hand-built physical plan tree.
+// - `OutputStats::record` counting `FlightData` header + body bytes and messages.
 
 use micromegas::arrow_flight::FlightData;
 use micromegas::datafusion::arrow::datatypes::Schema;
@@ -420,7 +421,7 @@ fn query_audit_record_serializes_denied_error_class() {
 }
 
 #[test]
-fn query_audit_record_appends_estimate_and_admission_fields_after_sql_hash() {
+fn query_audit_record_appends_new_fields_after_sql_hash_in_order() {
     let json = serde_json::to_string(&full_record("SELECT 1")).expect("serialization");
     let sql_hash = json.find("\"sql_hash\"").expect("sql_hash present");
     let mut previous = sql_hash;
