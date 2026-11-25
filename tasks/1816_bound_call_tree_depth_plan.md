@@ -18,9 +18,13 @@ makes the traversal and the drop iterative, so no tree shape can abort the proce
 - `CallTreeBuilder::on_begin_thread_scope` (`call_tree.rs:154`) filters on the span limit and the
   time range, then pushes onto `self.stack` with no depth check. `on_end_thread_scope` pops the
   top and attaches it to the new top via `add_child_to_top`. `finish()` (`call_tree.rs:90`)
-  folds the unclosed stack into a parent/child chain. Each node's subtree was built while that
-  node sat on the stack, so the tree's depth is bounded by the maximum `stack.len()` reached
-  (plus at most one synthetic thread root).
+  folds the unclosed stack into a parent/child chain. `stack[0]` is always the tree's root, so
+  the top of the stack sits at depth `stack.len()`. That does not bound the tree, though. When
+  `add_child_to_top` finds the stack empty it wraps the node in a new synthetic thread root,
+  which puts the whole existing tree one level deeper. With only the root on the stack, an end
+  event whose hash differs from it relabels the root as the ended span and wraps it
+  (`call_tree.rs:209`), so each such unmatched end adds a level while `stack.len()` stays at 1.
+  The span limit would stop this, but `thread_spans_view` passes `limit = None`.
 - `on_end_thread_scope` already returns `Err` on malformed input (`top scope mismatch`,
   `call_tree.rs:222`). That error goes through `make_call_tree` → `append_call_tree` in
   `rust/analytics/src/lakehouse/thread_spans_view.rs:98` to `write_partition`, whose
@@ -47,8 +51,19 @@ if self.stack.len() >= MAX_CALL_TREE_DEPTH {
     anyhow::bail!("call tree depth exceeds {MAX_CALL_TREE_DEPTH} in block {block_id}");
 }
 ```
-That is the only place `stack` grows by more than one node. `add_child_to_top` pushes only onto
-an empty stack, so it never deepens the tree past the cap.
+That bounds the stack, but the wrap branch of `add_child_to_top` deepens the tree without
+growing the stack (see Current State). The builder therefore tracks a new field
+`tree_depth: usize`, the depth of the tree built so far:
+- after each push in `on_begin_thread_scope`: `tree_depth = tree_depth.max(stack.len())`;
+- in the wrap branch of `add_child_to_top`, before building the new root: bail with the same
+  message if `tree_depth.max(1) >= MAX_CALL_TREE_DEPTH`, otherwise
+  `tree_depth = tree_depth.max(1) + 1` (the `max(1)` covers wrapping a lone leaf into an empty
+  tree).
+
+`add_child_to_top` becomes `fn add_child_to_top(&mut self, block_id: &str, node: CallTreeNode)
+-> Result<()>`, and its three call sites in `on_end_thread_scope` propagate with `?`. Together
+the two checks keep the depth of the finished tree, including the chain `finish()` folds from
+the stack, at or below the cap.
 
 The cap is set far above real instrumented call depth (dozens of levels, occasionally a few
 hundred for instrumented recursion), so it rejects only malformed or hostile input.
@@ -76,8 +91,10 @@ tree's node count. This covers every owner of nodes: `CallTree::call_tree_root`,
 `stack` when it is dropped on error, and test-built trees.
 
 ## Implementation Steps
-1. `rust/analytics/src/call_tree.rs`: add `MAX_CALL_TREE_DEPTH`, the depth check in
-   `on_begin_thread_scope` (rename `_block_id` to `block_id` there), and `impl Drop for CallTreeNode`.
+1. `rust/analytics/src/call_tree.rs`: add `MAX_CALL_TREE_DEPTH`, the `tree_depth` field, the
+   depth check in `on_begin_thread_scope` (rename `_block_id` to `block_id` there and in
+   `on_end_thread_scope`), the wrap check in `add_child_to_top` (now returning `Result`), and
+   `impl Drop for CallTreeNode`.
 2. `rust/analytics/src/span_table.rs`: rewrite `for_each_node_in_tree` iteratively, as in
    Design §2.
 3. `rust/analytics/tests/call_tree_tests.rs`: add the tests below.
@@ -101,12 +118,19 @@ tree's node count. This covers every owner of nodes: `CallTree::call_tree_root`,
   partition that looks valid but is wrong. An `Err` follows the existing `top scope mismatch`
   precedent and surfaces the corrupt input.
 
+## Decisions
+- AFK: Unmatched end events deepen the tree via root wrapping without growing the stack, which bypassed the cap; added a `tree_depth` builder field checked in `add_child_to_top`'s wrap branch (alongside the existing `stack.len()` check on begin) and a test for it, because the issue asks for a depth cap that returns `Err` and a bypassable cap does not provide one.
+
 ## Testing Strategy
 Unit tests in `rust/analytics/tests/call_tree_tests.rs`, no DB:
 - **Depth cap.** Feed `MAX_CALL_TREE_DEPTH` unmatched begins: all succeed. The next begin
   returns `Err` whose message contains `call tree depth exceeds`. Also confirm that a begin
   before `begin_range_ns`, which is filtered and never pushed, does not trip the cap at full
   depth.
+- **Depth cap via root wrapping.** Feed one end event, then `MAX_CALL_TREE_DEPTH` more unmatched
+  end events, each with a distinct hash different from the thread root's. The builder must
+  return `Err` containing `call tree depth exceeds` before the tree passes the cap. Before the
+  fix, every call succeeds and the tree grows one level per event.
 - **Deep drop (issue reproduction).** Build a 100,000-deep `CallTreeNode` chain by hand
   (iteratively, using the public fields) and drop it on a `std::thread` spawned with a small stack
   (e.g. 256 KiB). Join the thread and assert it completed. Before the fix, the process aborts.
