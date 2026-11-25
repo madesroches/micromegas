@@ -569,7 +569,7 @@ function StackedBarView({
 
   const handleBackgroundClick = onBackgroundClick
     ? (e: React.MouseEvent<SVGSVGElement>) => {
-        if (e.target === e.currentTarget) onBackgroundClick()
+        if (!(e.target as Element).closest('[data-segment]')) onBackgroundClick()
       }
     : undefined
 
@@ -589,6 +589,7 @@ function StackedBarView({
               <path
                 key={seg.seriesIndex}
                 d={d}
+                data-segment
                 fill={color}
                 className="cursor-pointer transition-opacity hover:opacity-85"
                 style={dimmed ? { opacity: DIM_FILL } : undefined}
