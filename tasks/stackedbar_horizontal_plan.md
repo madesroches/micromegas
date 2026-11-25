@@ -8,12 +8,12 @@ A ranked bar chart with many categories (e.g. cost per user across ~50 users) is
 ## Current State
 - **Cell**: `analytics-web-app/src/lib/screen-renderers/cells/StackedBarCell.tsx` (655 lines). It hand-rolls SVG, and its layout math is pure and exported for tests:
   - `resolveSeriesColors` (`:35`) assigns a SQL color first, then the next `SERIES_COLORS` entry.
-  - `niceStep` (`:79`) picks tick steps.
-  - `truncateLabel` (`:133`) truncates labels.
-  - `buildStackedBarLayout` (`:149`) computes bar and segment rects, y ticks, rotated labels and the 12px bar-width floor. The floor grows `plotWidth` past the container to force horizontal scroll.
+  - `niceStep` (`:77`) picks tick steps.
+  - `truncateLabel` (`:129`) truncates labels.
+  - `buildStackedBarLayout` (`:144`) computes bar and segment rects, y ticks, rotated labels and the 12px bar-width floor. The floor grows `plotWidth` past the container to force horizontal scroll.
   - `roundedTopRectPath` (`:224`) draws the rounded cap on the top segment.
-  - `StackedBarView` (`:265`) owns the `ResizeObserver`, hover state, the SVG, the side legend and the fixed tooltip.
-  - `StackedBarCell` (`:427`) handles empty and error states and the header stats. `StackedBarCellEditor` (`:511`) holds the SQL and the unit. `stackedBarMetadata` (`:597`) has the label `'Stacked Bar'`.
+  - `StackedBarView` (`:263`) owns the `ResizeObserver`, hover state, the SVG, the side legend and the fixed tooltip.
+  - `StackedBarCell` (`:439`) handles empty and error states and the header stats. `StackedBarCellEditor` (`:538`) holds the SQL and the unit. `stackedBarMetadata` (`:618`) has the label `'Stacked Bar'`.
   - Options: `unit` only.
 - **Extraction**: `extractStackedBarData` (`src/lib/arrow-utils.ts:772`) requires exactly 3 non-color columns `(category, series, value)`. It pivots them into `{ categories: string[], series: {name, color?}[], values: number[][] }`, sums duplicates, drops null, negative and non-finite rows, and stringifies numeric categories. The `color` column is per series, and the first non-null value wins.
 - **Selection plumbing** already exists and is generic:
@@ -103,14 +103,14 @@ Additions to the output:
 - Segment fill: `categoryColors?.[c] ?? series[s].color`.
 
 ### Selection
-The hit is `{ categoryIndex, seriesIndex }`. The cell copies the Chart cell's pattern:
+The hit is `{ categoryIndex, seriesIndex }`. `StackedBarCell` copies the Chart cell's pattern (`ChartCell.tsx:216-238`). The state, the during-render reset and the null-notify effect all live in `StackedBarCell` above its early returns, keyed on `data`. The hit and the click handlers are passed down to `StackedBarView`:
 - `selected` state is reset during render when `data` changes. An effect calls `onSelectionChangeRef.current?.(null)` on data change.
 - Clicking a segment calls `nextSelection` semantics: clicking the selected segment again clears it. Write a small local `sameBarHit`. `ChartPointHit` has different fields, so reuse only the toggle idea and `DIM_FILL`.
 - A click on the SVG background (not a segment) clears the selection.
 - Selection is enabled only when `selectionMode === 'single'`. Otherwise clicks do nothing, as today.
 - While a selection exists, every other segment and its in-segment label render at `opacity={DIM_FILL}`. Total labels stay full opacity.
 
-Published payload, keyed by **SQL column names** so `fieldType` resolves the downstream types correctly:
+Published payload, keyed by **SQL column names**:
 ```ts
 {
   [columns.category]: categoryValues[c],             // raw value, e.g. number stays number
@@ -138,7 +138,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
   - left: a single-series ranked cost per user, 30 rows, with value labels and a selected row
   - right: a stacked-by-series version with the legend and in-segment labels
 
-  Clicking bars toggles selection, and the text below shows the published `$cell.selected.*` values. Only one direction is mocked: the issue fixes the layout (label column left, sticky top axis, fixed rows), so the remaining choices are constants.
+  Clicking bars toggles selection, and the text below shows the published `$cell.selected.*` values.
 
 ## Implementation Steps
 
@@ -161,25 +161,25 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
    - branch the axis and category-label drawing on `layout.orientation`
    - add the horizontal sticky-axis structure
    - draw the total labels
-   - drive the segment fill from `categoryColors`
+   - drive the segment fill and the hover/tooltip swatch color from `categoryColors?.[c] ?? series[s].color`
    - hide the legend and slim the tooltip for single series
-9. Selection: add state, the clear-on-data-change logic, segment and background click handlers, dimming, and the payload builder. Make the payload builder a small exported pure function, `buildBarSelection(data, hit)`, so it is unit-tested directly.
-10. `StackedBarCell`: read `orientation`, `valueLabels`, `selectionMode` and `onSelectionChange`, and hide the series stat when `singleSeries`.
+9. Selection: in `StackedBarCell` (above its early returns), add the state, the clear-on-data-change logic and the null-notify effect, and pass the hit and the segment and background click handlers down to `StackedBarView`, which does the dimming. Add the payload builder. Make the payload builder a small exported pure function, `buildBarSelection(data, hit)`, so it is unit-tested directly.
+10. `StackedBarCell`: read `orientation`, `valueLabels`, `selectionMode` and `onSelectionChange`, and hide the series stat when `singleSeries`. Build `resolvedData` by spreading `extraction.data` and overriding `series`, so `categoryColors` and the other new fields aren't dropped.
 
 ### Phase 4 — Editor and metadata
 11. Add the Orientation select, the value-labels checkbox, `RowSelectionEditor` and the hint/placeholder text to the editor.
-12. Change the label and description in `stackedBarMetadata`.
+12. Change the label and description in `stackedBarMetadata`. New cells default to the name "Bar Chart" instead of "Stacked Bar", since `createDefaultCell` seeds the name from `meta.label`.
 
 ### Phase 5 — Docs and changelog
 13. Update `mkdocs/docs/web-app/notebooks/cell-types.md`:
-    - rename the section heading to "Bar Chart"
+    - rename the section heading to "Bar Chart" and move it before "Chart" (:11), since the `## ` headings are alphabetical
     - add the new options rows (`orientation`, `valueLabels`, `selectionMode`)
     - document the 2-column SQL shape and the per-bar `color` meaning
     - add horizontal layout and selection bullets under Features
     - add a ranked horizontal example (`SELECT user, sum(cost) AS cost … ORDER BY cost DESC`, `orientation: horizontal`)
     - note the cell type id is `stackedbar`
-14. Update `mkdocs/docs/web-app/notebooks/variables.md:116`: add bar chart cells to the cells with selection, and say a click on a segment publishes the category, series and value columns.
-15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased. It covers no SQL changes and no breaking change. Notebook config is additive, and existing `stackedbar` cells render identically.
+14. Update `mkdocs/docs/web-app/notebooks/variables.md:116`: add bar chart cells to the cells with selection (including the second clause, "For table and chart cells, selection is enabled via the **Row Selection** section…", and the :118 "**Selection mode** (table and chart cells)" bullet), and say a click on a segment publishes the category, series and value columns.
+15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased. It covers no SQL changes and no breaking change, and notes that new cells default to "Bar Chart" instead of "Stacked Bar". Notebook config is additive, and existing `stackedbar` cells render identically.
 
 ## Files to Modify
 - `analytics-web-app/src/lib/arrow-utils.ts`
@@ -195,7 +195,6 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
 - **Two layout builders sharing helpers vs. one builder with an axis swap**: one generic builder would need a pixel→axis mapping layer for everything, including label rotation (vertical only) and the label column (horizontal only). The orientations differ in exactly those parts. Separate builders over a shared value scale and stacking loop keep each one readable and the shared logic in one place.
 - **Selection keys from SQL column names vs. fixed `category`/`series`/`value` keys**: the issue wrote `.category`. Fixed keys would break `fieldType` type resolution, which looks the name up in the cell's result table, and would differ from table, chart and map, which all publish source column names. A query that names its columns `category, series, value` still gets exactly the issue's macros.
 - **Sticky axis inside the scroll container vs. an axis SVG above it**: an axis outside the scroller is narrower by the scrollbar's width whenever the scrollbar shows, so its ticks drift from the gridlines. With sticky positioning inside the scroller, both SVGs share one measured content width.
-- **Per-bar color for the 2-column shape vs. per-series**: covered in the SQL contract above.
 
 ## Decisions
 - The horizontal-layout mockup (`tasks/stackedbar_horizontal_mockups/horizontal-layout.html`) is accepted (user call).
@@ -203,6 +202,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
 - Horizontal mode has fixed row heights and never stretches rows to fill a tall cell (per the issue). Leftover space stays empty below the last row.
 - No hit-area widening for thin segments. The 18px row thickness is enough, and stacked segments in one row would make a widened area ambiguous.
 - Out of scope, per the issue: a `table` data-bar column format.
+- Label is "Bar Chart": it doubles as the default cell name and badge text, so it stays short.
 
 ## Documentation
 - `mkdocs/docs/web-app/notebooks/cell-types.md`: the Stacked Bar section, renamed to Bar Chart and extended (step 13)
@@ -217,6 +217,7 @@ Everything is reachable with constructed Arrow tables and props, so the coverage
   - `categoryValues` keeps the raw numeric category
   - `columns` names for both shapes
   - errors for 1 and 4 non-color columns
+  - the existing 2-column-count error test (`src/lib/__tests__/arrow-utils.test.ts:1450-1462`, category utf8, series utf8 → "category, series, and value columns") becomes a "second column must be numeric for value" test in the 2-column shape
   - the existing 3-column tests stay green
 - **Layout** (`StackedBarCell.test.tsx`):
   - horizontal rows at `ROW_HEIGHT` intervals in first-appearance order, with `contentHeight` growing with the category count
@@ -245,7 +246,4 @@ Everything is reachable with constructed Arrow tables and props, so the coverage
 ## Manual Verification
 Sticky positioning and scrollbar alignment depend on real browser layout, which jsdom doesn't do:
 1. `cd analytics-web-app && yarn dev`, open a notebook, add a Bar Chart cell with `SELECT exe, count(*) AS count FROM log_entries GROUP BY exe ORDER BY count DESC`, and set Orientation to Horizontal. Expected: one row per exe, the axis stays pinned while scrolling, and the ticks line up with the gridlines whether or not the scrollbar shows.
-2. Enable Row Selection, and add a downstream table cell with `SELECT '$<cell>.selected.exe' AS picked, $<cell>.selected.count AS n`. Click a bar. Expected: the table re-runs with that exe and count, the other bars fade, and clicking the same bar again shows "waiting for selection" downstream.
-
-## Open Questions
-- Is "Bar Chart" the label you want in the cell-type picker and badge? The issue suggested "Bar chart (stacked / horizontal)", which is long for the type badge, so the stacked/horizontal hint went into the description instead.
+2. Enable Row Selection, and add a downstream table cell with `SELECT '$<cell>.selected.exe' AS picked, $<cell>.selected.count AS n`. Click a bar. Expected: the table re-runs with that exe and count, the other bars fade, and clicking the same bar again shows `Select a row in "<cell>" to view results` downstream.
