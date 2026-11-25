@@ -88,6 +88,10 @@ reasoning #1813 used against load-time cycle rejection.
    does), and remove the now-stale comments there. Rust and Unreal writers emit exact sizes
    (`PropertySetDependency::get_value_size`, `StaticStringDependency::get_value_size`, Unreal
    `Serializer<PropertySetDependency>::GetSize`), so bounding is safe for real data.
+   Remove `advance_window` from the `use crate::{...}` import (its only uses are these two
+   call sites). Reword the comment in
+   `read_dependencies_rejects_truncated_static_string_dependency` (test_corrupt_input.rs) to say
+   the window is bounded to the declared `object_size`.
 3. `rust/transit/tests/test_corrupt_input.rs`: add the regression tests below.
 4. `CHANGELOG.md`: Unreleased fix entry citing #1814 (done by the `pr` step).
 
@@ -126,9 +130,12 @@ buffers reproduce it exactly. In `rust/transit/tests/test_corrupt_input.rs`, eac
 - `parse_object_buffer_rejects_fan_out_on_tiny_objects`: the same types as a buffer of many
   2-byte objects (`[idx_of_T2, 0]` repeated) through `parse_object_buffer` returns `Err` on the
   first object.
-- `read_dependencies_rejects_dependency_larger_than_declared_size`: a dependency (e.g.
-  `PropertySetDependency` through the custom reader, or `StaticStringDependency`) whose
-  declared size is smaller than its payload returns `Err`.
+- `read_dependencies_rejects_dependency_larger_than_declared_size`: register `test_custom_reader`
+  (reads a `u64` at window offset 0) for a size-0 `CustomDep` UDT, with the buffer
+  `[0u8] + 0u32` followed by `[0u8] + 8u32 + 7u64`. Before the fix the first entry's reader gets
+  the whole remaining buffer, reads 8 bytes of the next entry as its id (nonzero, not 7), and
+  `offset` then jumps to `object_end`, so the second entry parses normally and the call returns
+  `Ok`. After the fix the first entry's window is empty, the `u64` read fails, and it returns `Err`.
 - `parse_pod_instance_accepts_dense_u8_struct`: a 64-byte UDT of 64 `u8` members parses, which
   confirms the densest legitimate layout fits the budget.
 - The existing `parse_pod_instance_accepts_legitimate_nesting` and the `rust/tracing` /
