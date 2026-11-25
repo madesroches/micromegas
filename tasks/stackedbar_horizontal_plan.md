@@ -106,7 +106,7 @@ Additions to the output:
 The hit is `{ categoryIndex, seriesIndex }`. `StackedBarCell` copies the Chart cell's pattern (`ChartCell.tsx:216-238`). The state, the during-render reset and the null-notify effect all live in `StackedBarCell` above its early returns, keyed on `data`. The hit and the click handlers are passed down to `StackedBarView`:
 - `selected` state is reset during render when `data` changes. An effect calls `onSelectionChangeRef.current?.(null)` on data change.
 - Clicking a segment calls `nextSelection` semantics: clicking the selected segment again clears it. Write a small local `sameBarHit`. `ChartPointHit` has different fields, so reuse only the toggle idea and `DIM_FILL`.
-- A click on the SVG background (not a segment) clears the selection.
+- A click on the SVG background (not a segment) clears the selection. The background handler clears only when `e.target === e.currentTarget`, so a segment click does not bubble into a clear. In horizontal mode the body SVG carries the handler, not the sticky axis SVG.
 - Payload keys are the SQL column names, as in table, chart and map. The issue wrote `.category`, and a query that names its columns `category, series, value` still gets exactly the issue's macros.
 - Selection is enabled only when `selectionMode === 'single'`. Otherwise clicks do nothing, as today.
 - While a selection exists, every other segment and its in-segment label render at `DIM_FILL` opacity, applied with inline `style={{ opacity: DIM_FILL }}` so it wins over the segments' `hover:opacity-85` class. Total labels stay full opacity.
@@ -181,6 +181,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
     - revise the existing text that no longer holds: the intro (:711, not only vertical bars stacked from series); the `sql` and Series rows (:717, :726; series is optional, 3-column shape only); the `color` row (:727, per series or per bar); "Value (3rd non-color)" (:727) becomes "Value (2nd or 3rd non-color)"; "Duplicate `(category, series)` rows are **summed**" (:734) also says duplicate categories are summed in the 2-column shape; the ordering bullet (:733) for horizontal; "Y-axis" (:740) wording; the legend bullet (:742, hidden for a single series) and tooltip bullet (:743, no share/total for a single series); the scroll bullet (:744; vertical scrolls horizontally, horizontal scrolls vertically)
     - note the cell type id is `stackedbar`
 14. Update `mkdocs/docs/web-app/notebooks/variables.md:116`: add bar chart cells to the cells with selection (including the second clause, "For table and chart cells, selection is enabled via the **Row Selection** section…", and the :118 "**Selection mode** (table and chart cells)" bullet), and say a click on a segment publishes the category, series and value columns.
+14a. Update `claude-plugin/skills/micromegas-notebooks/SKILL.md:64` and its identical copy `rust/public/src/servers/mcp/skills/micromegas-notebooks/SKILL.md:64`: where `$cell.selected.column` is described as the selected row of an upstream table or chart with `selectionMode: "single"`, also mention bar chart cells (and map) as selection sources.
 15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased, citing "(#1820)" like the existing entries. It covers no SQL changes and no breaking change, and notes that new cells default to "Bar Chart" instead of "Stacked Bar". Notebook config is additive, and existing `stackedbar` cells render identically.
 
 ## Files to Modify
@@ -190,6 +191,8 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/StackedBarCell.test.tsx`
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 - `mkdocs/docs/web-app/notebooks/variables.md`
+- `claude-plugin/skills/micromegas-notebooks/SKILL.md`
+- `rust/public/src/servers/mcp/skills/micromegas-notebooks/SKILL.md`
 - `CHANGELOG.md`
 
 ## Decisions
