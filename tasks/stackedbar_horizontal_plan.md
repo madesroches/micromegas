@@ -95,7 +95,7 @@ Additions to the output:
 ### Rendering (`StackedBarView`)
 - Vertical: unchanged structure, with the plot div scrolling on x.
 - Horizontal: the plot div is `overflow-y-auto` and holds two SVGs.
-  - First, an axis SVG with `position: sticky; top: 0` and a panel background. It draws the tick labels and a baseline.
+  - First, an axis SVG with `position: sticky; top: 0` and a panel background. It draws the tick labels and a baseline. Tick labels are centered on their tick, except the last, which is end-anchored (`text-anchor: end`) so it stays inside the plot when the tick lands at `width − RIGHT_MARGIN`.
   - Second, a body SVG of `contentHeight`. It draws the vertical gridlines, the category labels (end-anchored, right-aligned in the label column), the segments and the labels.
   - The `ResizeObserver` reads the content-box width, which excludes the scrollbar, so both SVGs line up.
   - The height is the content height, not the measured height.
@@ -178,7 +178,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
     - document the 2-column SQL shape and the per-bar `color` meaning
     - add horizontal layout and selection bullets under Features
     - add a ranked horizontal example (`SELECT user, sum(cost) AS cost … ORDER BY cost DESC`, `orientation: horizontal`)
-    - revise the existing text that no longer holds: the intro (:711, not only vertical bars stacked from series); the `sql` and Series rows (:717, :726; series is optional, 3-column shape only); the `color` row (:727, per series or per bar); the ordering bullet (:733) for horizontal; "Y-axis" (:740) wording; the legend bullet (:742, hidden for a single series) and tooltip bullet (:743, no share/total for a single series); the scroll bullet (:744; vertical scrolls horizontally, horizontal scrolls vertically)
+    - revise the existing text that no longer holds: the intro (:711, not only vertical bars stacked from series); the `sql` and Series rows (:717, :726; series is optional, 3-column shape only); the `color` row (:727, per series or per bar); "Value (3rd non-color)" (:727) becomes "Value (2nd or 3rd non-color)"; "Duplicate `(category, series)` rows are **summed**" (:734) also says duplicate categories are summed in the 2-column shape; the ordering bullet (:733) for horizontal; "Y-axis" (:740) wording; the legend bullet (:742, hidden for a single series) and tooltip bullet (:743, no share/total for a single series); the scroll bullet (:744; vertical scrolls horizontally, horizontal scrolls vertically)
     - note the cell type id is `stackedbar`
 14. Update `mkdocs/docs/web-app/notebooks/variables.md:116`: add bar chart cells to the cells with selection (including the second clause, "For table and chart cells, selection is enabled via the **Row Selection** section…", and the :118 "**Selection mode** (table and chart cells)" bullet), and say a click on a segment publishes the category, series and value columns.
 15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased, citing "(#1820)" like the existing entries. It covers no SQL changes and no breaking change, and notes that new cells default to "Bar Chart" instead of "Stacked Bar". Notebook config is additive, and existing `stackedbar` cells render identically.
@@ -221,6 +221,7 @@ Everything is reachable with constructed Arrow tables and props, so the coverage
   - label column capped at 180, with long labels truncated
   - the value scale shrinks by `totalLabelRoom` when `valueLabels` is on
   - fewer tick divisions at narrow widths
+  - the last horizontal tick label is end-anchored, the others centered
   - segments stack left to right with a 2px gap, and only the end segment is rounded
   - in-segment `labelFits` uses the segment width
   - vertical `valueLabels` grows the top margin and skips labels wider than the band
