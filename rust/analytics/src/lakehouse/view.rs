@@ -235,6 +235,12 @@ pub trait View: std::fmt::Debug + Send + Sync {
     fn get_scan_output_ordering(&self) -> ScanOrdering {
         ScanOrdering::Unordered
     }
+
+    /// Ascending columns this view's partitions are written sorted by, as reported by
+    /// `list_view_sets()`. Informational only -- planning reads `get_scan_output_ordering()`.
+    fn get_reported_sort_order(&self) -> Option<Vec<String>> {
+        self.get_scan_output_ordering().sort_columns()
+    }
 }
 
 impl dyn View {

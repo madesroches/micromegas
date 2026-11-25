@@ -178,6 +178,16 @@ impl ScanOrdering {
     pub fn declares_concatenated_ordering(&self) -> bool {
         matches!(self, ScanOrdering::Concatenated { .. })
     }
+
+    /// Names of the declared sort columns, or `None` when `Unordered`.
+    pub fn sort_columns(&self) -> Option<Vec<String>> {
+        match self {
+            ScanOrdering::Unordered => None,
+            ScanOrdering::Concatenated { columns, .. } | ScanOrdering::PerFile { columns } => {
+                Some(columns.iter().map(|c| c.column.to_string()).collect())
+            }
+        }
+    }
 }
 
 /// Builds the `DataFrame::sort` expressions for `columns`, pairing each with `!descending` for

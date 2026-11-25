@@ -9,6 +9,7 @@ use super::{
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
     partition_source_data::{SourceDataBlocksInMemory, hash_to_object_count},
+    partitioned_execution_plan::ScanOrdering,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::{ViewFactory, ViewMaker},
 };
@@ -66,6 +67,10 @@ impl ViewMaker for NetSpansViewMaker {
 
     fn get_schema(&self) -> Arc<Schema> {
         Arc::new(net_spans_table_schema())
+    }
+
+    fn get_scan_output_ordering(&self) -> ScanOrdering {
+        ScanOrdering::Unordered
     }
 }
 

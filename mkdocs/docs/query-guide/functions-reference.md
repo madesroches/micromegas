@@ -75,7 +75,7 @@ See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
 #### `list_view_sets()`
 
-Lists all available view sets with their current schema information, a markdown `description` of how to use each one, a readable `columns` list and the `sort_order` of its scan. Available to every caller.
+Lists all available view sets with their current schema information, a markdown `description` of how to use each one, a readable `columns` list and the `sort_order` its partitions are normally written in. Available to every caller.
 
 See [Admin Functions Reference](../admin/functions-reference.md#list_view_sets) for details.
 

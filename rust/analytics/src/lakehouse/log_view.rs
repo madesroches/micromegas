@@ -8,6 +8,7 @@ use super::{
     otel::logs_block_processor::OtelLogsBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
+    partitioned_execution_plan::ScanOrdering,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
     write_partition::RetireMatch,
@@ -65,6 +66,10 @@ impl ViewMaker for LogViewMaker {
 
     fn get_schema(&self) -> Arc<Schema> {
         Arc::new(log_table_schema())
+    }
+
+    fn get_scan_output_ordering(&self) -> ScanOrdering {
+        ScanOrdering::Unordered
     }
 }
 
