@@ -130,7 +130,6 @@ answer for a setup failure.
 
 Unit tests in `rust/public/tests/query_audit_tests.rs` (no DB):
 
-- `OutputStats::default()` is zero (the value a setup failure reports).
 - `record` over a few constructed `FlightData` values (empty body schema-like message, messages
   with header and body) sums `data_header.len() + data_body.len()` and counts messages; fields
   outside header/body (`app_metadata`) are not counted.
