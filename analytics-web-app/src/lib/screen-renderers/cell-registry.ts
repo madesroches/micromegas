@@ -1,7 +1,7 @@
 import { ComponentType, ReactNode } from 'react'
 import { Table, DataType } from 'apache-arrow'
 import type { CellConfig, CellState, CellType, CellStatus, VariableValue } from './notebook-types'
-import { cellTypeDefaultDataSource } from './notebook-utils'
+import { cellTypeDefaultDataSource, sanitizeCellName } from './notebook-utils'
 
 // Re-export types from notebook-types for backwards compatibility
 export type { CellType, CellStatus, CellConfig, CellState, VariableValue }
@@ -267,11 +267,12 @@ export function createDefaultCell(type: CellType, existingNames: Set<string>, de
   const meta = CELL_TYPE_METADATA[type]
 
   // Generate unique name (use underscore separator for valid identifiers)
-  let name = meta.label
+  const baseName = sanitizeCellName(meta.label)
+  let name = baseName
   let counter = 1
   while (existingNames.has(name)) {
     counter++
-    name = `${meta.label}_${counter}`
+    name = `${baseName}_${counter}`
   }
 
   const base = {

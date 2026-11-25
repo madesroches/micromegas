@@ -61,7 +61,7 @@ single quotes escaped.
 | `$name` | value of variable cell `name` |
 | `$name.column` | a column of a multi-column combobox value |
 | `$cell[N].column` | row N of an upstream cell's result |
-| `$cell.selected.column` | selected row of an upstream table or chart with `selectionMode: "single"` |
+| `$cell.selected.column` | selected row of an upstream table, chart, or bar chart (`stackedbar`) with `selectionMode: "single"` (map cells also publish a selection) |
 | `$order_by` | sort column of a table cell |
 | `$me.email`, `$me.name`, `$me.sub` | the viewer (not an authorization mechanism) |
 

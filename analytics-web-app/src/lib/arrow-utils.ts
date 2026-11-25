@@ -751,15 +751,22 @@ export function extractPieData(table: Table):
 
 export interface StackedBarData {
   categories: string[]
+  /** First-seen raw (un-stringified) category value per category, for selection payloads. */
+  categoryValues: unknown[]
   series: { name: string; color?: string }[]
   /** values[c][s]; 0 where the series has no row for that category. */
   values: number[][]
+  /** Per-bar SQL color, 2-column shape only; undefined entries fall back to the series color. */
+  categoryColors?: (string | undefined)[]
+  /** Source column names; `series` is absent for the 2-column shape. */
+  columns: { category: string; series?: string; value: string }
+  singleSeries: boolean
 }
 
 /**
- * Extract stacked bar data from an Arrow table: category + series + value
- * (plus optional 'color'), pivoted into one row per category and one column
- * per series.
+ * Extract bar chart data from an Arrow table: category + series + value, or
+ * category + value (one implicit series named after the value column), plus an
+ * optional 'color'. Pivoted into one row per category and one column per series.
  *
  * Rows with a null category or series, or a null/non-finite/negative value,
  * are dropped, mirroring `extractPieData`. Unlike the Pie cell, duplicate
@@ -768,6 +775,9 @@ export interface StackedBarData {
  * segment with a spurious gap. Categories and series both keep first-appearance
  * (SQL row) order; a series absent from a given category is left as 0, which
  * the renderer draws as no segment.
+ *
+ * The color column colors a series in the 3-column shape and a bar in the
+ * 2-column shape; the first non-null value wins in both.
  */
 export function extractStackedBarData(table: Table):
   | { ok: true; data: StackedBarData }
@@ -777,42 +787,57 @@ export function extractStackedBarData(table: Table):
   const nonColorFields = color.index >= 0 ? fields.filter((_, i) => i !== color.index) : fields
   const nonColorCount = nonColorFields.length
 
-  if (nonColorCount < 3) {
+  if (nonColorCount < 2) {
     return {
       ok: false,
-      error: `Query must return category, series, and value columns, got ${nonColorCount} non-color columns`,
+      error: `Query must return category and value columns (optionally category, series, value), got ${nonColorCount} non-color columns`,
     }
   }
   if (nonColorCount > 3) {
     return {
       ok: false,
-      error: `Query must return category, series, and value columns (plus optional 'color'), got ${nonColorCount} non-color columns`,
+      error: `Query must return category and value columns (optionally category, series, value; plus optional 'color'), got ${nonColorCount} non-color columns`,
     }
   }
 
-  const [categoryField, seriesField, valueField] = nonColorFields
+  const singleSeries = nonColorCount === 2
+  const categoryField = nonColorFields[0]
+  const seriesField = singleSeries ? null : nonColorFields[1]
+  const valueField = nonColorFields[nonColorCount - 1]
 
   if (!isStringType(unwrapDictionary(categoryField.type)) && !isNumericType(categoryField.type)) {
     return { ok: false, error: 'First column must be string or numeric type for category' }
   }
-  if (!isStringType(unwrapDictionary(seriesField.type))) {
+  if (seriesField && !isStringType(unwrapDictionary(seriesField.type))) {
     return { ok: false, error: 'Second column must be string type for series' }
   }
   if (!isNumericType(valueField.type)) {
-    return { ok: false, error: 'Third column must be numeric type for value' }
+    return {
+      ok: false,
+      error: `${singleSeries ? 'Second' : 'Third'} column must be numeric type for value`,
+    }
   }
   if (color.index >= 0 && color.error) {
     return { ok: false, error: color.error }
   }
 
   const categoryName = categoryField.name
-  const seriesName = seriesField.name
+  const seriesName = seriesField?.name
   const valueName = valueField.name
+
+  const readColor = (row: Record<string, unknown>): string | undefined => {
+    if (!color.name || !color.kind) return undefined
+    const colorVal = row[color.name]
+    if (colorVal == null) return undefined
+    return cellColorToCss(colorVal, color.kind) ?? undefined
+  }
 
   const categoryIndex = new Map<string, number>()
   const categories: string[] = []
+  const categoryValues: unknown[] = []
+  const categoryColors: (string | undefined)[] = []
   const seriesIndex = new Map<string, number>()
-  const series: { name: string; color?: string }[] = []
+  const series: { name: string; color?: string }[] = singleSeries ? [{ name: valueName }] : []
   const values: number[][] = []
 
   for (let i = 0; i < table.numRows; i++) {
@@ -820,52 +845,63 @@ export function extractStackedBarData(table: Table):
     if (!row) continue
 
     const catVal = row[categoryName]
-    const serVal = row[seriesName]
+    const serVal = seriesName !== undefined ? row[seriesName] : null
     const valVal = row[valueName]
-    if (catVal == null || serVal == null || valVal == null) continue
+    if (catVal == null || valVal == null || (!singleSeries && serVal == null)) continue
 
     const valNum = Number(valVal)
     if (!Number.isFinite(valNum) || valNum < 0) continue
 
     const catStr = String(catVal)
-    const serStr = String(serVal)
 
     let ci = categoryIndex.get(catStr)
     if (ci === undefined) {
       ci = categories.length
       categoryIndex.set(catStr, ci)
       categories.push(catStr)
+      categoryValues.push(catVal)
+      categoryColors.push(undefined)
       values.push(series.map(() => 0))
     }
 
-    let si = seriesIndex.get(serStr)
-    if (si === undefined) {
-      si = series.length
-      seriesIndex.set(serStr, si)
-      const entry: { name: string; color?: string } = { name: serStr }
-      if (color.name && color.kind) {
-        const colorVal = row[color.name]
-        if (colorVal != null) {
-          const css = cellColorToCss(colorVal, color.kind)
-          if (css !== null) entry.color = css
+    let si = 0
+    if (singleSeries) {
+      if (categoryColors[ci] === undefined) categoryColors[ci] = readColor(row)
+    } else {
+      const serStr = String(serVal)
+      const found = seriesIndex.get(serStr)
+      if (found === undefined) {
+        si = series.length
+        seriesIndex.set(serStr, si)
+        const entry: { name: string; color?: string } = { name: serStr }
+        const css = readColor(row)
+        if (css !== undefined) entry.color = css
+        series.push(entry)
+        for (const valuesRow of values) valuesRow.push(0)
+      } else {
+        si = found
+        // First non-null color wins: fill it in only if an earlier row for
+        // this series didn't already supply one.
+        if (series[si].color === undefined) {
+          const css = readColor(row)
+          if (css !== undefined) series[si].color = css
         }
-      }
-      series.push(entry)
-      for (const valuesRow of values) valuesRow.push(0)
-    } else if (series[si].color === undefined && color.name && color.kind) {
-      // First non-null color wins: fill it in only if an earlier row for
-      // this series didn't already supply one.
-      const colorVal = row[color.name]
-      if (colorVal != null) {
-        const css = cellColorToCss(colorVal, color.kind)
-        if (css !== null) series[si].color = css
       }
     }
 
     values[ci][si] += valNum
   }
 
-  return { ok: true, data: { categories, series, values } }
+  const data: StackedBarData = {
+    categories,
+    categoryValues,
+    series,
+    values,
+    columns: { category: categoryName, ...(seriesName !== undefined ? { series: seriesName } : {}), value: valueName },
+    singleSeries,
+  }
+  if (singleSeries) data.categoryColors = categoryColors
+  return { ok: true, data }
 }
 
 // =============================================================================
