@@ -128,7 +128,7 @@ buffers reproduce it exactly. In `rust/transit/tests/test_corrupt_input.rs`, eac
   #1813 cap of 4096 it returns `Ok`, and under the new 1-byte budget of 10 it returns `Err`,
   so this test fails before the fix.
 - `parse_object_buffer_rejects_fan_out_on_tiny_objects`: the same types as a buffer repeating
-  `[idx_of_T2, 0]` at least 66 times (e.g. 100) through `parse_object_buffer` returns `Err` on the
+  `[idx_of_T2, 0]` at least 131 times (e.g. 150) through `parse_object_buffer` returns `Err` on the
   first object. It would return `Ok` if `parse_object_buffer` stopped bounding each object's window.
 - `read_dependencies_rejects_dependency_larger_than_declared_size`: register `test_custom_reader`
   (reads a `u64` at window offset 0) for a size-0 `CustomDep` UDT, with the buffer

@@ -615,7 +615,7 @@ fn parse_object_buffer_rejects_fan_out_on_tiny_objects() {
     let bump = Bump::new();
     let udts = fan_out_udts();
     let mut buffer = vec![];
-    for _ in 0..100 {
+    for _ in 0..150 {
         buffer.extend_from_slice(&[2u8, 0u8]);
     }
     let deps = HashMap::new();
