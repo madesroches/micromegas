@@ -44,7 +44,7 @@ Contains metadata about processes that have sent telemetry data.
 | `realname` | `Utf8` | Real name of the user |
 | `computer` | `Utf8` | Computer/hostname |
 | `distro` | `Utf8` | Operating system distribution |
-| `cpu_brand` | `Utf8` | CPU model; on aarch64 Linux `<core name> (0x<implementer>:0x<part>)` (raw ids for unrecognized parts), on macOS the sysctl `machdep.cpu.brand_string` (e.g. "Apple M2"); falls back to the architecture name when unavailable |
+| `cpu_brand` | `Utf8` | CPU model. For processes instrumented with the Rust tracing library: on aarch64 Linux `<core name> (0x<implementer>:0x<part>)` (raw ids for unrecognized parts), on macOS the sysctl `machdep.cpu.brand_string` (e.g. "Apple M2"), falling back to the architecture name when unavailable. Unreal reports `FPlatformMisc::GetCPUBrand()`; OTLP uses the `host.cpu.model.name` resource attribute (empty if missing) |
 | `tsc_frequency` | `Int64` | Time stamp counter frequency |
 | `start_time` | `Timestamp(Nanosecond)` | Process start time |
 | `start_ticks` | `Int64` | Process start time in ticks |
@@ -141,7 +141,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `processes.realname` | `Utf8` | Real name of the user |
 | `processes.computer` | `Utf8` | Computer/hostname |
 | `processes.distro` | `Utf8` | Operating system distribution |
-| `processes.cpu_brand` | `Utf8` | CPU model; on aarch64 Linux `<core name> (0x<implementer>:0x<part>)` (raw ids for unrecognized parts), on macOS the sysctl `machdep.cpu.brand_string` (e.g. "Apple M2"); falls back to the architecture name when unavailable |
+| `processes.cpu_brand` | `Utf8` | CPU model. For processes instrumented with the Rust tracing library: on aarch64 Linux `<core name> (0x<implementer>:0x<part>)` (raw ids for unrecognized parts), on macOS the sysctl `machdep.cpu.brand_string` (e.g. "Apple M2"), falling back to the architecture name when unavailable. Unreal reports `FPlatformMisc::GetCPUBrand()`; OTLP uses the `host.cpu.model.name` resource attribute (empty if missing) |
 | `processes.insert_time` | `Timestamp(Nanosecond)` | When process was inserted |
 | `processes.parent_process_id` | `Utf8` | Parent process identifier |
 | `processes.properties` | `Dictionary(Int32, Binary)` | Process properties (JSONB format) |
