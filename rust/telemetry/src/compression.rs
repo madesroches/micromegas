@@ -22,13 +22,20 @@ pub fn compress(src: &[u8]) -> Result<Vec<u8>> {
 /// Decompresses a LZ4-compressed byte slice.
 ///
 /// This function will allocate a new `Vec<u8>` to hold the decompressed data.
-pub fn decompress(compressed: &[u8]) -> Result<Vec<u8>> {
+/// Fails if the decompressed data is larger than `max_decompressed_bytes`, so a
+/// small hostile payload can't expand into an unbounded allocation.
+pub fn decompress(compressed: &[u8], max_decompressed_bytes: usize) -> Result<Vec<u8>> {
     let mut decompressed = Vec::new();
-    let mut decoder = lz4::Decoder::new(compressed).with_context(|| "allocating lz4 decoder")?;
-    let _size = decoder
+    let decoder = lz4::Decoder::new(compressed).with_context(|| "allocating lz4 decoder")?;
+    // `take` truncates silently; reading one byte past the cap makes the overflow detectable.
+    let mut limited = decoder.take((max_decompressed_bytes as u64).saturating_add(1));
+    limited
         .read_to_end(&mut decompressed)
         .with_context(|| "reading lz4-compressed buffer")?;
-    let (_reader, res) = decoder.finish();
+    if decompressed.len() > max_decompressed_bytes {
+        anyhow::bail!("decompressed lz4 buffer exceeds {max_decompressed_bytes} bytes");
+    }
+    let (_reader, res) = limited.into_inner().finish();
     res?;
     Ok(decompressed)
 }

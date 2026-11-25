@@ -20,6 +20,7 @@
 
 use bumpalo::Bump;
 use micromegas_analytics::metadata::StreamMetadata;
+use micromegas_analytics::payload::MAX_DECOMPRESSED_BLOCK_BUFFER_BYTES;
 use micromegas_telemetry::block_wire_format::{Block, BlockPayload};
 use micromegas_telemetry::compression::decompress;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
@@ -266,8 +267,10 @@ fn corruption_sweep(
 }
 
 fn sweep_block(meta: &StreamMetadata, payload: &BlockPayload, seed: u64) {
-    let deps_buf = decompress(&payload.dependencies).expect("decompressing dependencies payload");
-    let objs_buf = decompress(&payload.objects).expect("decompressing objects payload");
+    let deps_buf = decompress(&payload.dependencies, MAX_DECOMPRESSED_BLOCK_BUFFER_BYTES)
+        .expect("decompressing dependencies payload");
+    let objs_buf = decompress(&payload.objects, MAX_DECOMPRESSED_BLOCK_BUFFER_BYTES)
+        .expect("decompressing objects payload");
     let custom_readers = make_custom_readers();
 
     // Sanity check: the well-formed buffers must parse without error before
