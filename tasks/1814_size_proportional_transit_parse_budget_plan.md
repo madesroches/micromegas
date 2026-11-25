@@ -1,0 +1,120 @@
+# Size-Proportional Transit Parse Budget Plan
+
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1814
+
+## Overview
+Stream metadata is client-supplied. It can declare UDTs whose members share an offset, so a
+tiny object payload fans out into a huge tree of parsed values (a transit "billion laughs").
+#1813 already caps each top-level instance at 4096 visited members. That stops the issue's
+`16^6` repro, but the cap is a constant, unrelated to how many bytes the object occupies. A
+2-byte object (1 type-index byte + 1 payload byte) can still produce 4096 values, about
+160 KB of arena. Every object in a block is a disjoint slice of the block buffer and pays the
+same cost again, and the arena is per block. So amplification is still about 80,000x per
+block. This plan makes the per-instance budget proportional to the object's size, so total
+parse work and arena use are linear in the block's byte count.
+
+## Current State
+- `rust/transit/src/parser.rs`: `MAX_UDT_NESTING_DEPTH = 32` and
+  `MAX_UDT_NODES_PER_INSTANCE = 4096`. `parse_pod_instance` builds a
+  `ParseBudget { depth: 0, nodes_left: MAX_UDT_NODES_PER_INSTANCE }` and delegates to
+  `parse_pod_instance_bounded`. That function decrements `nodes_left` once per visited member
+  (intrinsic, reference, or nested) and fails with a `corrupt metadata` error at zero.
+- Every caller passes `parse_pod_instance` a window sized to the UDT being parsed:
+  - `read_dependencies` passes `&buffer[offset..object_end]`, with `object_end` set to
+    `offset + udt.size`.
+  - `parse_object_buffer` does the same for static-size objects.
+  - The custom readers in `rust/tracing/src/parsing.rs` pass `StaticStringRef`/`StringId`
+    windows of `metadata.size` and `Property` windows of `property_layout.size`.
+
+  So the window length is the object's byte footprint.
+- `rust/analytics/src/payload.rs` `parse_block` uses one `Bump` for the whole block. Nothing
+  is freed between objects.
+- Real layouts are sparse. Each intrinsic leaf occupies at least 1 byte, a reference at least
+  8, and members don't overlap. Events in `rust/tracing` and the Unreal interop types come to
+  roughly 0.1–0.2 visited members per byte. A struct made entirely of `u8` fields reaches 1.
+- Tests: `rust/transit/tests/test_corrupt_input.rs` already has the `pod_udt`/`member`
+  helpers and the #1813 recursion and fan-out cases.
+
+## Design
+Derive the initial budget from the window length, keeping the existing ceiling:
+
+```rust
+// Legitimate layouts visit at most ~1 member per byte (non-overlapping leaves of >= 1 byte);
+// the slack covers a few wrapper structs around tiny objects.
+const UDT_NODES_PER_BYTE: usize = 2;
+const UDT_NODES_SLACK: usize = 8;
+
+fn instance_node_budget(window_len: usize) -> usize {
+    window_len
+        .saturating_mul(UDT_NODES_PER_BYTE)
+        .saturating_add(UDT_NODES_SLACK)
+        .min(MAX_UDT_NODES_PER_INSTANCE)
+}
+```
+
+`parse_pod_instance` seeds `ParseBudget.nodes_left` with `instance_node_budget(object_window.len())`.
+Nothing else changes: same signature, same counting, same error path. The exhaustion message
+reports the computed budget, not the constant (e.g. `corrupt metadata: member budget of {n}
+for {len}-byte instance exhausted at udt {name}`).
+
+**Bound.** Objects in a block are disjoint, and each one costs at least 2 buffer bytes (type
+index plus a nonzero static size; size 0 means dynamic, which takes the custom-reader path). So
+the visited members across a block are at most `2·B + 8·(B/2) = 6·B` for a buffer of `B` bytes.
+Parse work and arena growth become linear in the decompressed block size. The same argument
+covers `read_dependencies`. Bounding the block's own LZ4 decompression (`decompress` in
+`rust/telemetry/src/compression.rs` has no output cap) is a separate amplification vector and
+out of scope here.
+
+**Validation at ingestion** (the issue's second suggestion) is not added. The parser is the one
+place every metadata source goes through, and the runtime budget covers it, which is the same
+reasoning #1813 used against load-time cycle rejection.
+
+## Implementation Steps
+1. `rust/transit/src/parser.rs`: add `UDT_NODES_PER_BYTE`, `UDT_NODES_SLACK`, and
+   `instance_node_budget`. In `parse_pod_instance`, seed `nodes_left` with it. Carry the
+   initial budget in `ParseBudget`, or pass it to the error site, so the exhaustion message
+   can report it. Update the comment above the constants.
+2. `rust/transit/tests/test_corrupt_input.rs`: add the regression tests below.
+3. `CHANGELOG.md`: Unreleased fix entry citing #1814 (done by the `pr` step).
+
+## Files to Modify
+- `rust/transit/src/parser.rs`
+- `rust/transit/tests/test_corrupt_input.rs`
+- `CHANGELOG.md`
+
+## Trade-offs
+- **Size-proportional per-instance budget vs. a per-block budget threaded through
+  `parse_object_buffer`/`read_dependencies`.** A per-block counter needs a new parameter on
+  `parse_pod_instance`, and the custom readers in `rust/tracing` have no budget to pass.
+  Tying the budget to the object's own bytes gives the same linear-per-block bound with no
+  signature change, and it doesn't let one object starve its siblings.
+- **Arena size limit (`Bump::set_allocation_limit`).** When an allocation goes over the limit,
+  `alloc`/`Vec::with_capacity_in` abort the process instead of returning `Err`, so a limit
+  would turn an OOM into the same abort. A counted budget fails cleanly.
+- **Constants vs. configuration.** These are sanity limits on malformed input, not tuning
+  knobs, so they stay hard-coded, as in #1813.
+
+## Decisions
+
+## Documentation
+No user-facing docs cover transit parsing internals. No mkdocs change is needed.
+
+## Testing Strategy
+The bug is reachable in the wild through ingestion, and unit tests with constructed UDTs and
+buffers reproduce it exactly. In `rust/transit/tests/test_corrupt_input.rs`, each test pins
+#1814:
+- `parse_pod_instance_rejects_fan_out_on_tiny_object`: the issue's shape. `T0 { v: u8 }` and
+  `T1..T3`, where each has 16 members of the previous type at offset 0, size 1, against a
+  1-byte window. Returns `Err`. Under the #1813 constant cap it parsed thousands of values
+  successfully, so this test fails before the fix.
+- `parse_object_buffer_rejects_fan_out_on_tiny_objects`: the same types as a buffer of many
+  2-byte objects (`[type_index, 0]` repeated) through `parse_object_buffer` returns `Err` on the
+  first object.
+- `parse_pod_instance_accepts_dense_u8_struct`: a 64-byte UDT of 64 `u8` members parses, which
+  confirms the densest legitimate layout fits the budget.
+- The existing `parse_pod_instance_accepts_legitimate_nesting` and the `rust/tracing` /
+  `micromegas-analytics` parse tests (`parse_corrupt_block_tests`, plus `cargo test` over
+  `transit`, `tracing`, `analytics`) confirm real layouts are unaffected.
+
+## Open Questions
+None.
