@@ -137,7 +137,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
 - Icon unchanged. The type id `stackedbar` is unchanged, since stored notebooks reference it.
 
 ## Mockups
-- `tasks/stackedbar_horizontal_mockups/horizontal-layout.html` shows the horizontal layout in two states, using the app's dark theme tokens and `SERIES_COLORS`:
+- `tasks/completed/stackedbar_horizontal_mockups/horizontal-layout.html` shows the horizontal layout in two states, using the app's dark theme tokens and `SERIES_COLORS`:
   - left: a single-series ranked cost per user, 30 rows, with value labels and a selected row
   - right: a stacked-by-series version with the legend and in-segment labels
 
@@ -200,7 +200,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
 - `CHANGELOG.md`
 
 ## Decisions
-- The horizontal-layout mockup (`tasks/stackedbar_horizontal_mockups/horizontal-layout.html`) is accepted (user call).
+- The horizontal-layout mockup (`tasks/completed/stackedbar_horizontal_mockups/horizontal-layout.html`) is accepted (user call).
 - The cell type id stays `stackedbar`, and only the display label changes to "Bar Chart" (stored notebooks reference the id).
 - Horizontal mode has fixed row heights and never stretches rows to fill a tall cell (per the issue). Leftover space stays empty below the last row.
 - No hit-area widening for thin segments. The 18px row thickness is enough, and stacked segments in one row would make a widened area ambiguous.
