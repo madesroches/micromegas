@@ -80,6 +80,8 @@ Additions to the output:
 - `contentWidth` and `contentHeight`, replacing `plotWidth` and the implicit height
 - `valueTicks: { value, pos, label }[]`, where `pos` is y for vertical and x for horizontal. `yTicks` is renamed to this.
 - Per bar: `totalLabel: { x, y, text } | null`
+- Horizontal-only fields: top-level `labelColumnWidth` (the value-axis origin for the axis baseline, gridlines and right-aligned category labels) and `barThickness`; per bar `rowY` (row top) and `labelY` (category-label anchor, the row center). The vertical builder sets them to 0.
+- The vertical-only fields keep their current names and meaning: `yAxisWidth`, `plotHeight`, `barWidth`, `rotateLabels`, and per bar `x`, `width`, `labelX`. The horizontal builder sets them to 0 / `false`, and the renderer reads them only in vertical mode.
 
 **Horizontal geometry** (`buildHorizontalBarLayout`):
 - `ROW_HEIGHT = 28`, `BAR_THICKNESS = 18`. The bar is centered in its row.
@@ -169,7 +171,8 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
 
 ### Phase 4 — Editor and metadata
 11. Add the Orientation select, the value-labels checkbox, `RowSelectionEditor` and the hint/placeholder text to the editor.
-12. Change the label and description in `stackedBarMetadata`. New cells default to the name "Bar Chart" instead of "Stacked Bar", since `createDefaultCell` seeds the name from `meta.label`.
+12. Change the label and description in `stackedBarMetadata`.
+12a. In `createDefaultCell` (`cell-registry.ts:270-275`), seed the name from `sanitizeCellName(meta.label)` (already exported from `notebook-utils.ts`, which `cell-registry.ts` imports from), so new cells get macro-safe names: `Bar_Chart`, `Pie_Chart`, `Flame_Graph`, and so on. Only the default for newly created cells changes; stored cell names are never touched.
 
 ### Phase 5 — Docs and changelog
 13. Update `mkdocs/docs/web-app/notebooks/cell-types.md`:
@@ -182,12 +185,13 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
     - note the cell type id is `stackedbar`
 14. Update `mkdocs/docs/web-app/notebooks/variables.md:116`: add bar chart cells to the cells with selection (including the second clause, "For table and chart cells, selection is enabled via the **Row Selection** section…", and the :118 "**Selection mode** (table and chart cells)" bullet), and say a click on a segment publishes the category, series and value columns.
 14a. Update `claude-plugin/skills/micromegas-notebooks/SKILL.md:64` and its identical copy `rust/public/src/servers/mcp/skills/micromegas-notebooks/SKILL.md:64`: where `$cell.selected.column` is described as the selected row of an upstream table or chart with `selectionMode: "single"`, also mention bar chart cells (and map) as selection sources.
-15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased, citing "(#1820)" like the existing entries. It covers no SQL changes and no breaking change, and notes that new cells default to "Bar Chart" instead of "Stacked Bar". Notebook config is additive, and existing `stackedbar` cells render identically.
+15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased, citing "(#1820)" like the existing entries. It covers no SQL changes and no breaking change, and notes that newly created cells now get underscore default names (e.g. `Bar_Chart`, `Pie_Chart`) so their selections can be referenced without a rename; existing cell names are unchanged. Notebook config is additive, and existing `stackedbar` cells render identically.
 
 ## Files to Modify
 - `analytics-web-app/src/lib/arrow-utils.ts`
 - `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts`
 - `analytics-web-app/src/lib/screen-renderers/cells/StackedBarCell.tsx`
+- `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/StackedBarCell.test.tsx`
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 - `mkdocs/docs/web-app/notebooks/variables.md`
@@ -202,6 +206,8 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
 - No hit-area widening for thin segments. The 18px row thickness is enough, and stacked segments in one row would make a widened area ambiguous.
 - Out of scope, per the issue: a `table` data-bar column format.
 - Label is "Bar Chart": it doubles as the default cell name and badge text, so it stays short.
+- Default names for new cells are sanitized (`Bar_Chart`, `Pie_Chart`, …) so `$cell.selected.*` works without a rename; existing cell names are never changed (user call).
+- The shared layout shape keeps the vertical fields as they are and adds explicit horizontal-only fields, rather than a discriminated union, to minimize churn in the existing vertical code and tests.
 
 ## Documentation
 - `mkdocs/docs/web-app/notebooks/cell-types.md`: the Stacked Bar section, renamed to Bar Chart and extended (step 13)
@@ -243,6 +249,7 @@ Everything is reachable with constructed Arrow tables and props, so the coverage
   - the orientation select and value-labels checkbox write their options
   - `RowSelectionEditor` writes `selectionMode`
   - the label is `'Bar Chart'`
+  - `createDefaultCell('stackedbar', …)` names the cell `Bar_Chart`, and `Bar_Chart_2` when that name exists
 
 ## Manual Verification
 Sticky positioning and scrollbar alignment depend on real browser layout, which jsdom doesn't do:
