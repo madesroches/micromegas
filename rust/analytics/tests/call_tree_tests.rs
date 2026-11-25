@@ -385,11 +385,12 @@ fn test_unmatched_ends_past_max_depth_return_err() {
             100 + i as i64,
             PropertySet::empty(),
         ) {
-            failure = Some(format!("{e:?}"));
+            failure = Some((i, format!("{e:?}")));
             break;
         }
     }
-    let msg = failure.expect("unmatched ends must hit the cap");
+    let (failed_at, msg) = failure.expect("unmatched ends must hit the cap");
+    assert_eq!(failed_at, MAX_CALL_TREE_DEPTH - 1);
     assert!(msg.contains("call tree depth exceeds"), "got: {msg}");
 }
 
