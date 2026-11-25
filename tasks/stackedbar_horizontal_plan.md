@@ -72,7 +72,7 @@ The vertical builder stays. A horizontal builder is added. Both return the same 
 
 Shared pieces, factored out of `buildStackedBarLayout`:
 - `buildValueScale(maxTotal, unit, divisions)` → `{ top, step, ticks: {value, label}[] }`. It is the current max × 1.05 and `niceStep` logic, unchanged for vertical.
-- A segment-stacking loop parameterized by a value→pixel mapping and the stacking axis. It produces the existing `StackedBarSegmentLayout` (`x, y, width, height, rounded, labelFits`). In horizontal mode `labelFits` checks the segment *width* against the text and the row thickness against `MIN_LABEL_SEGMENT_HEIGHT`.
+- A segment-stacking loop parameterized by a value→pixel mapping and the stacking axis. It produces the existing `StackedBarSegmentLayout` (`x, y, width, height, rounded, labelFits`). In horizontal mode `labelFits` checks only the segment *width* against the text.
 - `rounded` marks the end segment. The path helper becomes `roundedEndRectPath(x, y, w, h, r, end: 'top' | 'right')`.
 
 Additions to the output:
@@ -95,7 +95,7 @@ Additions to the output:
 ### Rendering (`StackedBarView`)
 - Vertical: unchanged structure, with the plot div scrolling on x.
 - Horizontal: the plot div is `overflow-y-auto` and holds two SVGs.
-  - First, an axis SVG with `position: sticky; top: 0` and a panel background. It draws the tick labels and a baseline. Tick labels are centered on their tick, except the last, which is end-anchored (`text-anchor: end`) so it stays inside the plot when the tick lands at `width − RIGHT_MARGIN`.
+  - First, an axis SVG with `position: sticky; top: 0` and a panel background. It draws the tick labels and a baseline. Tick labels are centered on their tick, except the last, which is end-anchored (`text-anchor: end`) so it stays inside the cell when the last tick falls at or near the plot's right edge.
   - Second, a body SVG of `contentHeight`. It draws the vertical gridlines, the category labels (end-anchored, right-aligned in the label column), the segments and the labels.
   - The `ResizeObserver` reads the content-box width, which excludes the scrollbar, so both SVGs line up.
   - The height is the content height, not the measured height.
@@ -109,7 +109,7 @@ The hit is `{ categoryIndex, seriesIndex }`. `StackedBarCell` copies the Chart c
 - A click on the SVG background (not a segment) clears the selection.
 - Payload keys are the SQL column names, as in table, chart and map. The issue wrote `.category`, and a query that names its columns `category, series, value` still gets exactly the issue's macros.
 - Selection is enabled only when `selectionMode === 'single'`. Otherwise clicks do nothing, as today.
-- While a selection exists, every other segment and its in-segment label render at `opacity={DIM_FILL}`. Total labels stay full opacity.
+- While a selection exists, every other segment and its in-segment label render at `DIM_FILL` opacity, applied with inline `style={{ opacity: DIM_FILL }}` so it wins over the segments' `hover:opacity-85` class. Total labels stay full opacity.
 
 Published payload, keyed by **SQL column names**:
 ```ts
@@ -125,7 +125,7 @@ For `SELECT user, model, sum(cost) AS cost …` this gives `$cell.selected.user`
 `StackedBarCellEditor` gains:
 - An **Orientation** select (Vertical / Horizontal). It uses the same field styling as the Unit input.
 - A **Show value labels** checkbox.
-- `RowSelectionEditor`, at the bottom as in `TableCell` and `ChartCell`.
+- `RowSelectionEditor`, after the Unit/Orientation/value-labels fields and before the validation errors and `AvailableVariablesPanel`, as in `ChartCell`.
 
 The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what `color` means in each). The SyntaxEditor placeholder becomes `SELECT category, [series,] value FROM ...`.
 
@@ -225,7 +225,6 @@ Everything is reachable with constructed Arrow tables and props, so the coverage
   - segments stack left to right with a 2px gap, and only the end segment is rounded
   - in-segment `labelFits` uses the segment width
   - vertical `valueLabels` grows the top margin and skips labels wider than the band
-  - the existing vertical tests pass with the renamed fields
   - update `StackedBarCell.test.tsx:243-246`, which expects `/category, series, and value columns/`, to match the new column-count error wording
 - **Selection**:
   - `buildBarSelection` gives SQL-column-name keys, a raw category value, the series key only in the 3-column shape, and the summed value
