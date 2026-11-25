@@ -336,9 +336,8 @@ fn read_dependencies_rejects_duplicate_id_static_string_dependency_branch() {
 fn read_dependencies_rejects_truncated_static_string_dependency() {
     let bump = Bump::new();
     let udts = vec![udt_named("StaticStringDependency", 0)];
-    // A declared object_size of 0 trivially passes the window-fits guard, but
-    // the StaticStringDependency branch hands the reader the *entire*
-    // remaining buffer (not bounded to object_size) — with no bytes left,
+    // A declared object_size of 0 trivially passes the window-fits guard, and
+    // the StaticStringDependency branch bounds its window to object_size, so
     // the string_id read must fail via try_read_consume_pod.
     let mut buffer = vec![0u8];
     buffer.extend_from_slice(&0u32.to_le_bytes());
@@ -586,4 +585,67 @@ fn parse_object_buffer_rejects_self_referential_udt() {
     let custom_readers = CustomReaderMap::new();
     let res = parse_object_buffer(&bump, &custom_readers, &deps, &udts, &buffer, |_| Ok(true));
     assert!(res.is_err());
+}
+
+fn fan_out_udts() -> Vec<UserDefinedType> {
+    let fan = |name: &str, next: &str| {
+        let members = (0..16)
+            .map(|i| member(&format!("m{i}"), next, 0, 1, false))
+            .collect();
+        pod_udt(name, 1, members)
+    };
+    vec![
+        pod_udt("T0", 1, vec![member("v", "u8", 0, 1, false)]),
+        fan("T1", "T0"),
+        fan("T2", "T1"),
+    ]
+}
+
+#[test]
+fn parse_pod_instance_rejects_fan_out_on_tiny_object() {
+    let bump = Bump::new();
+    let udts = fan_out_udts();
+    let deps = HashMap::new();
+    let window = [0u8; 1];
+    assert!(parse_pod_instance(&bump, &udts[2], &udts, &deps, &window).is_err());
+}
+
+#[test]
+fn parse_object_buffer_rejects_fan_out_on_tiny_objects() {
+    let bump = Bump::new();
+    let udts = fan_out_udts();
+    let mut buffer = vec![];
+    for _ in 0..150 {
+        buffer.extend_from_slice(&[2u8, 0u8]);
+    }
+    let deps = HashMap::new();
+    let custom_readers = CustomReaderMap::new();
+    let res = parse_object_buffer(&bump, &custom_readers, &deps, &udts, &buffer, |_| Ok(true));
+    assert!(res.is_err());
+}
+
+#[test]
+fn read_dependencies_rejects_dependency_larger_than_declared_size() {
+    let bump = Bump::new();
+    let udts = vec![pod_udt("CustomDep", 0, vec![])];
+    let mut buffer = vec![0u8];
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.push(0u8);
+    buffer.extend_from_slice(&8u32.to_le_bytes());
+    buffer.extend_from_slice(&7u64.to_le_bytes());
+    let mut custom_readers: CustomReaderMap = HashMap::new();
+    custom_readers.insert("CustomDep".to_string(), Arc::new(test_custom_reader));
+    assert!(read_dependencies(&bump, &custom_readers, &udts, &buffer).is_err());
+}
+
+#[test]
+fn parse_pod_instance_accepts_dense_u8_struct() {
+    let bump = Bump::new();
+    let members = (0..64)
+        .map(|i| member(&format!("b{i}"), "u8", i, 1, false))
+        .collect();
+    let udts = vec![pod_udt("Dense", 64, members)];
+    let deps = HashMap::new();
+    let window = [7u8; 64];
+    assert!(parse_pod_instance(&bump, &udts[0], &udts, &deps, &window).is_ok());
 }
