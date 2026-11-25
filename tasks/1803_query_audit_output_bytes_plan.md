@@ -99,7 +99,9 @@ answer for a setup failure.
    `QueryAuditState` and its initialiser; record in `CompletionTrackedStream::poll_next` on `Ok`;
    populate the record and emit `query_output_bytes` in `emit()`.
 3. `rust/public/tests/query_audit_tests.rs`: add the new fields to both record literals and the
-   new tests below. `rust/public/tests/read_policy_threading_tests.rs`: add the in-process
+   new tests below; append `"output_bytes"` and `"output_messages"` after `"queue_wait_ms"` in the
+   field-order loop of `query_audit_record_appends_estimate_and_admission_fields_after_sql_hash`.
+   `rust/public/tests/read_policy_threading_tests.rs`: add the in-process
    stream/emit test below.
 4. `mkdocs/docs/query-guide/query-audit-log.md`: add both fields to the table, an example "egress
    by caller" query, and mention `output_bytes` in the `incomplete` note.
@@ -119,6 +121,7 @@ answer for a setup failure.
 ## Decisions
 
 - `output_messages` instead of the issue's `output_batches`: it counts every `FlightData` message, including the schema message, so "batches" would overcount.
+- No setup-failure `output_bytes == 0` test: setup failures emit before any `CompletionTrackedStream` exists, so the value is just `OutputStats::default()`, and the absent-optionals serialization test shows the 0-valued keys are present.
 
 ## Documentation
 
