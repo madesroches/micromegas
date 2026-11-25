@@ -255,6 +255,10 @@ impl View for BlocksView {
             .await
     }
 
+    fn get_reported_sort_order(&self) -> Option<Vec<String>> {
+        Some(insert_time_sort_order())
+    }
+
     fn get_merged_partition_sort_order(
         &self,
         partitions_to_merge: &[Partition],

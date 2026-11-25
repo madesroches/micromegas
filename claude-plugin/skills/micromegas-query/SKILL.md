@@ -229,7 +229,7 @@ Then read the documentation for only the views the question needs:
 micromegas-query "SELECT view_set_name, description, columns, sort_order FROM list_view_sets() WHERE view_set_name IN ('<name1>', '<name2>') LIMIT 100" --begin 1h --format json
 ```
 
-`description` is a markdown usage guide per view (what a row is, how to access it, mandatory filters, how to decode columns, join keys, examples), `columns` lists `name: DataType` per column, and `sort_order` lists the columns a scan is already ordered by. It includes any views the deployment defined itself. Reading every view at once (dropping the `WHERE`) returns tens of KB on a deployment with a few dozen views, so avoid it. Keep `--format json`: table output truncates cells. **Do not run DESCRIBE queries** — `columns` and `description` from `list_view_sets()` cover the schemas and usage.
+`description` is a markdown usage guide per view (what a row is, how to access it, mandatory filters, how to decode columns, join keys, examples), `columns` lists `name: DataType` per column, and `sort_order` lists the columns the view set's partitions are normally written sorted by (informational, not guaranteed for every partition). It includes any views the deployment defined itself. Reading every view at once (dropping the `WHERE`) returns tens of KB on a deployment with a few dozen views, so avoid it. Keep `--format json`: table output truncates cells. **Do not run DESCRIBE queries** — `columns` and `description` from `list_view_sets()` cover the schemas and usage.
 
 **Descriptions are binding.** Time windows, mandatory filters and access rules in a view's `description` must be followed exactly like the MANDATORY RULES.
 

@@ -53,6 +53,17 @@ impl ThreadSpansViewMaker {
     }
 }
 
+// Shared by the maker and the view so the catalog report cannot drift from the declaration.
+fn thread_spans_scan_ordering() -> ScanOrdering {
+    ScanOrdering::Concatenated {
+        columns: vec![ScanSortColumn {
+            column: MIN_TIME_COLUMN.clone(),
+            descending: false,
+        }],
+        bounds: OrderingBounds::EventTime,
+    }
+}
+
 impl ViewMaker for ThreadSpansViewMaker {
     fn make_view(&self, stream_id: &str) -> Result<Arc<dyn View>> {
         Ok(Arc::new(ThreadSpansView::new(
@@ -67,6 +78,10 @@ impl ViewMaker for ThreadSpansViewMaker {
 
     fn get_schema(&self) -> Arc<Schema> {
         Arc::new(get_spans_schema())
+    }
+
+    fn get_scan_output_ordering(&self) -> ScanOrdering {
+        thread_spans_scan_ordering()
     }
 }
 
@@ -441,12 +456,6 @@ impl View for ThreadSpansView {
     }
 
     fn get_scan_output_ordering(&self) -> ScanOrdering {
-        ScanOrdering::Concatenated {
-            columns: vec![ScanSortColumn {
-                column: MIN_TIME_COLUMN.clone(),
-                descending: false,
-            }],
-            bounds: OrderingBounds::EventTime,
-        }
+        thread_spans_scan_ordering()
     }
 }

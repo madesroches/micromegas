@@ -225,6 +225,7 @@
 //!
 //!
 use super::blocks_view::BlocksView;
+use super::partitioned_execution_plan::ScanOrdering;
 use super::processes_view::make_processes_view;
 use super::streams_view::make_streams_view;
 use super::{
@@ -249,6 +250,9 @@ pub trait ViewMaker: Send + Sync + Debug {
 
     /// Returns the schema for views created by this maker.
     fn get_schema(&self) -> Arc<Schema>;
+
+    /// Ordering every instance this maker builds declares; see `View::get_scan_output_ordering`.
+    fn get_scan_output_ordering(&self) -> ScanOrdering;
 }
 
 /// A factory for creating and managing views.

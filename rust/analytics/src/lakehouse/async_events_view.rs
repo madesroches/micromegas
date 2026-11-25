@@ -5,6 +5,7 @@ use super::{
     jit_partitions::update_insert_time_jit_view,
     lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
+    partitioned_execution_plan::ScanOrdering,
     view::{PartitionSpec, View},
     view_factory::{ViewFactory, ViewMaker},
 };
@@ -60,6 +61,10 @@ impl ViewMaker for AsyncEventsViewMaker {
 
     fn get_schema(&self) -> Arc<Schema> {
         Arc::new(async_events_table_schema())
+    }
+
+    fn get_scan_output_ordering(&self) -> ScanOrdering {
+        ScanOrdering::Unordered
     }
 }
 

@@ -7,6 +7,7 @@ use micromegas_analytics::lakehouse::log_view::LogViewMaker;
 use micromegas_analytics::lakehouse::metrics_view::MetricsViewMaker;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
+use micromegas_analytics::lakehouse::thread_spans_view::ThreadSpansViewMaker;
 use micromegas_analytics::lakehouse::view_definition::build_sql_batch_view;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, ViewMaker, default_view_factory};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -213,7 +214,7 @@ async fn test_list_view_sets_description_and_columns() -> Result<()> {
     );
     assert!(
         measures.sort_order.is_none(),
-        "maker-only set has no sort order"
+        "unordered maker-only set has no sort order"
     );
     Ok(())
 }
@@ -257,6 +258,34 @@ async fn test_list_view_sets_sort_order_of_global_views() -> Result<()> {
             .sort_order
             .is_none()
     );
+    assert_eq!(
+        find("blocks").expect("blocks").sort_order,
+        Some(vec!["insert_time".to_string()])
+    );
+    assert!(
+        find("log_entries")
+            .expect("log_entries")
+            .sort_order
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_list_view_sets_sort_order_of_maker_only_thread_spans() -> Result<()> {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let mut factory = base_factory(&lakehouse);
+    factory.add_view_set(
+        String::from("thread_spans"),
+        Arc::new(ThreadSpansViewMaker::new(Arc::new(factory.clone()))),
+    );
+
+    let view_sets = list_view_sets(&factory)?;
+    let thread_spans = view_sets
+        .iter()
+        .find(|vs| vs.view_set_name == "thread_spans")
+        .expect("thread_spans");
+    assert_eq!(thread_spans.sort_order, Some(vec!["begin".to_string()]));
     Ok(())
 }
 

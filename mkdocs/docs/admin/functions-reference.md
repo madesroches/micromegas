@@ -24,7 +24,7 @@ SELECT * FROM list_view_sets();
 | `global_instance_available` | Boolean | Whether a global instance exists |
 | `description` | String (nullable) | Markdown usage guide for the view set: what a row is, access pattern, filters, joins. `NULL` when none was written |
 | `columns` | String | One `name: DataType` line per column |
-| `sort_order` | String (nullable) | Comma-separated ascending sort columns of the global view's scan; `NULL` when unordered or when the view set has no global instance |
+| `sort_order` | String (nullable) | Comma-separated ascending columns the view set's partitions are normally written sorted by (informational, not guaranteed for every partition); `NULL` when unordered |
 
 **Example**:
 ```sql
