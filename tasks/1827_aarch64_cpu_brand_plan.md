@@ -135,6 +135,7 @@ changes.
 - `rust/tracing/Cargo.toml`
 - `rust/telemetry-sink/Cargo.toml`
 - `mkdocs/docs/query-guide/schema-reference.md`
+- `doc/how_to_query/README.md`
 - `CHANGELOG.md` (via the `pr` step)
 
 ## Trade-offs
@@ -150,7 +151,9 @@ changes.
 ## Documentation
 - `mkdocs/docs/query-guide/schema-reference.md` (lines 47 and 144): describe `cpu_brand` as the CPU
   model, noting that on aarch64 Linux it is `"<core name> (0x<implementer>:0x<part>)"` (or the raw
-  ids for unrecognized parts) and falls back to the architecture name when unavailable.
+  ids for unrecognized parts), on macOS it is the sysctl `machdep.cpu.brand_string` (e.g.
+  "Apple M2"), and it falls back to the architecture name when unavailable.
+- `doc/how_to_query/README.md` (lines 259 and 317): same new description as above.
 - `CHANGELOG.md`: entry under Unreleased (added by `pr`).
 
 ## Testing Strategy
