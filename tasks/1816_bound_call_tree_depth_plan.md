@@ -51,10 +51,7 @@ That is the only place `stack` grows by more than one node. `add_child_to_top` p
 an empty stack, so it never deepens the tree past the cap.
 
 The cap is set far above real instrumented call depth (dozens of levels, occasionally a few
-hundred for instrumented recursion), so it rejects only malformed or hostile input. With the
-traversal and drop iterative, the cap does not guard those two paths. It bounds whatever
-recursion is left over the tree, namely the derived `Debug` used in test assertion messages and
-any future recursive consumer, and it keeps the `depth: u32` column meaningful.
+hundred for instrumented recursion), so it rejects only malformed or hostile input.
 
 ### 2. Iterative traversal
 Replace the body of `for_each_node_in_tree` with an explicit stack of
@@ -110,7 +107,7 @@ Unit tests in `rust/analytics/tests/call_tree_tests.rs`, no DB:
   returns `Err` whose message contains `call tree depth exceeds`. Also confirm that a begin
   before `begin_range_ns`, which is filtered and never pushed, does not trip the cap at full
   depth.
-- **Deep drop (issue reproduction).** Build a 1,000,000-deep `CallTreeNode` chain by hand
+- **Deep drop (issue reproduction).** Build a 100,000-deep `CallTreeNode` chain by hand
   (iteratively, using the public fields) and drop it on a `std::thread` spawned with a small stack
   (e.g. 256 KiB). Join the thread and assert it completed. Before the fix, the process aborts.
 - **Deep traversal.** Build a 100,000-deep chain by hand inside a `CallTree` (it bypasses the
