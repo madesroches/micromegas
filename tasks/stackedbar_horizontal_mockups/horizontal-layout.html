@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bar Chart cell — horizontal orientation mockup</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f; --panel-bg: #12121a; --card-bg: #1a1a2e;
+    --border-color: #2a2a3e; --text-primary: #e7e9ea; --text-secondary: #9ca3af;
+    --text-muted: #6b7280; --accent-link: #1565c0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: var(--app-bg); color: var(--text-primary);
+         font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  p.note { font-size: 12px; color: var(--text-muted); margin: 0 0 20px; max-width: 900px; line-height: 1.5; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .cell { border: 1px solid var(--border-color); border-radius: 8px; background: var(--panel-bg); }
+  .cell-title { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-size: 13px; }
+  .badge { font-size: 10px; text-transform: uppercase; color: var(--text-muted); border: 1px solid var(--border-color); border-radius: 4px; padding: 1px 6px; }
+  .cell-body { height: 420px; display: flex; flex-direction: column; }
+  .stats { display: flex; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--border-color); font-size: 12px; color: var(--text-muted); }
+  .stats span { color: var(--text-secondary); }
+  .body { flex: 1; min-height: 0; display: flex; gap: 20px; padding: 16px; }
+  .plot { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+  .axis { position: sticky; top: 0; background: var(--panel-bg); z-index: 1; display: block; }
+  .legend { min-width: 170px; overflow-y: auto; font-size: 12px; color: var(--text-secondary); }
+  .legend div { display: flex; align-items: center; gap: 8px; padding: 2px 6px; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; }
+  .seg { cursor: pointer; }
+  .downstream { margin-top: 20px; font-size: 12px; color: var(--text-secondary); }
+  code { font-family: ui-monospace, monospace; color: #ffb300; }
+  .tip { position: absolute; pointer-events: none; font-size: 12px; background: var(--app-bg); border: 1px solid var(--border-color);
+         border-radius: 6px; padding: 8px 12px; box-shadow: 0 4px 12px rgba(0,0,0,.4); min-width: 180px; }
+  .tip .muted { color: var(--text-muted); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row b { margin-left: auto; }
+</style>
+</head>
+<body>
+<h1>Bar Chart cell (type <code>stackedbar</code>) — <code>orientation: "horizontal"</code></h1>
+<p class="note">
+  Left: single-series query <code>SELECT user, cost FROM … ORDER BY cost DESC</code> with value labels on and
+  <code>selectionMode: "single"</code>; the row for <i>j.okafor</i> is selected, others fade. Rows are a fixed 28px,
+  the plot scrolls vertically, and the value axis stays pinned at the top. No legend for a single series.
+  Right: the same layout stacked by a series column, with the side legend and in-segment labels where they fit.
+  Click a bar to toggle selection.
+</p>
+<div class="grid">
+  <div class="cell">
+    <div class="cell-title"><span class="badge">Bar Chart</span> cost_per_user</div>
+    <div class="cell-body">
+      <div class="stats"><div>categories: <span id="a-cats"></span></div><div>max total: <span id="a-max"></span></div></div>
+      <div class="body"><div class="plot" id="plot-a"></div></div>
+    </div>
+  </div>
+  <div class="cell">
+    <div class="cell-title"><span class="badge">Bar Chart</span> cost_by_model</div>
+    <div class="cell-body">
+      <div class="stats"><div>categories: <span id="b-cats"></span></div><div>series: <span>3</span></div><div>max total: <span id="b-max"></span></div></div>
+      <div class="body"><div class="plot" id="plot-b"></div><div class="legend" id="legend-b"></div></div>
+    </div>
+  </div>
+</div>
+<div class="downstream" id="downstream"></div>
+<div class="tip" id="tip" style="display:none"></div>
+
+<script>
+const COLORS = ['#bf360c', '#1565c0', '#ffb300'];
+const users = ['m.lefebvre','j.okafor','a.tanaka','s.ivanova','r.mendes','k.schmidt','l.dubois','p.nakamura',
+  'c.oliveira','d.kowalski','e.andersson','f.rossi','g.haddad','h.kim','i.novak','t.brennan','u.adeyemi',
+  'v.larsen','w.chen','x.moreau','y.petrov','z.alvarez','b.fischer','n.sato','o.gallagher',
+  'very.long.service.account.name','q.bianchi','r.yilmaz','s.lindqvist','t.horvath'];
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const costs = users.map((u, i) => ({ user: u, cost: Math.round(900 / (1 + i * 0.35) + rnd() * 40) }));
+const stacked = users.slice(0, 18).map((u, i) => {
+  const base = 700 / (1 + i * 0.3);
+  return { user: u, parts: [base * (0.45 + rnd() * 0.2), base * (0.2 + rnd() * 0.15), base * (0.1 + rnd() * 0.1)] };
+});
+const fmt = v => '$' + (v >= 1000 ? (v / 1000).toFixed(2) + 'k' : v.toFixed(0));
+const est = s => s.length * 6.2;
+function niceStep(raw) { const e = Math.floor(Math.log10(raw)), p = 10 ** e, n = raw / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; }
+function trunc(s, w) { if (est(s) <= w) return s; let e = s.length; while (e > 0 && est(s.slice(0, e) + '…') > w) e--; return s.slice(0, e) + '…'; }
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent, text) { const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]); if (text !== undefined) n.textContent = text; parent && parent.appendChild(n); return n; }
+function roundedRight(x, y, w, h, r) { r = Math.min(r, w, h / 2);
+  return `M ${x} ${y} H ${x + w - r} Q ${x + w} ${y} ${x + w} ${y + r} V ${y + h - r} Q ${x + w} ${y + h} ${x + w - r} ${y + h} H ${x} Z`; }
+
+const ROW = 28, THICK = 18, AXIS_H = 24, LABEL_MAX = 180, GAP = 2, RIGHT = 12;
+const tip = document.getElementById('tip');
+
+function render(container, rows, series, valueLabels, onSelect) {
+  const width = container.clientWidth;
+  const totals = rows.map(r => r.parts.reduce((a, b) => a + b, 0));
+  const maxTotal = Math.max(...totals);
+  const labelCol = Math.min(LABEL_MAX, Math.max(...rows.map(r => est(r.user))) + 16);
+  const totalLabelRoom = valueLabels ? Math.max(...totals.map(t => est(fmt(t)))) + 8 : 0;
+  const plotW = width - labelCol - RIGHT - totalLabelRoom;
+  const top = maxTotal * 1.05, step = niceStep(top / 5);
+  const ticks = []; for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
+  const xOf = v => labelCol + (v / top) * plotW;
+  const contentH = rows.length * ROW + 8;
+
+  container.innerHTML = '';
+  const axis = el('svg', { width, height: AXIS_H, class: 'axis' }, container);
+  ticks.forEach(v => el('text', { x: xOf(v), y: 14, fill: '#6b7280', 'font-size': 11, 'text-anchor': 'middle' }, axis, fmt(v)));
+  el('line', { x1: labelCol, x2: labelCol + plotW, y1: AXIS_H - 1, y2: AXIS_H - 1, stroke: '#3a3a52' }, axis);
+  const svg = el('svg', { width, height: contentH, style: 'display:block' }, container);
+  ticks.forEach(v => el('line', { x1: xOf(v), x2: xOf(v), y1: 0, y2: contentH, stroke: v === 0 ? '#3a3a52' : '#1f1f2e' }, svg));
+
+  let selected = null;
+  const segs = [];
+  rows.forEach((r, ci) => {
+    const y = ci * ROW + (ROW - THICK) / 2 + 4;
+    const lbl = el('text', { x: labelCol - 8, y: y + THICK / 2, fill: '#9ca3af', 'font-size': 11, 'text-anchor': 'end', 'dominant-baseline': 'middle' }, svg, trunc(r.user, labelCol - 16));
+    el('title', {}, lbl, r.user);
+    const present = r.parts.map((v, si) => ({ v, si })).filter(p => p.v > 0);
+    let acc = 0;
+    present.forEach((p, idx) => {
+      const isEnd = idx === present.length - 1;
+      const x0 = xOf(acc); acc += p.v; const x1 = xOf(acc);
+      const w = Math.max(x1 - x0 - (isEnd ? 0 : GAP), 0);
+      const d = isEnd ? roundedRight(x0, y, w, THICK, 4) : `M ${x0} ${y} h ${w} v ${THICK} h ${-w} Z`;
+      const path = el('path', { d, fill: series[p.si].color, class: 'seg' }, svg);
+      segs.push({ path, ci, si: p.si });
+      if (series.length > 1 && est(fmt(p.v)) + 8 <= w) {
+        el('text', { x: x0 + w / 2, y: y + THICK / 2, fill: series[p.si].color === '#ffb300' ? '#0a0a0f' : '#fff',
+          'font-size': 10.5, 'font-weight': 600, opacity: 0.9, 'text-anchor': 'middle', 'dominant-baseline': 'middle',
+          style: 'pointer-events:none' }, svg, fmt(p.v));
+      }
+      path.addEventListener('click', e => {
+        e.stopPropagation();
+        selected = selected && selected.ci === ci && selected.si === p.si ? null : { ci, si: p.si };
+        segs.forEach(s => s.path.setAttribute('opacity', !selected || (s.ci === selected.ci && s.si === selected.si) ? 1 : 0.25));
+        onSelect(selected && { category: r.user, series: series.length > 1 ? series[p.si].name : undefined, value: p.v });
+      });
+      path.addEventListener('pointermove', e => {
+        const rect = document.body.getBoundingClientRect();
+        tip.style.display = 'block'; tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY - 10 + window.scrollY) + 'px';
+        tip.innerHTML = series.length > 1
+          ? `<div class="muted">${r.user}</div><div class="row"><span class="sw" style="background:${series[p.si].color}"></span>${series[p.si].name}<b>${fmt(p.v)}</b></div>
+             <div class="row muted" style="border-top:1px solid #2a2a3e;margin-top:4px;padding-top:4px">share of bar<span style="margin-left:auto">${(100 * p.v / totals[ci]).toFixed(1)}%</span></div>
+             <div class="row muted">bar total<span style="margin-left:auto">${fmt(totals[ci])}</span></div>`
+          : `<div class="muted">${r.user}</div><div class="row"><span class="sw" style="background:${series[0].color}"></span>cost<b>${fmt(p.v)}</b></div>`;
+      });
+      path.addEventListener('pointerleave', () => { tip.style.display = 'none'; });
+    });
+    if (valueLabels) {
+      el('text', { x: xOf(totals[ci]) + 6, y: y + THICK / 2, fill: '#9ca3af', 'font-size': 11, 'dominant-baseline': 'middle' }, svg, fmt(totals[ci]));
+    }
+  });
+  svg.addEventListener('click', () => {
+    selected = null; segs.forEach(s => s.path.setAttribute('opacity', 1)); onSelect(null);
+  });
+  return { maxTotal, select: (ci, si) => segs.find(s => s.ci === ci && s.si === si).path.dispatchEvent(new MouseEvent('click', { bubbles: true })) };
+}
+
+const ds = document.getElementById('downstream');
+function showSel(cell, sel) {
+  ds.innerHTML = sel
+    ? `Downstream sees <code>$${cell}.selected.user = '${sel.category}'</code>` +
+      (sel.series ? `, <code>$${cell}.selected.model = '${sel.series}'</code>` : '') +
+      `, <code>$${cell}.selected.cost = ${sel.value.toFixed(2)}</code>`
+    : `No selection — downstream cells referencing <code>$${cell}.selected.*</code> show "waiting for selection".`;
+}
+
+const seriesA = [{ name: 'cost', color: COLORS[0] }];
+const a = render(document.getElementById('plot-a'), costs.map(c => ({ user: c.user, parts: [c.cost] })), seriesA, true, s => showSel('cost_per_user', s));
+document.getElementById('a-cats').textContent = costs.length;
+document.getElementById('a-max').textContent = fmt(a.maxTotal);
+a.select(1, 0);
+
+const seriesB = [{ name: 'large', color: COLORS[0] }, { name: 'medium', color: COLORS[1] }, { name: 'small', color: COLORS[2] }];
+const b = render(document.getElementById('plot-b'), stacked, seriesB, true, s => showSel('cost_by_model', s));
+document.getElementById('b-cats').textContent = stacked.length;
+document.getElementById('b-max').textContent = fmt(b.maxTotal);
+document.getElementById('legend-b').innerHTML = seriesB.map(s => `<div><span class="sw" style="background:${s.color}"></span>${s.name}</div>`).join('');
+</script>
+</body>
+</html>
