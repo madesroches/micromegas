@@ -107,6 +107,7 @@ The hit is `{ categoryIndex, seriesIndex }`. `StackedBarCell` copies the Chart c
 - `selected` state is reset during render when `data` changes. An effect calls `onSelectionChangeRef.current?.(null)` on data change.
 - Clicking a segment calls `nextSelection` semantics: clicking the selected segment again clears it. Write a small local `sameBarHit`. `ChartPointHit` has different fields, so reuse only the toggle idea and `DIM_FILL`.
 - A click on the SVG background (not a segment) clears the selection.
+- Payload keys are the SQL column names, as in table, chart and map. The issue wrote `.category`, and a query that names its columns `category, series, value` still gets exactly the issue's macros.
 - Selection is enabled only when `selectionMode === 'single'`. Otherwise clicks do nothing, as today.
 - While a selection exists, every other segment and its in-segment label render at `opacity={DIM_FILL}`. Total labels stay full opacity.
 
@@ -177,6 +178,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
     - document the 2-column SQL shape and the per-bar `color` meaning
     - add horizontal layout and selection bullets under Features
     - add a ranked horizontal example (`SELECT user, sum(cost) AS cost … ORDER BY cost DESC`, `orientation: horizontal`)
+    - revise the existing text that no longer holds: the intro (:711, not only vertical bars stacked from series); the `sql` and Series rows (:717, :726; series is optional, 3-column shape only); the `color` row (:727, per series or per bar); the ordering bullet (:733) for horizontal; "Y-axis" (:740) wording; the legend bullet (:742, hidden for a single series) and tooltip bullet (:743, no share/total for a single series); the scroll bullet (:744; vertical scrolls horizontally, horizontal scrolls vertically)
     - note the cell type id is `stackedbar`
 14. Update `mkdocs/docs/web-app/notebooks/variables.md:116`: add bar chart cells to the cells with selection (including the second clause, "For table and chart cells, selection is enabled via the **Row Selection** section…", and the :118 "**Selection mode** (table and chart cells)" bullet), and say a click on a segment publishes the category, series and value columns.
 15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased. It covers no SQL changes and no breaking change, and notes that new cells default to "Bar Chart" instead of "Stacked Bar". Notebook config is additive, and existing `stackedbar` cells render identically.
@@ -189,12 +191,6 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 - `mkdocs/docs/web-app/notebooks/variables.md`
 - `CHANGELOG.md`
-
-## Trade-offs
-- **Extend `stackedbar` vs. a new cell type**: the existing cell already has the SVG scale, ticks, palette and SQL colors, legend, tooltip, truncation and scroll. A new type would duplicate all of it. Horizontal is a transpose of the geometry, so the work goes into the layout builder and nowhere else.
-- **Two layout builders sharing helpers vs. one builder with an axis swap**: one generic builder would need a pixel→axis mapping layer for everything, including label rotation (vertical only) and the label column (horizontal only). The orientations differ in exactly those parts. Separate builders over a shared value scale and stacking loop keep each one readable and the shared logic in one place.
-- **Selection keys from SQL column names vs. fixed `category`/`series`/`value` keys**: the issue wrote `.category`. Fixed keys would break `fieldType` type resolution, which looks the name up in the cell's result table, and would differ from table, chart and map, which all publish source column names. A query that names its columns `category, series, value` still gets exactly the issue's macros.
-- **Sticky axis inside the scroll container vs. an axis SVG above it**: an axis outside the scroller is narrower by the scrollbar's width whenever the scrollbar shows, so its ticks drift from the gridlines. With sticky positioning inside the scroller, both SVGs share one measured content width.
 
 ## Decisions
 - The horizontal-layout mockup (`tasks/stackedbar_horizontal_mockups/horizontal-layout.html`) is accepted (user call).
@@ -218,7 +214,8 @@ Everything is reachable with constructed Arrow tables and props, so the coverage
   - `columns` names for both shapes
   - errors for 1 and 4 non-color columns
   - the existing 2-column-count error test (`src/lib/__tests__/arrow-utils.test.ts:1450-1462`, category utf8, series utf8 → "category, series, and value columns") becomes a "second column must be numeric for value" test in the 2-column shape
-  - the existing 3-column tests stay green
+  - update the existing empty-table test (`arrow-utils.test.ts:1502-1514`, `toEqual({ categories: [], series: [], values: [] })`) to include the new fields
+  - other existing 3-column tests stay green
 - **Layout** (`StackedBarCell.test.tsx`):
   - horizontal rows at `ROW_HEIGHT` intervals in first-appearance order, with `contentHeight` growing with the category count
   - label column capped at 180, with long labels truncated
@@ -228,6 +225,7 @@ Everything is reachable with constructed Arrow tables and props, so the coverage
   - in-segment `labelFits` uses the segment width
   - vertical `valueLabels` grows the top margin and skips labels wider than the band
   - the existing vertical tests pass with the renamed fields
+  - update `StackedBarCell.test.tsx:243-246`, which expects `/category, series, and value columns/`, to match the new column-count error wording
 - **Selection**:
   - `buildBarSelection` gives SQL-column-name keys, a raw category value, the series key only in the 3-column shape, and the summed value
   - component: clicking a segment calls `onSelectionChange` with the payload and dims the other segments
