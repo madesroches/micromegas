@@ -71,10 +71,6 @@ bound once its non-POD branches get bounded windows (step 2). Bounding the block
 `rust/telemetry/src/compression.rs` has no output cap) is a separate amplification vector and
 out of scope here.
 
-**Validation at ingestion** (the issue's second suggestion) is not added. The parser is the one
-place every metadata source goes through, and the runtime budget covers it, which is the same
-reasoning #1813 used against load-time cycle rejection.
-
 ## Implementation Steps
 1. `rust/transit/src/parser.rs`: add `UDT_NODES_PER_BYTE`, `UDT_NODES_SLACK`, and
    `instance_node_budget`. In `parse_pod_instance`, seed `nodes_left` with it. Add
@@ -107,8 +103,12 @@ reasoning #1813 used against load-time cycle rejection.
   Tying the budget to the object's own bytes gives the same linear-per-block bound with no
   signature change, and it doesn't let one object starve its siblings.
 - **Arena size limit (`Bump::set_allocation_limit`).** When an allocation goes over the limit,
-  `alloc`/`Vec::with_capacity_in` abort the process instead of returning `Err`, so a limit
-  would turn an OOM into the same abort. A counted budget fails cleanly.
+  `alloc`/`Vec::with_capacity_in` panic instead of returning `Err`, so a limit would turn an OOM
+  into a panic. A clean failure would mean converting every arena allocation to
+  `try_alloc`/`try_reserve`, while the counted budget fails cleanly in one place.
+- **Validation at ingestion vs. a parse-time budget.** The issue's second suggestion is not
+  added. The parser is the one place every metadata source goes through, and the runtime budget
+  covers it, which is the same reasoning #1813 used against load-time cycle rejection.
 - **Constants vs. configuration.** These are sanity limits on malformed input, not tuning
   knobs, so they stay hard-coded, as in #1813.
 
@@ -127,9 +127,9 @@ buffers reproduce it exactly. In `rust/transit/tests/test_corrupt_input.rs`, eac
   size 1, parsed as `T2` against a 1-byte window. That is 528 visited members: under the
   #1813 cap of 4096 it returns `Ok`, and under the new 1-byte budget of 10 it returns `Err`,
   so this test fails before the fix.
-- `parse_object_buffer_rejects_fan_out_on_tiny_objects`: the same types as a buffer of many
-  2-byte objects (`[idx_of_T2, 0]` repeated) through `parse_object_buffer` returns `Err` on the
-  first object.
+- `parse_object_buffer_rejects_fan_out_on_tiny_objects`: the same types as a buffer repeating
+  `[idx_of_T2, 0]` at least 66 times (e.g. 100) through `parse_object_buffer` returns `Err` on the
+  first object. It would return `Ok` if `parse_object_buffer` stopped bounding each object's window.
 - `read_dependencies_rejects_dependency_larger_than_declared_size`: register `test_custom_reader`
   (reads a `u64` at window offset 0) for a size-0 `CustomDep` UDT, with the buffer
   `[0u8] + 0u32` followed by `[0u8] + 8u32 + 7u64`. Before the fix the first entry's reader gets
