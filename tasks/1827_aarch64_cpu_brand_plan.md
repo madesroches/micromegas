@@ -120,9 +120,12 @@ changes.
    `rust/telemetry-sink/Cargo.toml`.
 6. Update docs (see Documentation).
 7. Run `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas-tracing`,
-   `rustup target add aarch64-unknown-linux-gnu` (from inside `rust/`), then
-   `cargo check -p micromegas-tracing -p micromegas-telemetry-sink --target aarch64-unknown-linux-gnu`
-   (exercises the aarch64 `target_os = "linux"` cfg branch).
+   `rustup target add aarch64-unknown-linux-gnu aarch64-apple-darwin` (from inside `rust/`), then
+   `cargo check -p micromegas-tracing --target aarch64-unknown-linux-gnu` (exercises the aarch64
+   `target_os = "linux"` cfg branch) and
+   `cargo check -p micromegas-tracing --target aarch64-apple-darwin` (type-checks the macOS
+   `sysctlbyname` branch; check doesn't link, so no SDK is needed). The telemetry-sink change is
+   covered by native clippy.
 
 ## Files to Modify
 - `rust/tracing/src/cpu_brand.rs` (new)
@@ -162,8 +165,8 @@ Unit tests in `rust/tracing/src/cpu_brand.rs`, compiled and run on the x86_64 CI
   the raw-cpuid branch).
 
 The aarch64 and macOS I/O wrappers are thin and not reachable from x86_64 CI; their parsing
-logic is covered by the pure-function tests, and the cfg branch is type-checked by the
-`aarch64-unknown-linux-gnu` `cargo check` in step 7, which exercises the `target_os = "linux"` branch directly.
+logic is covered by the pure-function tests, and both cfg branches are type-checked by the
+`aarch64-unknown-linux-gnu` and `aarch64-apple-darwin` `cargo check` runs in step 7.
 
 ## Manual Verification
 On an aarch64 Linux host (e.g. a Graviton instance), run any instrumented process against a local
