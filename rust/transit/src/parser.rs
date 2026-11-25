@@ -1,5 +1,5 @@
 use crate::{
-    UserDefinedType, advance_window, read_advance_string_in, try_read_consume_pod, try_read_pod_at,
+    UserDefinedType, read_advance_string_in, try_read_consume_pod, try_read_pod_at,
     value::{Object, Value},
 };
 use anyhow::{Context, Result, bail};
@@ -77,10 +77,7 @@ pub fn read_dependencies<'a>(
                 }
             }
             "StaticStringDependency" => {
-                // This window covers the entire remaining buffer, not just
-                // object_size bytes, so the guard above doesn't bound what's
-                // read here — the checked reads below do that.
-                let mut window = advance_window(buffer, offset);
+                let mut window = &buffer[offset..object_end];
                 let string_id: u64 = try_read_consume_pod(&mut window)?;
                 let s =
                     read_advance_string_in(bump, &mut window).with_context(|| "parsing string")?;
@@ -91,9 +88,7 @@ pub fn read_dependencies<'a>(
             }
             type_name => {
                 if let Some(reader) = custom_readers.get(type_name) {
-                    // Same unbounded-window property as StaticStringDependency
-                    // above: the reader validates every field it consumes.
-                    let window = advance_window(buffer, offset);
+                    let window = &buffer[offset..object_end];
                     if let Value::Object(obj) = (*reader)(bump, udt, udts, &hash, window)
                         .with_context(|| "parsing custom dependency")?
                     {
@@ -154,13 +149,28 @@ fn parse_custom_instance<'a>(
 
 // Stream metadata is untrusted: a self-referential or heavily fanned-out type
 // would otherwise overflow the stack or exhaust memory, both of which abort
-// the process. Real types nest a few levels with tens of members.
+// the process. Real types nest a few levels with tens of members. The member
+// budget scales with the object's byte size so that total work and arena use
+// stay linear in the block size; the ceiling bounds a single large object.
 const MAX_UDT_NESTING_DEPTH: usize = 32;
 const MAX_UDT_NODES_PER_INSTANCE: usize = 4096;
+// Legitimate layouts visit at most ~1 member per byte (non-overlapping leaves of >= 1 byte);
+// the slack covers a few wrapper structs around tiny objects.
+const UDT_NODES_PER_BYTE: usize = 2;
+const UDT_NODES_SLACK: usize = 8;
+
+fn instance_node_budget(window_len: usize) -> usize {
+    window_len
+        .saturating_mul(UDT_NODES_PER_BYTE)
+        .saturating_add(UDT_NODES_SLACK)
+        .min(MAX_UDT_NODES_PER_INSTANCE)
+}
 
 struct ParseBudget {
     depth: usize,
     nodes_left: usize,
+    initial_nodes: usize,
+    instance_len: usize,
 }
 
 pub fn parse_pod_instance<'a>(
@@ -170,9 +180,12 @@ pub fn parse_pod_instance<'a>(
     dependencies: &HashMap<u64, Value<'a>>,
     object_window: &'a [u8],
 ) -> Result<Value<'a>> {
+    let initial_nodes = instance_node_budget(object_window.len());
     let mut budget = ParseBudget {
         depth: 0,
-        nodes_left: MAX_UDT_NODES_PER_INSTANCE,
+        nodes_left: initial_nodes,
+        initial_nodes,
+        instance_len: object_window.len(),
     };
     parse_pod_instance_bounded(bump, udt, udts, dependencies, object_window, &mut budget)
 }
@@ -191,11 +204,14 @@ fn parse_pod_instance_bounded<'a>(
             udt.name
         );
     }
-    let mut members = bumpalo::collections::Vec::with_capacity_in(udt.members.len(), bump);
+    let mut members =
+        bumpalo::collections::Vec::with_capacity_in(udt.members.len().min(budget.nodes_left), bump);
     for member_meta in &udt.members {
         if budget.nodes_left == 0 {
             bail!(
-                "corrupt metadata: instance member budget of {MAX_UDT_NODES_PER_INSTANCE} exhausted at udt {}",
+                "corrupt metadata: member budget of {} for {}-byte instance exhausted at udt {}",
+                budget.initial_nodes,
+                budget.instance_len,
                 udt.name
             );
         }
