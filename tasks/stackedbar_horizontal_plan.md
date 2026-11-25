@@ -85,7 +85,7 @@ Additions to the output:
 - `ROW_HEIGHT = 28`, `BAR_THICKNESS = 18`. The bar is centered in its row.
 - `AXIS_HEIGHT = 24`. The axis is a separate sticky SVG, see Rendering.
 - Label column width = `min(LABEL_COLUMN_MAX = 180, max estimated label width + 16)`. Short labels don't waste width. Longer labels go through `truncateLabel` and keep the full text in `<title>`.
-- Value plot width = `width − labelColumn − RIGHT_MARGIN − totalLabelRoom`. `totalLabelRoom` = widest total label + 8 when `valueLabels` is on, else 0. The longest bar never runs under its own label.
+- Value plot width = `Math.max(0, width − labelColumn − RIGHT_MARGIN − totalLabelRoom)`. `totalLabelRoom` = widest total label + 8 when `valueLabels` is on, else 0. The longest bar never runs under its own label.
 - Divisions = `clamp(floor(plotWidth / (widestTickLabel + 24)), 2, 5)`. Tick labels sit side by side here, so a narrow cell needs fewer of them. The widest tick label is estimated from `formatValueWithUnit(top)`.
 - `contentHeight = categories.length × ROW_HEIGHT + 8`. `contentWidth = width`. There is no horizontal scroll, and rows don't stretch to fill a tall cell.
 - Rows go top to bottom in first-appearance order, the same order vertical uses left to right. `ORDER BY cost DESC` puts the largest bar at the top.
@@ -100,7 +100,7 @@ Additions to the output:
   - The `ResizeObserver` reads the content-box width, which excludes the scrollbar, so both SVGs line up.
   - The height is the content height, not the measured height.
 - Single series: the cell hides the legend column and the header's "series" stat. The tooltip shows the category, a swatch, the value column name and the value. It drops "share of bar" and "bar total", which add nothing for one series.
-- Segment fill: `categoryColors?.[c] ?? series[s].color`.
+- Segment color: `categoryColors?.[c] ?? series[s].color`, resolved once per segment and used for the fill, the hover swatch and the in-segment label's `contrastingTextColor`.
 
 ### Selection
 The hit is `{ categoryIndex, seriesIndex }`. `StackedBarCell` copies the Chart cell's pattern (`ChartCell.tsx:216-238`). The state, the during-render reset and the null-notify effect all live in `StackedBarCell` above its early returns, keyed on `data`. The hit and the click handlers are passed down to `StackedBarView`:
@@ -162,7 +162,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
    - branch the axis and category-label drawing on `layout.orientation`
    - add the horizontal sticky-axis structure
    - draw the total labels
-   - drive the segment fill and the hover/tooltip swatch color from `categoryColors?.[c] ?? series[s].color`
+   - resolve one color per segment, `categoryColors?.[c] ?? series[s].color`, and use it for the fill, the hover/tooltip swatch and the in-segment label's `contrastingTextColor`
    - hide the legend and slim the tooltip for single series
 9. Selection: in `StackedBarCell` (above its early returns), add the state, the clear-on-data-change logic and the null-notify effect, and pass the hit and the segment and background click handlers down to `StackedBarView`, which does the dimming. Add the payload builder. Make the payload builder a small exported pure function, `buildBarSelection(data, hit)`, so it is unit-tested directly.
 10. `StackedBarCell`: read `orientation`, `valueLabels`, `selectionMode` and `onSelectionChange`, and hide the series stat when `singleSeries`. Build `resolvedData` by spreading `extraction.data` and overriding `series`, so `categoryColors` and the other new fields aren't dropped.
@@ -181,7 +181,7 @@ The SQL hint text is rewritten to describe both shapes (2 or 3 columns, and what
     - revise the existing text that no longer holds: the intro (:711, not only vertical bars stacked from series); the `sql` and Series rows (:717, :726; series is optional, 3-column shape only); the `color` row (:727, per series or per bar); the ordering bullet (:733) for horizontal; "Y-axis" (:740) wording; the legend bullet (:742, hidden for a single series) and tooltip bullet (:743, no share/total for a single series); the scroll bullet (:744; vertical scrolls horizontally, horizontal scrolls vertically)
     - note the cell type id is `stackedbar`
 14. Update `mkdocs/docs/web-app/notebooks/variables.md:116`: add bar chart cells to the cells with selection (including the second clause, "For table and chart cells, selection is enabled via the **Row Selection** section…", and the :118 "**Selection mode** (table and chart cells)" bullet), and say a click on a segment publishes the category, series and value columns.
-15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased. It covers no SQL changes and no breaking change, and notes that new cells default to "Bar Chart" instead of "Stacked Bar". Notebook config is additive, and existing `stackedbar` cells render identically.
+15. `CHANGELOG.md`: add a **Notebooks** entry under Unreleased, citing "(#1820)" like the existing entries. It covers no SQL changes and no breaking change, and notes that new cells default to "Bar Chart" instead of "Stacked Bar". Notebook config is additive, and existing `stackedbar` cells render identically.
 
 ## Files to Modify
 - `analytics-web-app/src/lib/arrow-utils.ts`
