@@ -105,12 +105,14 @@ verified by reading.
   restriction as `jsonb_each`. Keep `list_view_sets` referenced (covered in `## Available views`).
 - **Niche functions** get a one-line pointer to the functions reference
   (`mkdocs/docs/query-guide/functions-reference.md`, linked from `## Reference documentation`)
-  rather than full coverage: the read-only table functions `perfetto_trace_chunks`,
-  `parse_block`, `list_audience_grants`, `list_view_set_definitions`, `check_view_merge`,
-  `list_query_denials`, and the niche scalar groups (color, binning, math functions,
-  `properties_length`/`properties_to_dict`/`properties_to_array`, `get_payload`). The
-  mutating/admin functions are not named in the skill; it says they are documented in the
-  reference.
+  rather than full coverage: the table functions `perfetto_trace_chunks` and `parse_block`, and
+  the niche scalar groups (color, binning, math functions,
+  `properties_length`/`properties_to_dict`/`properties_to_array`, `get_payload`).
+  `list_audience_grants`, `list_query_denials`, `check_view_merge` and
+  `list_view_set_definitions` get a separate pointer to the admin functions reference
+  (https://micromegas.info/docs/admin/functions-reference/); the last three are admin-only
+  (non-admins get not-found). The mutating/admin functions are not named in the skill; it says
+  they are documented in the admin reference.
 - Each thing is said once (existing "Say each thing once" principle).
 
 ## Implementation Steps
@@ -142,9 +144,6 @@ verified by reading.
 - `CHANGELOG.md`
 
 ## Trade-offs
-- **Bumping `version` vs. commit-SHA versioning.** Dropping the field would make every commit
-  to the plugin directory a new version with nothing to remember, but loses a human-readable
-  version. The user chose to keep and bump it (see Decisions).
 - **Docs location.** The query guide's Interfaces list is where users look for ways to query;
   `admin/mcp.md` covers the server-side MCP route, which is a different integration.
 
