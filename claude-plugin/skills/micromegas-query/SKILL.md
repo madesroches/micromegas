@@ -245,10 +245,10 @@ micromegas-query "SELECT view_set_name, description, columns, sort_order FROM li
 
 ### Table functions
 - `view_instance(view_name, id)` — scoped queries for a single process or stream, better performance
-- `process_spans(process_id, types)` — spans of one process, with `stream_id` and `thread_name` columns prepended to the `thread_spans` columns. `types` is `'thread'` (spans of every thread stream), `'async'` (async spans; `stream_id` is empty and `thread_name` is `'async'`) or `'both'` (the two combined, so group or order by `thread_name` to tell lanes apart). Key columns: `name`, `begin`, `end`, `duration` (nanoseconds), `depth` (nesting, 0 = top level), `id`/`parent`, `target`, `properties`. The time range comes from `--begin`/`--end`, not from function arguments. **Extremely dense** — always use tight `--begin`/`--end` and `LIMIT`.
+- `process_spans(process_id, types)` — spans of one process, with `stream_id` and `thread_name` columns prepended to the `thread_spans` columns. `types` is `'thread'` (spans of every thread stream), `'async'` (async spans; `stream_id` is empty and `thread_name` is `'async'`) or `'both'` (the two combined, so group or order by `thread_name` to tell lanes apart). Key columns: `name`, `begin`, `end`, `duration` (nanoseconds), `depth` (nesting; thread lanes have a synthetic depth-0 root named after the thread with `id = -1`, so top-level thread spans are depth 1 while top-level async spans are depth 0), `id`/`parent`, `target`, `properties`. The time range comes from `--begin`/`--end`, not from function arguments. **Extremely dense** — always use tight `--begin`/`--end` and `LIMIT`.
 - `list_partitions()` — list available data partitions with metadata
 - `expand_histogram(h)` — expands a histogram into rows of `(bin_center, count)` for visualization
-- `jsonb_each(jsonb)` — expand JSONB object/array into rows of `(key, value)`. `value` is raw JSONB (Binary) — wrap it with `jsonb_as_string()`/`jsonb_as_f64()`/`jsonb_format_json()` to read it. 
+- `jsonb_each(jsonb)` — expand JSONB object/array into rows of `(key, value)`. `value` is raw JSONB (Binary) — wrap it with `jsonb_as_string()`/`jsonb_as_f64()`/`jsonb_format_json()` to read it.
 - `jsonb_array_elements(jsonb)` — expand a JSONB array into one row per element, with a single `value` column (raw JSONB, read it like `jsonb_each`'s `value`). Errors on a non-array.
 - **Argument restriction for `jsonb_each` and `jsonb_array_elements`:** the argument must be a literal, an uncorrelated subquery, or an expression with no column reference to a table in the outer `FROM` — `jsonb_each(t.col)` fails to plan. For per-row expansion of a column, use `jsonb_entries`/`jsonb_elements`/`jsonb_path_elements` below with `unnest()` instead.
 - `perfetto_trace_chunks` and `parse_block` are niche table functions: see the functions reference (linked under **Reference documentation**).
@@ -344,7 +344,7 @@ micromegas-query "SELECT name, AVG(duration)/1e6 as avg_ms, COUNT(*) FROM proces
 
 ### Spans per thread with process_spans
 ```
-micromegas-query "SELECT thread_name, name, AVG(duration)/1e6 as avg_ms, COUNT(*) FROM process_spans('<process_id>', 'both') WHERE depth = 0 GROUP BY thread_name, name ORDER BY avg_ms DESC LIMIT 20" --begin '<start_time>' --end '<end_time>'
+micromegas-query "SELECT thread_name, name, AVG(duration)/1e6 as avg_ms, COUNT(*) FROM process_spans('<process_id>', 'both') WHERE (thread_name = 'async' AND depth = 0) OR (thread_name <> 'async' AND depth = 1) GROUP BY thread_name, name ORDER BY avg_ms DESC LIMIT 20" --begin '<start_time>' --end '<end_time>'
 ```
 
 ### Histogram percentiles
