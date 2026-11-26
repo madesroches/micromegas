@@ -2,6 +2,10 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## Unreleased
+
+* **Claude Code Plugin:** The repository is now a Claude Code plugin marketplace (#1833): `/plugin marketplace add madesroches/micromegas` followed by `/plugin install micromegas@micromegas` installs the plugin, and the plugin version is bumped to 0.2.0 so installed copies see an update. The `micromegas-query` skill now covers the commonly used table functions in full (`process_spans` types, columns and time range, `jsonb_array_elements`) and points to the functions references for the niche and admin ones. No SQL changes.
+
 ## v0.34.0 - 2026-11-26
 
 * **Tracing:** `cpu_brand` records the actual CPU model on aarch64 instead of `"aarch64"` (#1827). On Linux/Android the MIDR is decoded (sysfs `midr_el1`, falling back to `/proc/cpuinfo`) into `"<core name> (0x<implementer>:0x<part>)"`, e.g. `Neoverse-V1 (0x41:0xd40)`, or the raw ids for unrecognized parts; on macOS it is `machdep.cpu.brand_string` (e.g. "Apple M2"). Unreadable sources fall back to the architecture name. The `processes.cpu_brand` column and the telemetry-sink `cpu_brand` process property now share one helper, `micromegas_tracing::cpu_brand::get_cpu_brand()`, and `raw-cpuid` is only pulled in on x86.

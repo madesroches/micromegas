@@ -4,7 +4,8 @@ Copy the canonical MCP skills into the Claude plugin.
 The skills live inside the `micromegas` crate (rust/public/src/servers/mcp/skills) because
 `include_str!` outside the crate directory breaks `cargo publish`. `claude-plugin/skills/` holds
 plain copies, not symlinks. Run this after editing a canonical skill; a Rust test fails when the
-two differ.
+two differ. Also bump `version` in `claude-plugin/.claude-plugin/plugin.json` whenever a synced
+skill changes: installed copies only see an update when that string changes.
 """
 
 import pathlib

@@ -91,3 +91,40 @@ fn claude_plugin_copies_match_canonical_skills() {
         );
     }
 }
+
+#[test]
+fn claude_marketplace_matches_plugin_manifest() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let plugin_dir = repo_root.join("claude-plugin");
+    if !plugin_dir.exists() {
+        return;
+    }
+    let read_json = |path: std::path::PathBuf| -> serde_json::Value {
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()))
+    };
+    let marketplace = read_json(repo_root.join(".claude-plugin/marketplace.json"));
+    let plugin = read_json(plugin_dir.join(".claude-plugin/plugin.json"));
+    let plugin_dir = plugin_dir.canonicalize().expect("plugin dir");
+    let entry = marketplace["plugins"]
+        .as_array()
+        .expect("plugins array")
+        .iter()
+        .find(|e| {
+            e["source"]
+                .as_str()
+                .and_then(|s| repo_root.join(s).canonicalize().ok())
+                .is_some_and(|p| p == plugin_dir)
+        })
+        .expect("marketplace has no entry whose source is claude-plugin");
+    assert_eq!(
+        entry["name"], plugin["name"],
+        "marketplace entry name must equal plugin.json name"
+    );
+    assert!(
+        entry.get("version").is_none(),
+        "keep the version only in plugin.json"
+    );
+}
