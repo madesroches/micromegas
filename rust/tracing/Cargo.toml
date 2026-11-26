@@ -30,12 +30,14 @@ bumpalo.workspace = true
 internment.workspace = true
 memoffset.workspace = true
 micromegas-transit.workspace = true
-raw-cpuid.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
 thread-id.workspace = true
 whoami.workspace = true
 xxhash-rust = { workspace = true, features = ["xxh3"] }
+
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
+raw-cpuid.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

@@ -512,18 +512,7 @@ mod native {
                 ("distro", Box::new(whoami::distro)),
                 (
                     "cpu_brand",
-                    Box::new(|| {
-                        #[cfg(target_arch = "x86_64")]
-                        {
-                            raw_cpuid::CpuId::new()
-                                .get_processor_brand_string()
-                                .map_or_else(|| "unknown".to_owned(), |b| b.as_str().to_owned())
-                        }
-                        #[cfg(not(target_arch = "x86_64"))]
-                        {
-                            String::from(std::env::consts::ARCH)
-                        }
-                    }),
+                    Box::new(micromegas_tracing::cpu_brand::get_cpu_brand),
                 ),
                 (
                     "physical_core_count",

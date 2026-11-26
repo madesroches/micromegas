@@ -1362,15 +1362,6 @@ where
     old_block
 }
 
-fn get_cpu_brand() -> String {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    return raw_cpuid::CpuId::new()
-        .get_processor_brand_string()
-        .map_or_else(|| "unknown".to_owned(), |b| b.as_str().to_owned());
-    #[cfg(target_arch = "aarch64")]
-    return String::from("aarch64");
-}
-
 pub fn make_process_info(
     process_id: uuid::Uuid,
     parent_process_id: Option<uuid::Uuid>,
@@ -1378,7 +1369,7 @@ pub fn make_process_info(
 ) -> ProcessInfo {
     let start_ticks = now();
     let start_time = Utc::now();
-    let cpu_brand = get_cpu_brand();
+    let cpu_brand = crate::cpu_brand::get_cpu_brand();
     ProcessInfo {
         process_id,
         username: whoami::username(),

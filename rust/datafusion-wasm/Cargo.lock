@@ -2602,7 +2602,6 @@ dependencies = [
  "micromegas-telemetry",
  "micromegas-tracing",
  "micromegas-transit",
- "raw-cpuid",
  "reqwest",
  "serde",
  "smallvec",

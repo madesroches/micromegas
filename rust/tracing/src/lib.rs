@@ -197,6 +197,8 @@ pub mod dispatch;
 #[path = "dispatch_wasm.rs"]
 pub mod dispatch;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cpu_brand;
 pub mod errors;
 pub mod event;
 pub mod guards;

@@ -4211,7 +4211,6 @@ dependencies = [
  "micromegas-telemetry",
  "micromegas-tracing",
  "micromegas-transit",
- "raw-cpuid",
  "reqwest 0.13.5",
  "serde",
  "serial_test",
