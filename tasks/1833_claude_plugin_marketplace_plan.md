@@ -6,7 +6,8 @@
 The repo ships a Claude Code plugin in `claude-plugin/`, but has no marketplace manifest, so it
 can't be installed with `/plugin marketplace add madesroches/micromegas` followed by
 `/plugin install micromegas@micromegas`. This plan adds `.claude-plugin/marketplace.json` at the
-repo root, makes installed copies pick up skill updates, and documents installation. It also
+repo root, bumps the plugin version so installed copies see the new skills as an update, and
+documents installation. It also
 makes the `micromegas-query` skill cover the commonly used table functions (e.g. `process_spans`)
 and point to the functions reference for niche ones.
 
@@ -47,17 +48,18 @@ directory containing `.claude-plugin/`; relative sources are written from there)
 The entry `name` must equal the manifest `name` in `plugin.json` (`micromegas`), otherwise
 installing by the manifest name fails with `Plugin "<manifest-name>" not found in marketplace`.
 
-### Updates: drop the pinned `version`
+### Updates: bump the pinned `version`
 Claude Code resolves a plugin's version from `plugin.json`'s `version` first, then the
-marketplace entry's `version`, and only when neither is set from the commit SHA of the installed
-directory (for a relative path in a Git-hosted marketplace). A pinned `"version": "0.1.0"` keeps
-every user on their cached copy until someone bumps it. Remove `version` from `plugin.json` (and
-don't set one in the marketplace entry) so the version tracks the plugin directory's commits.
+marketplace entry's `version`, then the commit SHA of the installed directory. Keep the pin in
+`plugin.json` and bump it from `0.1.0` to `0.2.0`, since this branch changes the
+`micromegas-query` skill; don't set a `version` in the marketplace entry. Installed copies only
+see a change as an update when this string changes, so add one sentence to the
+`build/sync_claude_plugin_skills.py` docstring saying to bump `version` in
+`claude-plugin/.claude-plugin/plugin.json` whenever a synced skill changes.
 Users pick up changes with `/plugin marketplace update micromegas` (in a session) or
 `claude plugin update micromegas@micromegas` (shell), or by enabling auto-update for the
 marketplace in `/plugin` (background auto-update is off by default for third-party marketplaces),
-then `/reload-plugins` or a restart. This replaces the issue's suggestion of bumping the version
-on skill changes.
+then `/reload-plugins` or a restart.
 
 ### Consistency test
 Add a no-DB test to `rust/public/tests/mcp_skills_tests.rs`, next to
@@ -68,8 +70,7 @@ missing or unparsable `.claude-plugin/marketplace.json` fails. It parses `.claud
 - the marketplace has an entry whose `source` resolves to the plugin directory:
   `canonicalize(repo_root.join(source))` equals `canonicalize(repo_root.join("claude-plugin"))`;
 - that entry's `name` equals `plugin.json`'s `name`;
-- neither `plugin.json` nor the entry carries a `version` field (a pin would silently freeze
-  users on an old copy).
+- the marketplace entry carries no `version` field (the version lives only in `plugin.json`).
 
 ### Documentation
 Add a `### Claude Code Plugin` subsection under `## Interfaces` in
@@ -114,7 +115,8 @@ verified by reading.
 
 ## Implementation Steps
 1. Create `.claude-plugin/marketplace.json` as above.
-2. Remove `"version"` from `claude-plugin/.claude-plugin/plugin.json`.
+2. Bump `"version"` in `claude-plugin/.claude-plugin/plugin.json` to `0.2.0`, and add the bump
+   reminder to the `build/sync_claude_plugin_skills.py` docstring.
 3. Add the consistency test to `rust/public/tests/mcp_skills_tests.rs`.
 4. Add the docs subsection to `mkdocs/docs/query-guide/index.md` and the README line.
 5. Add `claude-plugin/**` and `.claude-plugin/**` to the `paths` lists (both `push` and
@@ -129,6 +131,7 @@ verified by reading.
 ## Files to Modify
 - `.claude-plugin/marketplace.json` (new)
 - `claude-plugin/.claude-plugin/plugin.json`
+- `build/sync_claude_plugin_skills.py` (docstring only)
 - `rust/public/tests/mcp_skills_tests.rs`
 - `.github/workflows/rust.yml`
 - `.github/workflows/build-skip.yml`
@@ -139,10 +142,9 @@ verified by reading.
 - `CHANGELOG.md`
 
 ## Trade-offs
-- **Commit-SHA versioning vs. bumping `version`.** Bumping on every skill change is a manual
-  step that is easy to miss, and a missed bump leaves users stale with no error. Dropping the
-  field makes every commit to the plugin directory a new version. Cost: there is no human-readable
-  plugin version; acceptable since the plugin ships from the repo's main branch anyway.
+- **Bumping `version` vs. commit-SHA versioning.** Dropping the field would make every commit
+  to the plugin directory a new version with nothing to remember, but loses a human-readable
+  version. The user chose to keep and bump it (see Decisions).
 - **Docs location.** The query guide's Interfaces list is where users look for ways to query;
   `admin/mcp.md` covers the server-side MCP route, which is a different integration.
 
@@ -152,8 +154,8 @@ verified by reading.
 - `CHANGELOG.md`: Unreleased entry.
 
 ## Testing Strategy
-- New unit test in `mcp_skills_tests.rs` (no DB) covering name match, source path, and absence
-  of a pinned version.
+- New unit test in `mcp_skills_tests.rs` (no DB) covering name match, source path, and no
+  `version` on the marketplace entry.
 - Existing `claude_plugin_copies_match_canonical_skills` keeps guarding skill drift.
 - `python3 build/rust_ci.py` (or the equivalent, from `rust/`:
   `cargo test -p micromegas --features server --test mcp_skills_tests`) and
@@ -162,8 +164,7 @@ verified by reading.
 
 ## Manual Verification
 Only Claude Code itself can confirm the manifest is accepted; there is no CI install of it.
-1. `claude plugin validate .` from the repo root — expect `✔ Validation passed with warnings`
-   with only a "No version specified" warning (don't use `--strict`).
+1. `claude plugin validate .` from the repo root — expect `✔ Validation passed`.
 2. `claude plugin marketplace add ./` then `claude plugin install micromegas@micromegas` —
    expect `✔ Installed plugin: micromegas@micromegas`, and `claude plugin details micromegas`
    lists both skills. Remove afterwards with `claude plugin marketplace remove micromegas`.
@@ -171,3 +172,5 @@ Only Claude Code itself can confirm the manifest is accepted; there is no CI ins
 ## Decisions
 - The user added the query skill table-function coverage (common functions in full, niche ones
   pointed to the reference) to this branch's scope.
+- The user asked to bump the plugin version (keep the `plugin.json` pin, `0.1.0` → `0.2.0`)
+  rather than drop it for commit-SHA versioning.
