@@ -1,7 +1,33 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.32.0 (2026-10-20)
+Last updated: v0.34.0 (2026-11-26)
+
+---
+
+## Lessons Learned from v0.34.0
+
+### The binfmt install needs the user when an agent runs the release
+
+An agent's `docker run --privileged ... tonistiigi/binfmt --install arm64` can be refused by its
+permission policy. Check `docker buildx inspect` first; if `linux/arm64` is missing, have the user
+run the one-liner (`! docker run --privileged --rm tonistiigi/binfmt --install arm64` in Claude Code)
+and keep the rest of the release moving instead of blocking on it.
+
+### Build Docker from a worktree at the tag, and bump in another worktree
+
+Phase 3.5 reads the working tree for its whole ~2h run, which used to serialize Phase 4 behind it.
+Instead: `git worktree add --detach <dir> vX.Y.0` and run `build_docker_images.py` from there (its
+`<sha12>` tag and revision label then match the tag exactly), and do the Phase 4 bump in a second
+worktree on `release` (detach the main checkout first with `git checkout --detach`, which changes no
+files). The bump can then land as soon as Phase 1 finishes, and late arm64 builds still ship the
+released code. Remove both worktrees at the end.
+
+### The Blender release took the "Latest" badge again
+
+The `blender-extension` workflow finished ~3.5 minutes after `gh release create`, so it landed
+newest. Run `gh release edit vX.Y.0 --latest` *after* both tag workflows complete, not right after
+creating the release.
 
 ---
 

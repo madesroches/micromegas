@@ -76,6 +76,17 @@ Building from source or contributing code? See the [Build Guide](https://microme
 
 ## Recent Releases
 
+### v0.34.0 (November 2026)
+* **MCP server** — `analytics-web-srv` and the monolith can serve an opt-in MCP server at `/mcp` for agents, with OAuth discovery for clients such as Claude Code
+* **On-demand materialized views** — a view defined without `update_group` is filled by the queries that read it, with a `max_jit_src_data` cap on the source data behind each partition
+* **JIT partitions sized from the query range** — buckets follow an aligned minute-to-day ladder, so a live "last minute" poll rewrites only the open minute
+* **Fair query admission** — opt-in per-identity queuing weighted by estimated scan cost; the query audit record gains scan-cost estimates and bytes returned to the client
+* **Faster, observable maintenance** — the views of an update group materialize concurrently across runtime workers, with materialization spans and cgroup CPU throttling metrics
+* **Robustness** — bounded LZ4 decompression, transit metadata recursion and call-tree depth, so a malformed block fails instead of aborting the process
+* **Web app** — an Admin → View Sets page, explicit admin mode for destructive statements, a Bar Chart cell with horizontal orientation and selection, and a Discard button on screens
+* **SQL** — `list_view_sets()` gains `description`, `columns` and `sort_order`; new admin `check_view_merge()`
+* **Operator note** — lakehouse schema v12: upgrade all lakehouse services together
+
 ### v0.33.0 (November 2026)
 * **Access control, one step further** — a grant's audience can be `*` (every audience), and analytics API keys can be granted or grouped with a `key:<key_id>` selector
 * **Settings in the database** — deployment-wide settings are editable from a new Admin → Settings page, with no restart; per-stream-tag raw payload retention

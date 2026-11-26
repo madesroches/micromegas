@@ -2,7 +2,7 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
-## Unreleased
+## v0.34.0 - 2026-11-26
 
 * **Tracing:** `cpu_brand` records the actual CPU model on aarch64 instead of `"aarch64"` (#1827). On Linux/Android the MIDR is decoded (sysfs `midr_el1`, falling back to `/proc/cpuinfo`) into `"<core name> (0x<implementer>:0x<part>)"`, e.g. `Neoverse-V1 (0x41:0xd40)`, or the raw ids for unrecognized parts; on macOS it is `machdep.cpu.brand_string` (e.g. "Apple M2"). Unreadable sources fall back to the architecture name. The `processes.cpu_brand` column and the telemetry-sink `cpu_brand` process property now share one helper, `micromegas_tracing::cpu_brand::get_cpu_brand()`, and `raw-cpuid` is only pulled in on x86.
 * **Notebooks:** In the Bar Chart cell with `selectionMode: 'single'`, clicking anywhere in a category's band selects it (#1828). The band is the full row in horizontal orientation or the full column in vertical orientation, and includes the category label; previously only a click on a drawn segment did. In the stacked shape, a click outside any segment selects the segment nearest to it along the value axis. The axis gutter, the margins and the horizontal value axis clear the selection. No SQL changes.
