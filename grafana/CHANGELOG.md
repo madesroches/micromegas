@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.34.0 (2026-11-26)
+
+Version sync release. No plugin-specific changes this cycle; sync follows the workspace release cadence. Dependency bump: `go.opentelemetry.io/otel` modules to v1.47.0 (Go 1.26) and an `i18next` ^26.3.4 resolution, resolving Dependabot alerts (#1810).
+
 ## 0.33.0 (2026-11-02)
 
 Version sync release. No plugin-specific changes this cycle; sync follows the workspace release cadence. Dependency bump: `github.com/go-chi/chi/v5` and `github.com/klauspost/compress`, resolving Dependabot alerts.
