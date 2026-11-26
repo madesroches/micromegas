@@ -24,3 +24,11 @@ Follow `tasks/release_plan_template.md`: commit docs and plan, tag (four tags), 
 in two commands, Phase 1 crates, Phase 2 PyPI, Phase 3 GitHub release with Grafana archive and
 `--latest`, Phase 3.5 Docker (8 services, both arches), Phase 4 bump to 0.35.0, Phase 5 cleanup,
 Phase 6 PR to main.
+
+## Outcome
+
+All artifacts published on 2026-11-26: 16 crates on crates.io, `micromegas` 0.34.0 on PyPI, the
+`v0.34.0` GitHub release with the Grafana archive (holding "Latest"), the `capi-v0.34.0` and
+`blender-v0.34.0` releases, and 8 Docker services for amd64 (`:0.34.0`) and arm64 (`:0.34.0-arm64`).
+arm64 waited on a user-run binfmt install; it was built from a worktree at the tag. Workspace bumped
+to 0.35.0.
