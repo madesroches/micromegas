@@ -21,7 +21,7 @@ Single-query bar chart, vertical or horizontal, for comparing a value across cat
 | `options.unit` | string | Value unit, formatted the same way as the Chart cell (e.g. `bytes`, `ms`). Use `percent` for a SQL-normalized query |
 | `options.orientation` | `'vertical'` \| `'horizontal'` | Bar direction. Default `vertical`; a missing or unknown value is vertical |
 | `options.valueLabels` | boolean | Draw each bar's total at its end. Default `false` |
-| `options.selectionMode` | `'none'` \| `'single'` | Click a segment to publish it as `$cell.selected.*`. Default `none` |
+| `options.selectionMode` | `'none'` \| `'single'` | Click a bar's row or column, or its label, to publish it as `$cell.selected.*`. Default `none` |
 
 **SQL columns:**
 
@@ -42,7 +42,7 @@ Single-query bar chart, vertical or horizontal, for comparing a value across cat
 
 - Value axis with clean tick steps sized to the longest bar's total (5% headroom above it)
 - Horizontal layout: fixed-height rows, a label column on the left (long labels are truncated, the full text is the hover title), and a value axis pinned to the top while the rows scroll vertically
-- Row Selection: with `selectionMode: single`, clicking a segment publishes it and fades the others; the published row is keyed by the query's column names, so `SELECT user, model, sum(cost) AS cost` gives `$cell.selected.user`, `.model` and `.cost` (only category and value in the 2-column shape). Clicking the selected segment again, or the empty plot, clears it
+- Row Selection: with `selectionMode: single`, clicking anywhere in a category's row (horizontal) or column (vertical), or on its label, publishes it and fades the others (in the stacked shape, the segment nearest the click along the value axis is selected); the published row is keyed by the query's column names, so `SELECT user, model, sum(cost) AS cost` gives `$cell.selected.user`, `.model` and `.cost` (only category and value in the 2-column shape). Clicking the selected segment again (in the 2-column shape, anywhere in the selected bar), or the axis gutter or margins, clears it
 - A value label is drawn inside a segment only when it's large enough to hold the text
 - Side legend — swatch and name per series, in stack order; hidden for the 2-column shape
 - Hover tooltip shows category, series, value, share of the bar, and the bar's total; the 2-column shape shows only the category and value

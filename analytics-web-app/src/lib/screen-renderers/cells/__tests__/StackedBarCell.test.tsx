@@ -7,6 +7,7 @@ import {
   resolveSeriesColors,
   niceStep,
   buildStackedBarLayout,
+  nearestSegmentSeries,
   stackedBarMetadata,
 } from '../StackedBarCell'
 import { SERIES_COLORS } from '@/components/chart-constants'
@@ -466,6 +467,79 @@ describe('buildHorizontalBarLayout', () => {
   })
 })
 
+describe('hitBand', () => {
+  it('tiles vertical bands from the y-axis across the full content height', () => {
+    const data = { categories: ['a', 'b', 'c'], series: resolvedSeries(['x']), values: [[3], [2], [1]] }
+    const layout = buildStackedBarLayout(data, { width: 400, height: 300, unit: '' })
+    const [a, b, c] = layout.bars.map((bar) => bar.hitBand)
+    expect(a.x).toBe(layout.yAxisWidth)
+    expect(b.x).toBeCloseTo(a.x + a.width)
+    expect(c.x).toBeCloseTo(b.x + b.width)
+    for (const band of [a, b, c]) {
+      expect(band.y).toBe(0)
+      expect(band.height).toBe(layout.contentHeight)
+    }
+  })
+
+  it('spans the full row width for horizontal rows', () => {
+    const data = { categories: ['a', 'b'], series: resolvedSeries(['x']), values: [[3], [2]] }
+    const layout = buildHorizontalBarLayout(data, { width: 600, unit: '' })
+    layout.bars.forEach((bar) => {
+      expect(bar.hitBand).toEqual({ x: 0, y: bar.rowY, width: layout.contentWidth, height: 28 })
+    })
+  })
+})
+
+describe('nearestSegmentSeries', () => {
+  const stackedValues = { categories: ['a', 'b'], series: resolvedSeries(['x', 'y', 'z']), values: [[10, 0, 30], [0, 0, 0]] }
+
+  describe('horizontal', () => {
+    const layout = buildHorizontalBarLayout(stackedValues, { width: 600, unit: '' })
+    const bar = layout.bars[0]
+    const [first, end] = bar.segments
+
+    it('returns the segment containing the position', () => {
+      expect(nearestSegmentSeries(bar, 'horizontal', first.x + first.width / 2)).toBe(0)
+      expect(nearestSegmentSeries(bar, 'horizontal', end.x + end.width / 2)).toBe(2)
+    })
+    it('returns the end segment past the bar end', () => {
+      expect(nearestSegmentSeries(bar, 'horizontal', end.x + end.width + 50)).toBe(2)
+    })
+    it('returns the first segment before the baseline', () => {
+      expect(nearestSegmentSeries(bar, 'horizontal', 0)).toBe(0)
+    })
+    it('picks the nearer segment in the gap between segments', () => {
+      expect(nearestSegmentSeries(bar, 'horizontal', first.x + first.width + 0.5)).toBe(0)
+    })
+    it('returns null without segments', () => {
+      expect(nearestSegmentSeries(layout.bars[1], 'horizontal', 10)).toBeNull()
+    })
+  })
+
+  describe('vertical', () => {
+    const layout = buildStackedBarLayout(stackedValues, { width: 400, height: 300, unit: '' })
+    const bar = layout.bars[0]
+    const [first, end] = bar.segments
+
+    it('returns the segment containing the position', () => {
+      expect(nearestSegmentSeries(bar, 'vertical', first.y + first.height / 2)).toBe(0)
+      expect(nearestSegmentSeries(bar, 'vertical', end.y + end.height / 2)).toBe(2)
+    })
+    it('returns the end segment above the bar', () => {
+      expect(nearestSegmentSeries(bar, 'vertical', 0)).toBe(2)
+    })
+    it('returns the first segment in the label area below the baseline', () => {
+      expect(nearestSegmentSeries(bar, 'vertical', layout.contentHeight - 8)).toBe(0)
+    })
+    it('picks the nearer segment in the gap between segments', () => {
+      expect(nearestSegmentSeries(bar, 'vertical', first.y - 0.5)).toBe(0)
+    })
+    it('returns null without segments', () => {
+      expect(nearestSegmentSeries(layout.bars[1], 'vertical', 10)).toBeNull()
+    })
+  })
+})
+
 describe('buildBarSelection', () => {
   it('keys the payload by SQL column names with the raw category and summed value', () => {
     const base = { categoryValues: [42], series: [{ name: 'm' }], values: [[7]] }
@@ -577,6 +651,103 @@ describe('StackedBarCell selection and orientation', () => {
     const anchors = Array.from(axis.querySelectorAll('text')).map((t) => t.getAttribute('text-anchor'))
     expect(anchors[anchors.length - 1]).toBe('end')
     expect(anchors.slice(0, -1).every((a) => a === 'middle')).toBe(true)
+  })
+
+  describe('band selection', () => {
+    const horizontal = { orientation: 'horizontal' }
+    const hitRects = (container: HTMLElement) => container.querySelectorAll('rect[data-bar-hit]')
+
+    it('selects a row from its hit rect and clears on a second click (2-column shape)', () => {
+      const onSelectionChange = vi.fn()
+      const table = singleTable([
+        { user: 'a', cost: 10 },
+        { user: 'b', cost: 5 },
+      ])
+      const { container } = render(
+        <StackedBarCell
+          {...createMockProps({ data: [table], options: horizontal, selectionMode: 'single', onSelectionChange })}
+        />,
+      )
+      const rects = hitRects(container)
+      expect(rects).toHaveLength(2)
+      fireEvent.click(rects[1])
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ user: 'b', cost: 5 })
+      fireEvent.click(hitRects(container)[1])
+      expect(onSelectionChange).toHaveBeenLastCalledWith(null)
+    })
+
+    it('selects the baseline segment from a category label', () => {
+      const onSelectionChange = vi.fn()
+      const { container } = render(
+        <StackedBarCell
+          {...createMockProps({ data: [stacked()], options: horizontal, selectionMode: 'single', onSelectionChange })}
+        />,
+      )
+      const label = Array.from(container.querySelectorAll('text[data-bar-hit]')).find((t) => t.querySelector('title')?.textContent === 'a')
+      fireEvent.click(label as Element)
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'first', value: 10 })
+    })
+
+    it('selects the end segment from a band click past the bar end', () => {
+      const onSelectionChange = vi.fn()
+      const { container } = render(
+        <StackedBarCell
+          {...createMockProps({ data: [stacked()], options: horizontal, selectionMode: 'single', onSelectionChange })}
+        />,
+      )
+      fireEvent.click(hitRects(container)[0], { clientX: 595 })
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'second', value: 30 })
+    })
+
+    it('picks the nearest segment from clientY, not clientX, in vertical orientation', () => {
+      const onSelectionChange = vi.fn()
+      const { container } = render(
+        <StackedBarCell {...createMockProps({ data: [stacked()], selectionMode: 'single', onSelectionChange })} />,
+      )
+      fireEvent.click(hitRects(container)[0], { clientX: 0, clientY: 0 })
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'second', value: 30 })
+      fireEvent.click(hitRects(container)[0], { clientX: 500, clientY: 250 })
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'first', value: 10 })
+    })
+
+    it('clears the selection when the axis svg is clicked', () => {
+      const onSelectionChange = vi.fn()
+      const { container } = render(
+        <StackedBarCell
+          {...createMockProps({ data: [stacked()], options: horizontal, selectionMode: 'single', onSelectionChange })}
+        />,
+      )
+      fireEvent.click(container.querySelector('svg path') as SVGElement)
+      fireEvent.click(screen.getByTestId('bar-axis'))
+      expect(onSelectionChange).toHaveBeenLastCalledWith(null)
+    })
+
+    it('converts client coordinates using the plot svg rect', () => {
+      const onSelectionChange = vi.fn()
+      const layout = buildHorizontalBarLayout(
+        { categories: ['a', 'b'], series: resolvedSeries(['first', 'second']), values: [[10, 30], [5, 0]] },
+        { width: 600, unit: '' },
+      )
+      const first = layout.bars[0].segments[0]
+      const { container } = render(
+        <StackedBarCell
+          {...createMockProps({ data: [stacked()], options: horizontal, selectionMode: 'single', onSelectionChange })}
+        />,
+      )
+      vi.spyOn(screen.getByTestId('bar-body'), 'getBoundingClientRect').mockReturnValue({
+        left: 100,
+        top: 50,
+      } as DOMRect)
+      fireEvent.click(hitRects(container)[0], { clientX: 100 + 595 })
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'second', value: 30 })
+      fireEvent.click(hitRects(container)[0], { clientX: 100 + first.x + first.width / 2 })
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ category: 'a', series: 'first', value: 10 })
+    })
+
+    it('renders no hit rects when selectionMode is unset', () => {
+      const { container } = render(<StackedBarCell {...createMockProps({ data: [stacked()], options: horizontal })} />)
+      expect(container.querySelectorAll('rect[data-bar-hit], text[data-bar-hit]')).toHaveLength(0)
+    })
   })
 
   it('renders total labels when valueLabels is set', () => {
