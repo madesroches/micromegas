@@ -1,0 +1,12 @@
+{
+  "name": "micromegas",
+  "description": "Claude Code plugins for the Micromegas observability platform",
+  "owner": { "name": "Micromegas" },
+  "plugins": [
+    {
+      "name": "micromegas",
+      "source": "./claude-plugin",
+      "description": "Query Micromegas telemetry with SQL and author notebooks"
+    }
+  ]
+}

@@ -38,6 +38,7 @@ Micromegas is an observability system designed to provide unified insights into 
 *   **🔍 Powerful SQL Interface:** Query your data using a powerful and familiar SQL interface, powered by [Apache DataFusion](https://datafusion.apache.org/) and accessible via [Apache Arrow FlightSQL](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/).
 *   **📓 Interactive Notebooks:** A built-in web app for exploring data through composable notebook cells — queries, charts, flame graphs, maps, and logs — over the same SQL engine.
 *   **🔐 Enterprise Authentication:** Secure your data with OIDC authentication supporting both human users (browser-based login) and service accounts (OAuth 2.0 client credentials).
+*   **🤖 Claude Code Plugin:** Query telemetry and author notebooks from Claude Code with the Micromegas plugin; see [installation](https://micromegas.info/docs/query-guide/#claude-code-plugin).
 *   **🛡️ Audience-Based Access Control:** Host private data on a shared deployment. Incoming telemetry is tagged server-side with the audience of the credential that sent it, and queries only return the data the user has been granted access to.
 
 ## How It Works

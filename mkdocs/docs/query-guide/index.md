@@ -23,6 +23,20 @@ df = client.query("SELECT * FROM log_entries LIMIT 10;")
 ### Grafana Plugin
 Use the same SQL capabilities in Grafana dashboards through the [Micromegas Grafana plugin](https://github.com/madesroches/micromegas-grafana).
 
+### Claude Code Plugin
+Query Micromegas from [Claude Code](https://claude.com/claude-code) and author notebooks with the Micromegas plugin. Install it from this repository's marketplace:
+
+```
+/plugin marketplace add madesroches/micromegas
+/plugin install micromegas@micromegas
+```
+
+The plugin provides two skills: `micromegas-query` and `micromegas-notebooks`. `micromegas-query` needs the `micromegas` Python package / CLI; its `## Setup` section walks through installing and configuring it.
+
+To update the installed plugin, run `claude plugin update micromegas@micromegas` in a shell, use the update action in the `/plugin` UI, or enable auto-update for the marketplace in `/plugin` (off by default for third-party marketplaces), then run `/reload-plugins` or restart. `/plugin marketplace update` alone only refreshes the listing.
+
+A deployment that ships its own copy of the plugin under the same `micromegas` name clashes with this one (same plugin and skill names). Keep only one enabled, e.g. `/plugin disable micromegas@micromegas`.
+
 ## Data Views
 
 | View | Description |

@@ -8,6 +8,8 @@ on:
       - 'build/rust_ci.py'
       - 'build/rust_command.py'
       - '.github/workflows/rust.yml'
+      - 'claude-plugin/**'
+      - '.claude-plugin/**'
 
 jobs:
   check-runner:
