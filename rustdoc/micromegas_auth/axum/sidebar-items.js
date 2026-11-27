@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AuthError","QuietAuthError"],"fn":["auth_middleware","authenticate","authenticate_quiet"],"struct":["AuthRejection"]};

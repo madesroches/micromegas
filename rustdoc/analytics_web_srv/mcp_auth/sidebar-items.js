@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["METADATA_SUFFIX"],"fn":["mcp_bearer_middleware","metadata_handler","metadata_path","resolve_public_url"],"struct":["McpAuthState","McpOAuthMetadata"]};

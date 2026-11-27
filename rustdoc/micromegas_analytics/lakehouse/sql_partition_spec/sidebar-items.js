@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["fetch_sql_partition_spec","plan_sorted_extract"],"struct":["SqlPartitionSpec"]};

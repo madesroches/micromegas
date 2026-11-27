@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_jsonb_elements_udf","make_jsonb_entries_udf","make_jsonb_path_elements_udf"],"struct":["JsonbElements","JsonbEntries","JsonbPathElements"]};

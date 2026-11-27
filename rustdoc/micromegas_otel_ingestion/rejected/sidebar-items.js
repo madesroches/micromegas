@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["claimed_resource_from_prefix"],"struct":["ClaimedResource"]};

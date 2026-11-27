@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FolderError"],"fn":["create_folder","delete_folder","insert_folder","list_folder_infos","list_folders","update_folder"],"struct":["DeleteFolderParams","ErrorResponse"],"type":["FolderResult"]};

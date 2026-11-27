@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["collect_logs","init_in_memory_tracing"],"struct":["CapturedLog","InMemoryTracingGuard"]};

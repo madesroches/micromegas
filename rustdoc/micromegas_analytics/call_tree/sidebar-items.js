@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_CALL_TREE_DEPTH"],"fn":["make_call_tree"],"struct":["CallTree","CallTreeBuilder","CallTreeNode"]};

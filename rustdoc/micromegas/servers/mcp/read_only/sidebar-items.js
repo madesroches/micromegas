@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ADMIN_ONLY_READ_FUNCTIONS"],"fn":["check_read_only","is_denied_function"]};

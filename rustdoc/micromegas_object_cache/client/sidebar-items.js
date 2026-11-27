@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RangesReadError","RangesSendError"],"struct":["CacheClientConfig","CacheClientStore"]};

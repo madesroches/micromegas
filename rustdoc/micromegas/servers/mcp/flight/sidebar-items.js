@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["describe_error"],"struct":["FixedUrl","GrpcFlightBackend"],"trait":["FlightBackend","FlightUrlResolver"]};

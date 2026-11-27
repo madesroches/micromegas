@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_batch","merge_rows"],"struct":["DdlRow","DefinitionRow","ListViewSetDefinitionsTableFunction"]};

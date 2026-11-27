@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["fetch_trace","show_trace"],"struct":["FetchTraceParams","PerfettoTraceServer"]};

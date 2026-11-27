@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_SECONDS_MATERIALIZATION_CONCURRENCY","SECONDS_MATERIALIZATION_CONCURRENCY_ENV"],"fn":["daemon","get_global_views_with_update_group","materialize_all_views","run_tasks_forever","run_update_groups"],"struct":["EveryDayTask","EveryHourTask","EveryMinuteTask","EverySecondTask"]};
